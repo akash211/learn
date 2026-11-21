@@ -18,35 +18,17 @@
   approach: |
     **Rubric — 5 bands, 2 points each (10 total).**
 
-    **1. Requirements and envelope (0–2).** Computes 1,620 events/s average and 4,860/s peak,
-    140 GB/day, 51.1 TB/year raw or ~12.8 TB/year as 4× Parquet. States the latency and durability
-    contract, and notices that "no data loss" for one tenant implies stronger handling than the
-    default. 2 points for correct arithmetic with named assumptions; 1 for the right method with
-    one arithmetic slip; 0 for "Kafka scales horizontally" with no numbers.
+    **1. Requirements and envelope (0–2).** 3.5M daily active users × 40 events = 140M events/day; / 86,400 s = 1,620 events/s average, and the stated 3x peak is 4,860/s. At 1 KB per event that is 1.62 MB/s average and 4.86 MB/s at peak — small for a log, which tells you the constraint is not bandwidth but isolation and query cost. Storage: 140M × 1 KB = 140 GB/day, × 365 = 51.1 TB/year raw; Parquet with zstd at an assumed 4x on repeated event names and string-heavy JSON gives 12.8 TB/year, so 13 months is 13.9 TB. The largest tenant at 30% is 42 GB/day and 1,458/s at peak. Four things must be said out loud: 60 seconds is a batch cadence, not real-time, so a one-minute micro-batch is legitimate and a per-event query path is not; 13 months of *compressed* data is affordable and 13 months of raw is not; "no data loss" for one tenant is a stronger contract than the default and costs latency; and four engineers rules out anything needing a dedicated on-call rotation. 2 points for that chain with assumptions labelled; 1 for the right method with one slip; 0 for "Kafka scales horizontally".
 
-    **2. Ingest and isolation (0–2).** Proposes an authenticated edge that resolves tenant, applies
-    a token-bucket quota, and writes to a partitioned log keyed by `tenant_id` (or
-    `tenant_id:user_id`). Explains that partitioning by tenant keeps per-tenant order and makes
-    isolation enforceable, and that the largest tenant at 30% of 4,860/s = 1,458/s must not share a
-    partition with 399 small tenants. Mentions backpressure (429 with `Retry-After`) and a buffer.
+    **2. Ingest and isolation (0–2).** One authenticated edge: TLS termination, and an API key or signed token that resolves `tenant_id` server-side. The tenant never comes from a body field or a query parameter — that is the first automatic fail. The edge applies a token bucket per tenant sized at 2x that tenant's trailing seven-day p99 with a 60-second burst allowance (assumption: the quota is a product decision, not a physical limit), returns 429 with `Retry-After` and a reset timestamp rather than dropping silently, and writes accepted events to a log partitioned by `tenant_id:user_id`. The key choice matters. Partitioning by `tenant_id` alone gives per-tenant total order but caps a tenant at one consumer's throughput: the largest tenant at 1,458/s needs roughly two consumers at 700/s each, so a single key cannot serve it. `tenant_id:user_id` spreads that tenant across partitions and preserves per-user order, which is what sessionisation and dedupe actually need, at the cost of per-tenant total order. Say which you are giving up. Partition count: 4,860/s at a conservative 700 events/s per consumer task is seven tasks; 24 partitions gives 3x headroom and lets the group scale to 24 without a rebalance. Durability for the contractual tenant: `acks=all`, `min.insync.replicas=2`, replication factor 3 — one extra round trip and roughly double the p99 produce latency, which is the correct price. Buffer sizing: 7 days retention × 140 GB/day × 3 replicas = 2.94 TB, the number that justifies the log as the buffer instead of a queue table in Postgres.
 
-    **3. Storage and query path (0–2).** Raw immutable landing plus Parquet in a lake, partitioned
-    by `event_date` and clustered by `tenant_id`; a warehouse or query layer for 13-month reports;
-    a streaming aggregate for the 60-second dashboard. Recognises that 13 months × 12.8 TB/year ≈
-    13.9 TB is affordable but full raw retention is not.
+    **3. Storage and query path (0–2).** Three tiers, each with a job. Raw immutable landing in object storage, one object per five minutes per partition (about 64 MB — small enough to replay a bad hour, large enough not to drown the catalog), retained 30 days and expired; it exists for replay, not reporting. Parquet in the lake partitioned by `event_date` and bucketed 16 ways on `hash(tenant_id)`, so a single-tenant scan touches 1/16 of a day's files. At 12.8 TB/year the pool costs about $300/month at an assumed $0.023/GB-month, against roughly $1,200/month if raw were kept for 13 months — that difference is the whole argument for the compressed tier. The 60-second dashboard does not query the lake: a streaming consumer maintains a 60-second tumbling rollup keyed by tenant and minute, 400 tenants × 1,440 minutes = 576,000 rows/day, which at 120 B is 69 MB/day and trivially queryable in Postgres for 90 days. Thirteen-month reports go to a warehouse or Trino over the Parquet with date and bucket pruning. Nothing in the design lets a dashboard query scan 13.9 TB.
 
-    **4. Failure and operations (0–2).** At-least-once delivery with idempotent writes keyed by
-    `event_id`; consumer lag alarms in seconds; a dead-letter path for malformed events; replay for
-    a bad deploy. Handles the no-data-loss tenant with synchronous acknowledgement from the log
-    (acks=all, min.insync.replicas=2) and states the latency cost.
+    **4. Failure modes, in the order they will happen (0–2).** (1) A tenant sends 10x its normal volume — for the largest tenant that is 14,580/s, three times the entire platform's peak, and no shared cluster absorbs it without taking capacity from someone else. The quota returns 429 for the excess; if the spike is legitimate and contractual, the answer is a pre-provisioned dedicated partition range agreed in advance, not more brokers on the shared topic. (2) Consumer lag, alarmed in seconds rather than messages: at 4,860/s one minute of lag is 291,600 events, so lag is converted to time and paged at 60 s. (3) Duplicate delivery — at-least-once means the merge dedupes on `event_id` over a 24-hour window, keeping the last write. (4) A malformed event goes to a dead-letter topic with schema version and raw bytes; it never blocks a partition. (5) Broker loss — replication factor 3 with `min.insync.replicas=2` keeps the producer writing through one failure, and the producer's idempotence flag prevents duplicate batches on retry. (6) Schema drift from a tenant SDK version — a registry with backward-compatible versions, unknown properties into a map column, hard rejection only on missing required fields.
 
-    **5. Trade-offs and honesty (0–2).** Names what is given up — for example per-tenant ordering
-    versus even partition distribution, or 60-second freshness versus batch cost — and gives a
-    build order: single Postgres plus log first, lake second, per-tenant shard only when a tenant
-    exceeds one partition's capacity.
+    **5. Trade-offs, grading and build order (0–2).** What the interviewer grades: arithmetic with labelled assumptions rather than memorised figures; the tenant resolved at the edge and never from input; quota enforced *before* the log; a partition key with a stated ordering consequence; and honesty that "60 seconds" and "no data loss" are both contracts with prices. The trade-offs to state: `tenant_id:user_id` buys distribution and costs per-tenant total order; a 60-second micro-batch buys cheap dashboards and costs freshness; `acks=all` buys the contractual tenant's durability and costs tail latency. Build order: one Kafka topic, Postgres rollups and a nightly Parquet export carry 400 tenants and 140 GB/day comfortably. The lake is second and the per-tenant shard third, and the shard is justified only when a measured tenant exceeds one consumer task's throughput.
 
-    **Automatic fail:** no quota enforcement; a design where one tenant's traffic shares a single
-    global partition key; claiming exactly-once without idempotency.
+    **Automatic fail:** no quota enforcement; a design where one tenant's traffic shares a single global partition key; claiming exactly-once without idempotency.
   red_flags:
     - Accepting unbounded writes and calling the queue the buffer.
     - Partitioning by event_id, which destroys per-user and per-tenant ordering.
@@ -72,34 +54,19 @@
   approach: |
     **Rubric — 5 bands, 2 points each (10 total).**
 
-    **1. Arithmetic (0–2).** Checks the row size (500 GB ÷ 3.15B = 159 B) and derives duration from
-    throughput: 8 workers × 8 MB/s = 64 MB/s, 500,000 MB ÷ 64 MB/s = 7,812 s ≈ 2.2 h, plus 30% for
-    skew ≈ 2.8 h. Concludes it fits with margin. 2 points for the full chain; 1 for a plausible
-    duration with no per-worker basis; 0 for "should be fast enough".
+    **1. Arithmetic first, because it decides the shape (0–2).** Row width: 500 GB / 3.15B rows = 159 B, which matches the prompt — say so, because it confirms the two numbers describe the same table. Throughput: 8 workers × 8 MB/s = 64 MB/s aggregate; 500,000 MB / 64 MB/s = 7,812 s = 2.17 h. Per day: 3.15B / 180 = 17.5M rows and 500 GB / 180 = 2.78 GB; at 8 MB/s one partition takes 2.78 GB / 8 MB/s = 347 s = 5.8 min, and 180 partitions across 8 workers is 22.5 waves × 5.8 min = 130 min, consistent with the aggregate figure. Add 30% for skew (launch days, one day at 2x the median) → 169 min = 2.8 h against a 02:00-06:00 window, so 70% utilisation. The read side is the trap: the source is a 300 TB lake at 140 GB/day, so 180 days is 25.2 TB. Reading 25.2 TB to produce 500 GB is a 50:1 ratio and, at an assumed 400 MB/s aggregate scan, takes 63,000 s = 17.5 h — it does not fit. Projection fixes it: if the sessions table needs 8 of roughly 60 columns, column pruning cuts the scan to about 3.4 TB, 8,400 s = 2.3 h, which fits alongside the write. A candidate who sizes only the write and never the read builds a job that misses the window by an order of magnitude. Task startup is a smaller trap: 180 separate Spark submissions at ~30 s each with 8 concurrent is 11 min of overhead, survivable; sequential submission is 90 min of nothing but startup.
 
-    **2. Unit of work and idempotency (0–2).** One task per day (180 tasks), each writing a single
-    partition, retryable in isolation. Partition overwrite (Iceberg/Delta dynamic overwrite) so a
-    re-run of day 47 cannot duplicate or delete day 48. Names the failure mode of an unscoped
-    `INSERT INTO … SELECT`.
+    **2. Unit of work and idempotency (0–2).** One partition per day, 180 tasks, each retryable in isolation. The write primitive is partition overwrite — Iceberg or Delta dynamic overwrite — so re-running day 47 replaces day 47, cannot duplicate it, and cannot touch day 48. Name the failure of the obvious alternative: `INSERT INTO ... SELECT` on a re-run doubles that day's rows, and because nothing is unique the duplicate is invisible to a check that only looks for zero. Idempotency is a property of the write, not of the retry logic.
 
-    **3. Write target and isolation (0–2).** Writes to a shadow table or shadow partitions, not the
-    live table, so 06:00 readers see either the old complete data or the new complete data. Caps
-    concurrency or uses a separate cluster to protect the live dashboards. Validates before the
-    swap: row count per day within 0.1%, unique `session_id`, required columns non-null, checksum
-    on a 1% sample.
+    **3. Write target and isolation (0–2).** Write to `sessions_v2`, never the live table. Validate at 05:45, then repoint the view or swap the table in one metadata operation; 06:00 readers see the old complete data or the new complete data, never a half-loaded table — which is exactly what the previous attempt did wrong. Protect the live cluster: give the backfill its own cluster or its own queue with a concurrency cap, and accept the extra 20% duration as the price of the morning dashboard staying up. Validate before the swap: row count per day within 0.1% of 17.5M (+/-17,500), `session_id` unique, required columns non-null, and a semantic check that row counts cannot catch — total session seconds and distinct users per day within 1% of the source. Row counts prove rows arrived; the aggregate proves they are the right rows.
 
-    **4. Progress and recovery (0–2).** A control table `(dataset, partition, status, rows, bytes,
-    started_at, finished_at, error)` written per task, with resume skipping completed partitions
-    and a queryable progress percentage. Explains why a restart at 90 minutes is cheap rather than
-    a full redo.
+    **4. Progress and recovery (0–2).** A control table `(run_id, partition_date, status, rows, bytes, started_at, finished_at, error)` written once per task, plus a queryable percentage. The scheduler resumes by selecting partitions where `status != 'done'`, so a failure at 03:10 restarts the remaining partitions, not all 180. State the arithmetic: one partition is about six minutes of one worker (2.78 GB / 8 MB/s = 347 s) and roughly 45 s of schedule across eight workers, so a checkpoint is only useful if it is written per partition rather than at the end of a stage — a single checkpoint at the end of the run reproduces the original failure.
 
-    **5. Rollback and communication (0–2).** Keeps the previous snapshot (or writes to a new table
-    and swaps the view) so a wrong output at 05:30 can be reverted in minutes. Publishes the
-    extrapolated completion time after three partitions, and defines the abort condition — for
-    example, if projected finish is after 05:15, stop and leave the old table in place.
+    **5. Rollback and the 05:30 decision (0–2).** The old table stays until the swap and the swap is reversible: keep the previous snapshot, or leave `sessions` untouched and flip the view back, which takes seconds. After the first three partitions, extrapolate — elapsed / completed × remaining — publish it, and compare against 05:15. If the projection is later than 05:15, abort and leave the old table: a missed rebuild is an inconvenience, a half-loaded table at 06:00 is an incident. At 05:30 a validation failure is the same decision — flip back, file the failing partition and the mismatch, and rerun the next night with the fix rather than debugging under a deadline. Rollback is free because nothing wrote to the live table, which is the entire reason for the shadow.
 
-    **Automatic fail:** loading directly into the live table; no progress table; a single
-    monolithic job; claiming completion without measuring the first partitions.
+    **Failure modes, in order of likelihood.** (1) Skew: one day is 3x the median and the projection moves right — run the heaviest days first so the tail is cheap and the abort decision comes early. (2) Object-store throttling at 8 concurrent readers returning 503; cap concurrency, retry with jitter, and write larger files. (3) Executor OOM on the widest day — split that day into four sub-partitions. (4) Late-arriving events in D-1 and D-0 — exclude the last two days from the backfill and rebuild them at 05:00 with a two-hour lookback. (5) Duplicate rows from a retried task — prevented by partition overwrite. (6) A reader pinned to a table name rather than a view, so the swap strands it — consumers read views, always.
+
+    **Automatic fail:** loading directly into the live table; no progress table; a single monolithic job; claiming completion without measuring the first partitions.
   red_flags:
     - Replying that a bigger cluster will fix it, with no throughput estimate.
     - No shadow table or snapshot, so a bad run destroys the morning reports.
@@ -125,36 +92,19 @@
   approach: |
     **Rubric — 5 bands, 2 points each (10 total).**
 
-    **1. Envelope and latency budget (0–2).** Computes 4,000/s × 1.2 KB = 4.8 MB/s, 400 GB/day raw.
-    Allocates the 100 ms explicitly: 15 ms feature lookups, 5 ms model inference, 10 ms network and
-    serialisation, leaving headroom for p99 rather than average. Recognises that a synchronous
-    100 ms budget forbids a database query per feature.
+    **1. Envelope, and reconcile the prompt against itself (0–2).** 4,000/s × 1.2 KB = 4.8 MB/s at peak — small for a log, so the binding constraint is the 100 ms p99, not bandwidth. Daily volume needs an assumed average: at 60% of peak, 2,400/s × 86,400 = 207M events/day × 1.2 KB = 249 GB/day. Using peak throughout gives 345.6M events and 415 GB/day, and the point is to state which you chose. Then the check that separates candidates: 40B rows / 180 days = 222M rows/day, which sits between those two figures, so the history and the live feed are plausibly the same population. But 4,000/s sustained would imply 62B rows over 180 days, not 40B, so the 4,000/s must be a peak and the average about 2,600/s. Size training from the average, and say it out loud — a candidate who never reconciles the two numbers trains on one distribution and serves another.
 
-    **2. Feature computation (0–2).** Distinguishes precomputed from on-demand. Velocity windows
-    over 1, 5 and 60 minutes are maintained in a stateful streaming job keyed by `card_id` and
-    written to a low-latency store (Redis or an embedded KV); the decision path reads them with a
-    single multi-get. Merchant risk is a daily batch table. Names the state size: active cards in a
-    60-minute window, not all cards.
+    **2. Latency budget, spent explicitly (0–2).** Out of 100 ms p99: TLS and load balancer 3 ms, token and tenant validation 2, orchestration 2, feature multi-get 12, device fingerprint lookup 15, model inference 18, policy 2, serialisation 2 = 56 ms, leaving 44 ms of headroom. The headroom is not padding: the p99 of a sum is not the sum of p99s, so a design that allocates 95 of 100 ms misses on most days. Put a hard deadline in the orchestrator at 90 ms that returns the policy fallback, because a response at 140 ms is a timeout decline at the issuer and indistinguishable from a fraud block. The budget forbids a database query per feature: five feature families at 3 ms is 15 ms of round trips on average and 25-30 ms of compounded p99, which is most of the inference budget spent before the model is called.
 
-    **3. Serving path and failure (0–2).** A synchronous scoring service with a hard timeout
-    (say 40 ms), a cached default for missing features, and an explicit policy for cold start — a
-    new card has no velocity, so fall back to a model variant or a conservative rule. Explains that
-    failing open approves fraud and failing closed declines good customers; the business chooses,
-    and the choice is logged.
+    **3. Feature computation: streaming, batch, and how big (0–2).** Velocity over 1, 5 and 60 minutes is stateful streaming keyed by `card_id`, and the state is bounded by cards active in the last 60 minutes, not by the 180-day history. At 4,000/s peak, 60 minutes is 14.4M transactions; if 30% are distinct cards that is about 4.3M cards, × 1 KB of counters = 4.3 GB in RocksDB, checkpointed every 60 s. Merchant risk is a daily batch table — tens of thousands of merchants, tens of MB — refreshed nightly into the same KV store. The device fingerprint is a lookup, not a computation: a hash to a small record, single-digit milliseconds. The serving tier reads everything in one multi-get per transaction; feature vectors at 4.3M cards × 2 KB = 8.6 GB, so two 32 GB primaries with a replica each is 128 GB provisioned for 9 GB live, and that ratio is deliberate — losing a primary at peak must degrade latency, not halve throughput. State the size out loud, because "Redis holds the features" without a number is the answer that fails.
 
-    **4. Correctness and training-serving skew (0–2).** The same feature definitions must produce
-    training and serving values; otherwise the model is trained on data it will never see. Mentions
-    point-in-time joins for the 180-day history, and that a feature computed at decision time must
-    be reproducible later for retraining.
+    **4. Decision path, cold start and missing features (0–2).** A synchronous scoring service with a hard 40 ms timeout on the multi-get, then inference, then policy. The missing-feature policy is a product decision with a written default: a missing velocity feature means a new card or a lagging stream, so fall back to a model variant trained without it and raise the decline threshold, rather than reading the absence as zero — zero velocity is a *plausible* lie and it approves fraud. Failing open approves fraud; failing closed declines good customers, and at 0.3% fraud against an assumed 5-6% baseline decline rate that is roughly twenty legitimate transactions per fraud prevented by the fallback alone. So the business chooses, the choice is logged per decision, and the fallback rate is a dashboard line. A device-lookup miss is normal for a new device and is not an error.
 
-    **5. Operations (0–2).** Monitors decision latency p99, feature-store hit rate, score
-    distribution drift, and the approval rate by merchant. Shadow mode before enforcement. A
-    replay path for the 180 days of history, at 40 billion rows, sized honestly rather than
-    promised.
+    **5. Correctness, skew and operations (0–2).** The same feature definitions must produce training and serving values: one library, and point-in-time joins over the 180 days, so a velocity computed at 14:32 on day 90 is reproducible from history at label time. A daily job recomputes 1% of decision-time vectors and alarms above 0.1% mismatch — without it the model decays silently while every dashboard stays green. Shadow mode for two weeks before enforcement, comparing score distributions and approval rate by merchant. Monitor p99, feature-store hit rate, fallback rate and score drift (PSI above 0.2 is a retrain signal). Replay of 40B rows: at an assumed 200,000 rows/s on the cluster, 40B / 200,000 = 200,000 s = 55 h — size it honestly as a checkpointed weekend job, not "a few hours".
 
-    **Automatic fail:** a per-feature database call inside the 100 ms budget; no cold-start policy;
-    claiming the streaming job and the batch training set compute the same features without
-    point-in-time correctness.
+    **Failure modes, in order of likelihood.** (1) Feature job lag — velocity goes stale and every score drifts; alarm on event-time lag and switch to the conservative model variant after 30 s. (2) Redis primary loss — replica promotion takes seconds and emits a burst of failures; the timeout-and-fallback path must be tested, not assumed. (3) Model server timeout — rules fallback at 15 ms with a raised threshold. (4) Duplicate authorisation retries from the network — dedupe on `transaction_id` and cache the decision for 60 s so a retry cannot get a different answer, which is a correctness problem before it is a service problem. (5) Clock skew across windows — compute windows on event time with watermarks, never on arrival time.
+
+    **Automatic fail:** a per-feature database call inside the 100 ms budget; no cold-start policy; claiming the streaming job and the batch training set compute the same features without point-in-time correctness.
   red_flags:
     - Computing velocity with a query per transaction.
     - No fallback when Redis is unavailable.
@@ -180,32 +130,19 @@
   approach: |
     **Rubric — 5 bands, 2 points each (10 total).**
 
-    **1. Cost arithmetic (0–2).** Reproduces the per-request cost: 1,500 × $3/M + 400 × $15/M =
-    $0.0105; 200,000/day = $2,100/day = $63,000/month. Proposes levers with numbers: prompt
-    caching 1,200 tokens at 90% off saves $648/day, a 20% response-cache hit saves about
-    $8,700/month, landing near $34,800. 2 points for a defensible path under budget; 1 for a
-    cheaper model with no arithmetic.
+    **1. Cost arithmetic, reproduced and then reduced (0–2).** Input: 1,500 tokens × $3/M = $0.0045. Output: 400 × $15/M = $0.0060. Per request $0.0105; at 200,000/day that is $2,100/day and $63,000 per 30-day month against a $45,000 budget — an 18% overshoot that needs a mechanism, not a cheaper model. Levers, each with its number: prompt caching on the 1,200 static instruction tokens at a 90% discount saves 1,200 × $3/M × 0.9 = $0.00324 per request = $648/day = $19,440/month. Response caching at an assumed 20% exact-and-near-duplicate hit rate removes 40,000 requests/day × $0.0105 = $420/day = $12,600/month. Together, $63,000 − $19,440 − $12,600 = $30,960, comfortably inside. A third lever if needed: trimming retrieved context from 1,500 to 900 tokens saves 600 × $3/M = $0.0018 × 200,000 = $360/day = $10,800/month, at a measurable recall cost you should not pay unless you must. 2 points for a defensible path with arithmetic; 1 for "use a cheaper model" with no numbers; 0 for asserting the budget is fine.
 
-    **2. Retrieval (0–2).** Hybrid BM25 plus vectors, top 20 candidates, rerank to 5. Sizes the
-    index: 2M × 1,536 × 4 B = 12.3 GB, ~18.4 GB with HNSW. Explains that retrieval quality caps
-    answer quality and that recall@5 is the metric to watch.
+    **2. Retrieval and index sizing (0–2).** Hybrid: BM25 for identifiers (error codes, function names, config keys, where embeddings are weakest) fused with vectors for paraphrase; 20 candidates, cross-encoder rerank to 5. Index: 2M chunks × 1,536 dims × 4 B = 12.3 GB raw, HNSW at ~1.5x = 18.4 GB, which fits one 32 GB node with room for the page cache — so this is a one-node-plus-replica design, not a sharded one, and saying so is worth a point. Chunking: ~700 tokens with 15% overlap, split on headings, tables kept whole, parent document id stored so a hit can expand to its section for the prompt without embedding whole documents. The metric is recall@5 on the golden set, because retrieval quality caps answer quality no matter what the generator does.
 
-    **3. Latency (0–2).** Builds a budget: guardrails 20 ms, retrieval 120 ms, rerank 80 ms, queue
-    40 ms, prefill 500 ms → TTFT 760 ms; 400 output tokens at 60 tok/s = 6.7 s → 7.4 s total.
-    Concludes streaming is required and that an output cap is the latency control.
+    **3. Latency budget and where it breaks (0–2).** Guardrails 20 ms, query embedding 25, retrieval 120, rerank 80, queueing 40, prefill 500 = 785 ms to first token, inside the 1 s target by 215 ms. Generation: 400 tokens at 60 tokens/s = 6.7 s, total 7.45 s against 8 s — 550 ms of slack, one slow retrieval away from a miss. So streaming is required (the user sees words at 0.8 s; the 8 s is only completion), the output cap is the latency control, and the reranker is the first thing to shrink under load, 80 ms down to 30 by reranking 10 candidates instead of 20. Do not budget prefill and generation at the same rate: prefill is compute-bound and several times faster per token than decode, which is why 1,500 input tokens cost 500 ms while 400 output tokens cost 6.7 s.
 
-    **4. Grounding, safety and failure (0–2).** Citations validated against retrieved ids; refusal
-    when retrieval confidence is low rather than guessing; retrieved text treated as data, never
-    instructions; PII redaction; provider timeout, retry with jitter, circuit breaker, and a
-    degraded sources-only mode. Addresses the no-retention requirement with a zero-retention
-    endpoint or a self-hosted model.
+    **4. Grounding, safety and failure (0–2).** Citations are generated from retrieved chunk ids and then validated: any cited id not in the context discards the answer. Refuse when the top rerank score is below a threshold rather than answering from parametric memory. This conflicts with product's "answer every question", and the resolution is a refusal that shows the three closest documents with links — useful, honest, and cheap. Retrieved text is data, never instructions: delimit each chunk, strip imperative-looking markup, and accept that "ignore previous instructions" inside a runbook or an issue comment is a real corpus vector. PII redaction before the prompt. Provider failure: a 10 s timeout, two retries with jitter, a circuit breaker after five consecutive failures, and a sources-only mode that lists passages with links, so the product stays up. Zero retention is met by a contractual zero-retention endpoint, or by self-hosting the model if legal will not accept a vendor assertion; either way no prompt logging at the provider and an audit row per request on our side.
 
-    **5. Evaluation and iteration (0–2).** A 300-item golden set with required facts and expected
-    passages; retrieval recall@5, answer correctness, citation validity, refusal correctness; a
-    regression gate of 2 points; 1% production sampling for human review. Versioned prompts.
+    **5. Evaluation and iteration (0–2).** A 300-item golden set with required facts and expected passage ids, built from real questions and covering refusal cases explicitly. Metrics: retrieval recall@5, answer correctness as fact coverage, citation validity, refusal correctness. A regression gate of two points before any prompt, model or chunking change merges; prompts are versioned files, not strings edited in production. 1% of production answers sampled for human review with a weekly read of the failures, because the failure taxonomy matters more than the score. Report cost per answered question alongside quality — the cheapest way to improve this system's numbers is to answer fewer questions, and that should be a visible decision rather than an accident.
 
-    **Automatic fail:** no evaluation set; reaching for a bigger model as the only lever; caching
-    answers without an invalidation story; claiming zero hallucination.
+    **Failure modes, in order.** (1) Provider 429s at peak — jitter, a queue with a 2 s bound, then degrade. (2) Index staleness after a document edit — 15-minute incremental reindex and a version check so a stale chunk is not cited. (3) Retrieval returns nothing above threshold — refuse with links, never generate from memory. (4) Prompt injection from a document — delimiters plus a canary item in the eval set. (5) Cost overrun from one long-context user — a per-user daily token cap enforced at the API edge, not discovered on the invoice.
+
+    **Automatic fail:** no evaluation set; reaching for a bigger model as the only lever; caching answers without an invalidation story; claiming zero hallucination.
   red_flags:
     - Trimming the prompt by removing citations to save cost.
     - No fallback when the provider is down.
@@ -230,37 +167,19 @@
   approach: |
     **Rubric — 5 bands, 2 points each (10 total).**
 
-    **1. Consistency reasoning (0–2).** States that the invariant is per-SKU:
-    `available = on_hand − reserved` must never go negative. Argues that this needs a conditional
-    write (`UPDATE … SET reserved = reserved + 1 WHERE available >= 1`) or a serializable
-    transaction, not read-then-write. Recognises that active-active multi-region writes on the same
-    SKU turn a local invariant into a distributed one, with coordination cost on every checkout.
+    **1. The invariant, stated as a constraint (0–2).** The only thing that must never happen is `available = on_hand − reserved` going negative for a (sku, warehouse) pair. That is a conditional write: `UPDATE inventory SET reserved = reserved + :q WHERE sku = :s AND warehouse = :w AND on_hand − reserved >= :q`, then check the affected-row count and treat 0 as sold out. Read-then-write in the application is the automatic fail, because two requests read 1 and both write 1. Serializable isolation also works and costs retries under contention; the conditional update is cheaper and expresses the invariant directly. Everything else in the design follows from where those rows live.
 
-    **2. Data model and reservation lifecycle (0–2).** `inventory(sku, warehouse, on_hand, reserved,
-    version)` plus `reservations(id, sku, qty, state, expires_at)`. State machine:
-    held → confirmed → released/expired, with idempotent transitions. Expiry as a scheduled sweep
-    rather than a per-row timer, and the arithmetic: 40M attempts/day at a 10-minute TTL implies a
-    working set of roughly the attempts in ten minutes, not the full day.
+    **2. Data model and the arithmetic that sizes it (0–2).** `inventory(sku, warehouse, on_hand, reserved, version)` — 40,000 SKUs × 3 warehouses = 120,000 rows, at ~200 B that is 24 MB, which fits in memory on one node with the WAL as the durability story. That number changes the design: this is not a sharding problem, it is a contention problem. `reservations(id, sku, warehouse, qty, state, expires_at, idempotency_key)` with a state machine held → confirmed → released, every transition idempotent and guarded by the current state. Volume: 40M attempts/day / 86,400 = 463/s average and 1,200/s at peak, a modest 2.6x peak factor worth noticing. At a 10-minute TTL the live working set is bounded by attempts in ten minutes, not by the day: 1,200/s × 600 s = 720,000 rows at the theoretical maximum, and at an assumed 60% attempt-to-hold conversion about 430,000 live rows. The table itself grows 40M rows/day = 14.6B/year, 2.9 TB at 200 B, so partition by day, keep 90 days hot, archive the rest. Expiry is a sweep every 60 s over an index on `expires_at`, never a timer per row.
 
-    **3. Partitioning and hot SKUs (0–2).** Shards by SKU, since every reservation touches one SKU.
-    Notes that a flash-sale SKU becomes a single-row hot key at 1,200/s and that the fix is
-    bucketing stock into N sub-rows summed on read, or queueing per SKU. 40,000 SKUs across a few
-    shards is small; the constraint is contention, not volume.
+    **3. Hot SKUs are the real problem (0–2).** Sharding by SKU is right — every reservation touches exactly one SKU, so the transaction never crosses a shard — but 120,000 rows across a few shards is trivial, and a flash sale makes one row the bottleneck. A single-row `UPDATE` with WAL sync sustains roughly 2,000-5,000/s on NVMe (assumption: fsync-bound, no contention), so 1,200/s on one SKU is inside the limit on paper and miserable in practice: every writer serialises on one row lock, p95 climbs into tens of milliseconds, and the queue builds. The fix is bucketing stock into N sub-rows — 10 buckets of `on_hand/10` — with each reservation picking a bucket by `hash(idempotency_key) % N`, so contention drops to ~120/s per bucket. The honest cost: bucketing breaks exact last-unit semantics, because nine buckets can be empty while the tenth holds stock, so display sums the buckets while the write path takes any bucket with remaining quantity and the invariant becomes `sum(available) >= 0`. If the product needs exactly the last unit, keep a small unbucketed reserve (say the last five units) behind the conditional update and bucket only the bulk. A per-SKU queue is the alternative and spends a round trip inside a 300 ms p95.
 
-    **4. Cross-region strategy (0–2).** Recommends a single writer per SKU (home region) with
-    synchronous replication for durability and a fast failover, plus regional read replicas for
-    browse traffic. Or partitions inventory by region so each region owns its stock and checkout
-    routes to the owning region. Explicitly refuses active-active writes for the same SKU, and
-    says why: the coordination cost lands inside the 300 ms budget.
+    **4. Cross-region: one writer per SKU, and name what stays single (0–2).** Inventory writes are not active-active. Either each SKU has a home region (its warehouse's region) and checkout routes there, or all writes for a SKU go to one elected primary with synchronous replication to a second region for durability. The arithmetic decides it: a cross-continent conditional write is one RTT at 70-150 ms, and with a retry it is 300 ms — the entire p95 budget spent on coordination, per reservation. Partitioning stock by region, so each region owns its own warehouse's stock and checkout routes by warehouse, keeps every write local and makes the multi-region story about *routing* rather than consensus. What must stay single-writer: the inventory row, the reservation state machine, and payment capture. What can be active-active: catalog reads, browse, cart, session. Read replicas serve availability display, but a cart's own holds are read from the primary or with read-your-writes, because telling a customer "out of stock" for the unit they just held is a support ticket.
 
-    **5. Failure and reconciliation (0–2).** What happens on region loss — RPO/RTO stated, in-flight
-    reservations resolved by expiry, double-sell detection via a reconciliation query. Idempotency
-    key on reservation creation, so a client retry does not hold two units. Handles payment failure
-    releasing stock, and the 10-minute expiry against a slow payment provider.
+    **5. Failure, reconciliation and grading (0–2).** Region loss: with synchronous replication to a second region, RPO 0 for committed reservations and RTO in the low minutes for a routing flip; with async, RPO is the replication lag in seconds and must be stated as a number. In-flight holds on the lost region resolve by expiry — nothing needs replaying, which is the argument for short TTLs. Double-sell detection is a reconciliation query per SKU: `on_hand − reserved` against confirmed reservations and shipped units; a mismatch is an incident, not a bug report. Idempotency key on reservation creation, stored under a unique constraint, so a client retry returns the same reservation instead of holding two units — the most common production failure in this system. Payment slower than the TTL is a product decision: extend on webhook receipt, or set a longer TTL for high-value carts, but never silently expire a hold the customer is paying for.
 
-    **Automatic fail:** read-then-write without a conditional update; active-active writes on the
-    same SKU with no coordination story; no expiry mechanism; no idempotency on reservation
-    creation.
+    **Failure modes, in order.** (1) Client retry storms after a timeout — idempotency key plus a 300 ms server-side deadline that returns a definite answer. (2) Flash-sale hot row — bucketing plus per-SKU admission control. (3) Failover with in-flight holds — expiry plus reconciliation, and a checkout that tolerates a few seconds of unavailability with a retry. (4) Replica lag showing stale availability — read-your-writes for the cart. (5) Double-sell from an application-level check — prevented by the conditional update, detected by the reconciliation query if something else slipped.
+
+    **Automatic fail:** read-then-write without a conditional update; active-active writes on the same SKU with no coordination story; no expiry mechanism; no idempotency on reservation creation.
   red_flags:
     - Proposing CRDTs without explaining how they preserve a stock invariant.
     - Checking availability in the application and updating later.
@@ -286,35 +205,19 @@
   approach: |
     **Rubric — 5 bands, 2 points each (10 total).**
 
-    **1. Quantify the regression (0–2).** Turns "40% growth" into time: if 25 minutes became 95,
-    the growth alone (1.4×) does not explain 3.8×, so something else changed — file count, shuffle
-    partition size, or a join that no longer broadcasts. Asks for stage-level timings rather than
-    guessing. 2 points for separating volume growth from structural regression.
+    **1. Separate growth from regression (0–2).** 40% more volume should turn 25 minutes into 25 × 1.4 = 35 minutes if duration were linear in data. It went to 95 — 3.8x — so 60 of those 95 minutes are structural, not volumetric, and finding them is the whole diagnosis. Ask for stage-level timings (Spark UI, warehouse query profile) before proposing anything; "add workers" skips the only interesting step. Three structural candidates, in likelihood order: file count, shuffle spill, and a join that stopped broadcasting.
 
-    **2. Locate the cost (0–2).** Names the likely culprits: small files from incremental appends
-    (a 40% volume increase can double file count if the writer flushes per batch), a shuffle that
-    exceeds memory and spills, a broadcast join that flipped to sort-merge, or stale statistics
-    after a CDC schema change. Proposes reading the Spark UI stage timings and the warehouse query
-    profile before changing anything.
+    **2. Locate the cost with arithmetic (0–2).** File count first: if the upstream writer flushes every five minutes, 140 GB/day is 288 files/day at ~490 MB each, which is fine. If it flushes per micro-batch at 10 MB, it is 14,000 files/day and 2.5M over 180 days; listing 2.5M objects at ~1 ms each is 2,500 s = 42 minutes of pure metadata before a byte is read. That single number explains most of the regression and is consistent with "the cluster has not changed". Second, shuffle: the 1.1 TB CDC feed joined to 140 GB of events, with a build side exceeding executor memory, spills to disk and roughly triples stage time. Third, a broadcast join that flipped to sort-merge because table statistics went stale after a CDC schema change — the join is correct and an order of magnitude slower, and only the plan shows it. Fourth, incremental appends that were never compacted, so the 500 GB output is tens of thousands of small files read by the next stage.
 
-    **3. Structural fix (0–2).** Moves from full rebuild to incremental: process only the new
-    hourly partition, merge into the target, and compact small files on a separate schedule.
-    Partition by hour so a run reads 5.8 GB rather than 140 GB. Keeps the 500 GB aggregate as an
-    incremental upsert rather than a full rewrite, or materialises it from the silver layer with
-    partition pruning.
+    **3. The structural fix: stop rebuilding (0–2).** The DAG rebuilds three aggregates from 140 GB every hour to serve one hour of new data. Partition by hour: 140 GB / 24 = 5.83 GB/hour, so an incremental run reads 5.83 GB plus the CDC delta instead of 1.24 TB (140 GB events + 1.1 TB CDC) — about a 155x reduction in scanned bytes, assuming the hourly CDC delta is about 0.2% of the table, 2.2 GB, which you should label as an assumption and then measure. The run merges into the target partition rather than rewriting the table, which makes it both faster and cheaper. Compaction is a separate scheduled job off-peak, never part of the critical path — compaction inside the hourly DAG is how a 20-minute job becomes a 95-minute one. If the 500 GB aggregate is a full rewrite every hour, that is the other structural cost: materialise it incrementally from a silver layer with partition pruning, or accept 15 minutes of staleness and rebuild it every fourth run.
 
-    **4. Scheduling and overlap (0–2).** Notices that overlapping runs compound the problem: two
-    concurrent jobs compete for the same workers and both slow down. Adds `max_active_runs=1`, a
-    sensible catch-up policy, and an SLA miss alert at 45 minutes — before the 60-minute deadline,
-    not after. Considers a separate pool for the critical DAG.
+    **4. Scheduling, overlap and an SLA that pages early (0–2).** At 95 minutes against an hourly schedule, runs overlap by 35 minutes and compete for the same workers, so both slow down — the feedback loop that turns a slow job into an unreliable one. Set `max_active_runs=1` with `catchup=False` and a bounded backlog, give the critical DAG its own pool so a backfill cannot starve it, and alert at 45 minutes on *projected* duration (elapsed / completed tasks × remaining) rather than on failure. A job that finishes at 65 minutes has already missed the SLA, so an alert at 60 is a post-mortem; at 45 there are 15 minutes to act.
 
-    **5. Cost and verification (0–2).** Compares the incremental design's cost with the current
-    one: reading 5.8 GB/hour instead of 140 GB, at the cost of compaction and merge overhead.
-    Proposes measuring p50/p95 duration over a week, and a canary partition before the full
-    rollout. States the residual risk — late-arriving CDC records needing a lookback window.
+    **5. Cost, verification and residual risk (0–2).** Compare honestly: current is 24 rebuilds/day of 1.24 TB = 29.8 TB scanned/day; incremental is 24 × 8 GB = 192 GB/day, a ~155x reduction, at the cost of weekly compaction (say 1-2 hours of cluster time) and a merge path that must itself be tested for idempotency. Roll out to a canary partition, compare row counts and aggregate sums against the old path for three days, then measure p50/p95 duration for a week before deleting the old DAG. Residual risk to state: late-arriving CDC records. A three-hour lookback covers the normal case; a source that can be a day late needs a weekly reconciliation, not a longer lookback, because a 24-hour lookback turns the incremental job back into a full rebuild.
 
-    **Automatic fail:** adding workers as the only answer; no measurement of where time goes;
-    removing the SLA alert to stop the pages.
+    **Failure modes, in order.** (1) A late CDC record arriving after the merge — three-hour lookback, nightly reconciliation for anything older. (2) Schema drift in the CDC source breaking the merge — schema evolution plus a quarantine table, and an alert rather than a half-written partition. (3) Executor loss mid-merge — the merge is a partition-level upsert, so the retry is idempotent. (4) Overlap returning because someone raised `max_active_runs` — the pool, not the flag, is the real control. (5) Skew on one merchant key — salt the key or split the aggregate. (6) The SLA alert muted during a migration with nobody noticing — alert ownership is part of the design.
+
+    **Automatic fail:** adding workers as the only answer; no measurement of where time goes; removing the SLA alert to stop the pages.
   red_flags:
     - Scaling the cluster before reading stage timings.
     - Full rebuilds for an hourly refresh at 140 GB/day.
