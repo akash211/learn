@@ -87,6 +87,7 @@ class ContentStore:
         self.categories: dict[str, str] = {}
         self.techs: dict[str, Tech] = {}
         self.errors: list[str] = []
+        self.planned: dict[str, int] = {}
 
     # ---------------------------------------------------------------- loading
     def load(self) -> None:
@@ -104,8 +105,13 @@ class ContentStore:
             except Exception as exc:  # keep the rest of the library usable
                 self.errors.append(f"{folder.name}: {exc}")
 
-        # drop relations pointing at unknown slugs so the graph stays honest
+        # Relations pointing at unauthored technologies are dropped from the graph, but the
+        # slugs are kept so the authoring backlog is visible instead of silently lost.
+        self.planned = {}
         for tech in self.techs.values():
+            for rel in tech.relations:
+                if rel.get("to") not in self.techs:
+                    self.planned[rel["to"]] = self.planned.get(rel["to"], 0) + 1
             tech.relations = [r for r in tech.relations if r.get("to") in self.techs]
 
     def _load_categories(self) -> dict[str, str]:

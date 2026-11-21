@@ -57,6 +57,7 @@ def bootstrap() -> dict[str, Any]:
             "continue": {"tech": last[0], "chapter": last[1]} if last and last[0] else None,
         },
         "content_errors": store.errors,
+        "planned": [{"slug": slug, "referencedBy": count} for slug, count in sorted(store.planned.items())],
     }
 
 

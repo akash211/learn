@@ -64,6 +64,13 @@ export default function Settings() {
           </Button>
           {reloadResult && <span className="text-[12px] text-muted">{reloadResult}</span>}
         </div>
+        {data && data.planned.length > 0 && (
+          <div className="mt-3 rounded-lg border border-line px-3 py-2 text-[12.5px] text-muted">
+            <span className="text-ink">Authoring backlog ({data.planned.length})</span> — referenced by existing
+            modules but not written yet:{" "}
+            {data.planned.map((p) => p.slug).join(", ")}
+          </div>
+        )}
         {data && (
           <div className="text-[13px] text-muted">
             {data.techs.length} technologies loaded · {data.stats.total_chapters} chapters ·{" "}

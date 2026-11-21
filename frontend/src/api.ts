@@ -27,6 +27,7 @@ export type Bootstrap = {
     continue: { tech: string | null; chapter: string | null } | null;
   };
   content_errors: string[];
+  planned: { slug: string; referencedBy: number }[];
 };
 
 export type ChapterMeta = { id: string; title: string; minutes: number; level: string; completed: boolean };
