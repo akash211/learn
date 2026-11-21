@@ -1,0 +1,100 @@
+slug: redshift
+title: Amazon Redshift
+category: databases
+summary: "A managed, massively parallel columnar warehouse whose performance depends on data placement, workload control, and disciplined operations."
+level: core
+relations:
+  - to: snowflake
+    type: alternative
+    note: "Both are managed cloud warehouses; Redshift exposes cluster and data-layout decisions, while Snowflake abstracts more storage and compute separation."
+  - to: sql
+    type: uses
+    note: "SQL is the interface for modeling, querying, and operating Redshift data."
+  - to: parquet
+    type: uses
+    note: "Redshift Spectrum can query Parquet data in S3 through external tables."
+intro:
+  what: |
+    Amazon Redshift is a managed analytical database designed to scan and aggregate large datasets in parallel. A leader coordinates planning and execution while compute nodes divide work into slices. Tables are stored in columnar format, compressed by column, and distributed across slices so that scans can skip columns and, when sort order and predicates align, skip blocks too.
+
+    Redshift is not simply PostgreSQL with more storage. Its SQL surface is familiar, but the physical model, system catalogs, concurrency controls, and maintenance behavior are warehouse-specific. Query performance depends heavily on where rows land, which columns are sorted, what statistics the optimizer has, and whether joins avoid moving data between nodes.
+  why: |
+    Warehouses need to serve broad scans, joins, and aggregates over shared data without forcing application databases to carry analytical load. Redshift provides managed parallel execution, S3 integration, workload isolation, and operational tooling. Its abstractions reduce infrastructure work, but they do not remove the need to understand data movement, skew, queueing, and storage economics.
+
+    The practical skill is not memorizing syntax. It is diagnosing whether a slow report is waiting in WLM, spilling to disk, reading too much, redistributing a large join, or scanning external files inefficiently—and changing the design without merely masking the symptom.
+  problems:
+    - Parallel scans and aggregations over large analytical tables.
+    - Controlling contention among dashboards, interactive analysis, and batch loads.
+    - Querying curated S3 data alongside warehouse tables with Spectrum.
+    - Publishing efficient and reproducible load and unload pipelines.
+  where_used:
+    - Business intelligence and reporting warehouses.
+    - Data marts and batch transformation layers.
+    - Analytics over S3 data through Redshift Spectrum and external schemas.
+    - Shared datasets exposed to other AWS analytics services through data sharing.
+  ecosystem: |
+    SQL is the query language; S3 is the object store and data-lake boundary. S3 complements Redshift: keep durable, open-format datasets there and load frequently queried, governed or latency-sensitive subsets into warehouse tables. Spectrum bridges them, but external scans have their own metadata, file-layout, and IAM concerns. ETL tools, orchestration, and BI clients sit around this core; IAM roles authorize AWS access and the Glue Data Catalog or Lake Formation can participate in external-data governance.
+  alternatives:
+    - name: Snowflake
+      note: "A managed alternative with a stronger separation between virtual compute warehouses and shared storage; compare workload isolation, ecosystem fit, governance, and operating model."
+    - name: BigQuery
+      note: "Serverless-first analytics with a different capacity and cost model, especially natural for Google Cloud data estates."
+    - name: PostgreSQL
+      note: "Better fit for transactional application workloads; not a substitute for massively parallel columnar scans at warehouse scale."
+  related: [snowflake, sql, parquet]
+chapters:
+  - id: architecture
+    title: "Architecture: Leader, Compute, Slices, and RA3"
+    file: chapters/01-architecture.md
+    minutes: 14
+    level: core
+  - id: distribution-sort-keys
+    title: Distribution Styles and Sort Keys
+    file: chapters/02-distribution-sort-keys.md
+    minutes: 14
+    level: core
+  - id: vacuum-analyze-maintenance
+    title: Vacuum, Analyze, and Maintenance
+    file: chapters/03-vacuum-analyze-maintenance.md
+    minutes: 12
+    level: core
+  - id: workload-management
+    title: "Workload Management: WLM, Queues, and SQA"
+    file: chapters/04-workload-management.md
+    minutes: 13
+    level: core
+  - id: spectrum-external-tables
+    title: Spectrum and External Tables over S3
+    file: chapters/05-spectrum-external-tables.md
+    minutes: 13
+    level: core
+  - id: copy-unload-ingestion
+    title: "COPY, UNLOAD, and Ingestion Patterns"
+    file: chapters/06-copy-unload-ingestion.md
+    minutes: 14
+    level: core
+  - id: materialized-late-binding-views
+    title: Materialized Views and Late-Binding Views
+    file: chapters/07-materialized-late-binding-views.md
+    minutes: 12
+    level: core
+  - id: query-tuning
+    title: Query Tuning and Execution Plans
+    file: chapters/08-query-tuning.md
+    minutes: 15
+    level: core
+  - id: security
+    title: "Security: IAM, Lake Formation, and Data Controls"
+    file: chapters/09-security.md
+    minutes: 14
+    level: core
+  - id: cost-performance-operations
+    title: Cost and Performance Operations
+    file: chapters/10-cost-performance-operations.md
+    minutes: 13
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

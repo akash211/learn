@@ -1,0 +1,132 @@
+- id: mongo-recent-001
+  topic: document modeling
+  difficulty: intermediate
+  question: How would you decide whether to embed or reference a one-to-many relationship in a MongoDB schema?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Start from reads and writes: embed a bounded child set when it is commonly fetched with the parent and shares its lifecycle; reference it when it can grow without bound, is independently queried or updated, or is shared. Include document-size limits, update contention, consistency, and indexing in the decision. A good answer also explains how duplicated snapshots are refreshed or why they are intentionally historical.
+    
+    For example, an order can embed its bounded line items and shipping-address snapshot because they are read together and reflect the purchase-time agreement, while shipment scans live in an `orderEvents` collection because they grow continually. The separate records need an index such as `{ orderId: 1, occurredAt: -1 }`; the parent may keep current status and a bounded recent-events preview. Check the 16 MiB document ceiling, transfer size, index fan-out, and contention from frequent updates before embedding. For references, specify missing-child and deletion behavior because MongoDB does not enforce foreign keys. A copied field must be labeled as a historical snapshot or a synchronized projection with an owner, freshness objective, and reconciliation process. Explain the choice against actual reads and writes, not a universal rule that one-to-many always embeds or always references.
+  tags: [schema-design, embedding, references]
+- id: mongo-recent-002
+  topic: index design
+  difficulty: intermediate
+  question: Given a tenant filter, status filter, and descending timestamp sort, how would you evaluate a compound index?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A candidate is `{ tenantId: 1, status: 1, createdAt: -1 }` for the query that constrains tenant and status and sorts by time. Verify key direction and sort compatibility, inspect `explain("executionStats")`, and compare keys and documents examined with results returned. Confirm that other important query shapes do not need a different leading prefix and weigh index storage and write cost.
+    
+    The proposed index follows the query’s equality filters and requested order, but validate it against the complete workload. Equality on tenant and status can narrow the range, while descending `createdAt` can provide the requested ordering when index directions are compatible. Add a deterministic tie-breaker such as `_id` if pagination needs stable ordering, and account for it in both the sort and candidate index. Run `explain("executionStats")` for large and small tenants and compare `nReturned`, keys examined, documents examined, fetches, and blocking sorts. A query that returns 25 rows after examining a small bounded number is different from one that scans a broad tenant range. Inspect existing index prefixes and write volume; an additional index adds memory, disk, build, and write-maintenance cost. Measure p95/p99 after rollout, not only one explain.
+  tags: [compound-index, explain, query-planning]
+- id: mongo-recent-003
+  topic: array queries
+  difficulty: intermediate
+  question: Why might a query on two fields inside an array return an incorrect match, and how would you fix it?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Separate dotted predicates can match different elements of the same array. If both conditions must describe one embedded record, use `$elemMatch`, for example `{ lines: { $elemMatch: { sku: "A", qty: { $gte: 2 } } } }`. Check the intended data semantics first; then review multikey index bounds with explain.
+    
+    MongoDB evaluates dotted array predicates as separate existential conditions unless the query couples them. A document with one line `{ sku: "A", qty: 1 }` and another `{ sku: "B", qty: 3 }` can satisfy `"lines.sku": "A"` and `"lines.qty": { $gte: 2 }`, even though no one line meets both. Wrapping both conditions in `lines: { $elemMatch: ... }` expresses the intended same-element rule. Test with counterexample documents as well as records that should match. `$elemMatch` can also let the query planner compound multikey bounds for an array of embedded documents, but inspect explain with the actual index. If the predicates intentionally may match different elements, do not use `$elemMatch` simply as a performance hint; it changes semantics.
+  tags: [elemMatch, multikey, correctness]
+- id: mongo-recent-004
+  topic: aggregation
+  difficulty: intermediate
+  question: When would you use $lookup rather than embedding the related data?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    `$lookup` fits when the referenced entity has independent lifecycle or updates, is shared, or is too large or unbounded to embed. Its foreign join field should be indexed and local input bounded where possible. If a hot path repeatedly needs the same small stable fields, consider an intentional denormalized snapshot or projection and define its update semantics rather than joining blindly or duplicating without a plan.
+    
+    `$lookup` is a good fit when the related entity is shared, independently updated, separately queried, or too large or unbounded for safe embedding. A common example is enriching a narrowly filtered order result with a customer name through the indexed customer `_id`. Restrict local input early, project only needed foreign fields, and inspect the actual explain output for foreign scans and result growth. If the join returns many child records per parent, it can create large intermediate documents and memory costs. For a hot path that repeatedly reads a small stable field, a copied snapshot or materialized projection might reduce latency, but it introduces a freshness contract and repair burden. Decide whether the consumer needs live canonical data or a historical value, and document that rule. Use joins when they fit the access pattern.
+  tags: [lookup, schema-design, joins]
+- id: mongo-recent-005
+  topic: transaction semantics
+  difficulty: advanced
+  question: A driver retries a transaction callback after a transient error. What application behavior must be safe?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    The callback may run more than once, so it must not send a payment, email, or message as a non-idempotent side effect. Keep external effects outside the database transaction and use an outbox or saga with idempotency keys. Check conditional updates and transaction errors carefully; an uncertain commit result requires reconciliation rather than a blind duplicate business operation.
+    
+    A transient transaction error can cause the driver helper to invoke the callback again, so code inside must be repeatable and limited to transactional database work. Avoid sending a payment request, email, or broker message from the callback: a retry can perform the external action twice even if one database attempt aborts. Generate a stable operation ID before the transaction and use it in a unique transfer or checkout record. The transaction can write the business state and an outbox entry together; an independent worker sends the external request using the same idempotency key and records its result. The worker also needs retry and reconciliation behavior. If commit outcome is unknown because the connection failed, look up the stable operation ID before repeating the business action. A remote system cannot participate in MongoDB’s commit.
+  tags: [transactions, retry, idempotency]
+- id: mongo-recent-006
+  topic: consistency
+  difficulty: advanced
+  question: 'What guarantee changes when an application moves writes from w: 1 to w: "majority"?'
+  period: "2024-2026"
+  type: representative
+  answer: |
+    `w: "majority"` waits for a majority acknowledgment and reduces the risk that an acknowledged write is rolled back after primary failure compared with `w: 1`. It may increase acknowledgment latency and requires a reachable voting majority. It does not make an external workflow exactly once, and a timeout may leave the client uncertain whether the write eventually committed.
+    
+    `w: 1` confirms that the primary accepted the write, but a primary failure before replication to a majority can lead to rollback during election. `w: "majority"` waits for a majority acknowledgment and reduces that rollback risk, generally at the cost of additional latency and a dependency on quorum availability. It does not ensure that every secondary is current, nor does it coordinate a database write with a broker or payment API. A timeout is ambiguous: the write may have committed even though the client did not receive the acknowledgment. Use a stable idempotency key and reconcile before retrying. Majority writes are a durability choice, not a complete exactly-once protocol, backup strategy, or guarantee against all forms of data loss. Confirm journaling and majority semantics for the exact server version and deployment configuration.
+  tags: [write-concern, durability, failure-modes]
+- id: mongo-recent-007
+  topic: sharding
+  difficulty: advanced
+  question: What failure mode can a monotonically increasing shard key create, and what would you investigate?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    New writes may all target the range at the active end of the key space, creating a hotspot on one shard even while the collection is distributed overall. Investigate per-shard write rates, chunk ranges, key distribution, and whether queries need range locality. A hashed key can distribute point writes better but may cause range queries to scatter; consider a compound key or redesign based on the actual access pattern.
+    
+    With a range shard key that increases over time, newly inserted keys can fall into the newest active range. Even if old chunks are balanced across all shards, that single end range may receive nearly all insert traffic until splitting and migration can redistribute older data; the current hot range itself remains a bottleneck. Inspect per-shard write throughput, queues, chunk boundaries, key skew, and `mongos` explain targeting. A hashed component can distribute distinct values but may sacrifice range locality and cause scatter-gather. A compound key may improve targeting or spread traffic if it includes a genuinely varied prefix, but a dominant tenant can still be hot. Test candidates with realistic traffic skew, growth, and query mix, then plan resharding or migration as a controlled data movement operation.
+  tags: [shard-key, hotspots, distribution]
+- id: mongo-recent-008
+  topic: performance
+  difficulty: intermediate
+  question: How do you distinguish an inefficient indexed query from one that is merely slow because the server is waiting?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Use execution statistics and profiler or slow-log evidence to compare examined work, returned rows, sort behavior, and execution time with queueing, lock, ticket, network, or storage waits. `IXSCAN` alone does not prove efficiency. MongoDB 8.0 exposes additional query-shape and working-time telemetry; use version-aware diagnostics and correlate database signals with host and client latency.
+    
+    Start with query-level evidence: `explain("executionStats")` shows examined keys/documents, returned rows, index bounds, and sort stages, while profiler or slow logs provide operation timing and plan details. A high examined-to-returned ratio suggests excessive query work, but an `IXSCAN` can still traverse many keys. If server execution work is small while request latency is high, inspect queueing, lock or ticket waits, storage latency, network transfer, connection-pool waits, and client-side processing. Correlate a representative request across client and server, and compare per-node metrics to reveal hotspots. MongoDB 8.0 adds version-specific query-shape and working-time diagnostics; field names and interpretation vary by release. Avoid setting alerts on one telemetry field across mixed-version fleets without normalization. The diagnosis should distinguish time spent executing from time waiting and account for result size.
+  tags: [profiler, explain, observability]
+- id: mongo-recent-009
+  topic: change streams
+  difficulty: advanced
+  question: A change-stream consumer is offline longer than the oplog window. Can it resume from its old token, and what is the recovery plan?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Resume is possible only while the required history is still present; if the token is older than available oplog history, the consumer cannot reconstruct the missing interval from the stream alone. It needs a deliberate resync or snapshot/backfill plus a safe handoff to live changes. Persist tokens after durable processing, make effects idempotent, and monitor consumer lag against the oplog window.
+    
+    A resume token works only while the oplog retains the operation history needed to continue from that position. If the consumer was offline past the window, restarting at the newest event would silently skip the gap and leave the projection stale. Preserve the old checkpoint for diagnosis, establish a consistent snapshot or coordinated scan boundary, rebuild the downstream projection idempotently, then replay changes from that boundary before switching to live processing. Handle deletions explicitly and reconcile source and destination after catch-up. Prevent recurrence by monitoring checkpoint age and consumer lag against the oplog window, including how long catch-up takes after an outage. Increasing oplog retention can provide a larger recovery budget, but requires disk-capacity review and does not eliminate the need for a backfill plan. Practice the resync procedure.
+  tags: [change-streams, oplog, recovery]
+- id: mongo-recent-010
+  topic: mongodb 8.0
+  difficulty: advanced
+  question: What changed about query settings and index filters in MongoDB 8.0?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    MongoDB 8.0 introduced cluster-level query settings for query shapes and deprecated index filters. Query settings can influence planning and specify allowed indexes or reject a query shape, but an allowed-index restriction does not guarantee the planner will choose an index; it can still select a collection scan. Verify that the deployment supports the command and monitor shape-hash fields with version-aware tooling.
+    
+    MongoDB 8.0 introduced cluster-level query settings to influence planning by query shape and deprecated index filters. Settings can constrain candidate indexes or reject a shape, but allowing an index does not force the optimizer to use it; a collection scan can remain the better plan. Capture the query shape carefully and understand which literal differences map to the same shape before applying settings. Treat a query setting as a controlled operational policy: test it on representative data, monitor latency and examined work after rollout, and retain a rollback path. Shape hashes and slow-operation fields have changed across releases, so observability should be version-aware. Confirm command support and behavior in the target deployment, especially in managed environments where permissions or rollout timing may differ. Do not add a setting merely because one explain sample chose an unexpected plan.
+  tags: [mongodb-8, query-settings, indexes]
+- id: mongo-recent-011
+  topic: migration
+  difficulty: intermediate
+  question: How would you migrate a SQL-backed application to MongoDB without losing writes during backfill?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Define the target aggregate model and invariants first, then take a consistent snapshot and capture changes made during the backfill using a supported change log or CDC path. Load in restartable idempotent batches, replay captured changes, reconcile counts and business-level queries, then shift reads and writes gradually with a rollback path. A document count alone cannot verify equivalent null, numeric, timestamp, and relationship semantics.
+    
+    First map SQL constraints, joins, transactions, and reports into target document boundaries; a mechanical row-to-document conversion preserves syntax, not workload behavior. Establish a consistent snapshot and a change-capture path before beginning the backfill, then load restartable batches using stable keys and idempotent upserts. Replay captured inserts, updates, and deletes in order or with version checks while controlling the source of truth. Compare more than counts: reconcile financial totals, unique constraints, relationship integrity, time zones, decimal precision, and representative API/report results. Use shadow reads and gradual canary traffic before shifting writes. Keep an explicit rollback window and define how writes made after cutover would be reconciled back if rollback is needed. CDC tooling and snapshot boundaries vary, so test the exact mechanism with concurrent writes before production migration.
+  tags: [migration, backfill, reconciliation]
+- id: mongo-recent-012
+  topic: trade-offs
+  difficulty: intermediate
+  question: What workload signals suggest a relational database may be a better choice than MongoDB?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Frequent joins across independently managed entities, strong foreign-key and multi-row invariants, ad hoc SQL reporting, and transactions that routinely span many entities suggest a relational model may be simpler. MongoDB supports transactions and aggregation, but those features do not automatically make a document-centric design the right fit. Compare total application and operational complexity, including reporting and schema migration costs.
+    
+    Signals include ordinary requests that frequently join independently managed entities, invariants enforced by foreign keys or multi-row constraints, transactions that routinely update many unrelated documents, and new ad hoc reports that combine dimensions not anticipated by the document schema. Relational SQL can make those constraints and queries more direct and reduce synchronization logic for duplicated values. MongoDB supports `$lookup`, validation, indexes, and multi-document transactions, but using them everywhere may indicate that a document-shaped model is not simplifying the workload. Compare whole-system effort: operational maturity, analytic tooling, migration practices, latency, and team skills. Flexible JSON alone is not decisive because relational databases can store semi-structured fields too. A hybrid may be appropriate when MongoDB serves a targeted read model and SQL remains authoritative, provided the projection’s lag, repair, and ownership are explicit.
+  tags: [trade-offs, sql, architecture]

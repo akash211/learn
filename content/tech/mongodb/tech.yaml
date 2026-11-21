@@ -1,0 +1,129 @@
+slug: mongodb
+title: MongoDB
+category: databases
+summary: A document database whose flexible BSON model rewards workload-shaped schema design and trades relational joins for embedded aggregates, indexes, and operational choices.
+level: core
+relations:
+  - to: sql
+    type: alternative
+    note: SQL describes the relational model MongoDB differs from; choose relational tables when joins, constraints, and cross-entity transactions dominate.
+  - to: postgresql
+    type: alternative
+    note: PostgreSQL is a relational system with strong constraints and SQL joins; MongoDB favors nested BSON documents and document-level atomicity, though both support transactions and semi-structured data.
+intro:
+  what: |
+    MongoDB is a document-oriented database that stores BSON documents in collections. Documents
+    can contain nested objects and arrays, and a collection need not force every record into one
+    rigid shape. That flexibility is most useful when the document is a deliberate application
+    aggregate: related bounded values are fetched together, evolve together, and often need one
+    atomic update. The database still has schemas in practice; they live in the data model,
+    validators, indexes, and versioned application code rather than only in table declarations.
+
+    This module uses `mongosh` examples and focuses on design and operations, not a quick survey of
+    commands. It covers embedding versus referencing, arrays and bucketed time data, CRUD and query
+    semantics, compound and specialized indexes, aggregation and `$lookup`, transactions, replica
+    sets and sharding, WiredTiger performance, and change streams. Version-sensitive features are
+    identified for MongoDB 6.0, 7.0, and 8.0; always check the release documentation for the exact
+    deployment and driver version before using a feature or interpreting telemetry.
+  why: |
+    MongoDB can make common reads and writes straightforward when the application's natural unit
+    is a bounded document: an order with its line items, a profile with preferences, or a device
+    configuration. A single-document write is atomic, nested data avoids routine joins, and schema
+    validation can evolve alongside application versions. Those benefits are real, but they depend
+    on choosing document boundaries around access patterns rather than translating every SQL row
+    into a document.
+
+    The trade-off is that references do not provide relational foreign keys, duplicating data
+    creates synchronization rules, and unbounded arrays or hot documents can become costly.
+    Cross-document transactions are available but add coordination and should not be used to hide
+    a model that routinely changes many independent entities together. Indexes, read/write
+    concerns, replica-set elections, shard-key distribution, and aggregation pipelines all affect
+    performance and correctness. MongoDB is therefore not simply "schema-less SQL": it is a
+    different set of defaults and obligations, and a relational database remains the better fit
+    for many workloads that depend on joins, constraints, and ad hoc reporting.
+  problems:
+    - Storing nested, variable-shape application records without decomposing every value into a table.
+    - Reading and atomically updating a bounded aggregate as one document.
+    - Evolving compatible document shapes while old and new application versions coexist.
+    - Scaling data across replica sets or shards when the access pattern and key distribution support it.
+    - Publishing database changes to downstream consumers with resumable change streams.
+  where_used:
+    - Product catalogs, content systems, profiles, and application records with naturally nested bounded fields.
+    - Operational applications where document-shaped reads and updates align with the domain aggregate.
+    - Event-adjacent and time-series workloads when retention and query patterns fit MongoDB's capabilities.
+    - Change-data integrations, search indexes, caches, and analytics pipelines driven from database changes.
+  ecosystem: |
+    Applications connect through official language drivers, which provide connection pools, sessions,
+    retryable writes, and transaction APIs. A replica set supplies redundant data-bearing members and
+    elections; `mongos` routes requests in a sharded cluster. `mongosh`, Compass, Atlas monitoring,
+    database profiler output, and server logs support inspection, while backup products and
+    `mongodump`/`mongorestore` serve different recovery use cases. Change streams can feed downstream
+    systems, but consumers must handle replay and oplog retention. MongoDB can coexist with SQL:
+    relational systems may remain the source of truth for strongly connected business entities,
+    while MongoDB serves a document-oriented workload or a materialized projection.
+  alternatives:
+    - name: PostgreSQL
+      note: Prefer when relational constraints, joins, SQL analytics, and cross-row invariants are central; PostgreSQL also supports JSONB for flexible fields.
+    - name: MySQL
+      note: A relational alternative with a broad ecosystem and strong fit for normalized application data and SQL-based reporting.
+    - name: DynamoDB
+      note: A managed key-value/document service for known key-based access patterns; its partitioning and consistency model differ substantially.
+    - name: Elasticsearch / OpenSearch
+      note: Specialized search and relevance engines, typically used alongside a primary database rather than as an equivalent transactional store.
+  related: [sql, postgresql]
+chapters:
+  - id: document-model-schema-design
+    title: Document Model and Schema Design
+    file: chapters/01-document-model-schema-design.md
+    minutes: 12
+    level: core
+  - id: crud-and-query-language
+    title: CRUD and Query Operators
+    file: chapters/02-crud-and-query-language.md
+    minutes: 12
+    level: core
+  - id: indexes-and-explain
+    title: Indexes and Explain Plans
+    file: chapters/03-indexes-and-explain.md
+    minutes: 13
+    level: core
+  - id: aggregation-pipelines
+    title: Aggregation Pipelines
+    file: chapters/04-aggregation-pipelines.md
+    minutes: 12
+    level: core
+  - id: transactions-and-consistency
+    title: Transactions and Consistency Guarantees
+    file: chapters/05-transactions-and-consistency.md
+    minutes: 12
+    level: advanced
+  - id: replication-and-elections
+    title: Replication, Read/Write Concerns, and Elections
+    file: chapters/06-replication-and-elections.md
+    minutes: 13
+    level: advanced
+  - id: sharding-keys-chunks
+    title: 'Sharding: Keys, Chunks, and Hotspots'
+    file: chapters/07-sharding-keys-chunks.md
+    minutes: 11
+    level: advanced
+  - id: performance-wiredtiger
+    title: Performance, WiredTiger, and the Working Set
+    file: chapters/08-performance-wiredtiger.md
+    minutes: 12
+    level: advanced
+  - id: change-streams-operations
+    title: Change Streams and Operational Tooling
+    file: chapters/09-change-streams-operations.md
+    minutes: 12
+    level: advanced
+  - id: when-not-mongodb-migrations
+    title: When Not to Use MongoDB and Migration Stories
+    file: chapters/10-when-not-mongodb-migrations.md
+    minutes: 11
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

@@ -1,0 +1,118 @@
+concepts:
+  - title: API choice is architectural
+    detail: >-
+      NoSQL, MongoDB, Gremlin, Table, Cassandra, and PostgreSQL offerings have distinct protocols,
+      data models, feature surfaces, and lifecycle status; test exact operations before migration.
+  - title: Native item identity
+    detail: >-
+      In NoSQL, an item is addressed by `id` plus its partition-key value. A point read needs both.
+  - title: Container
+    detail: >-
+      A container defines a partition-key path, indexing policy, and throughput scope; it is not a single server.
+  - title: Logical partition
+    detail: >-
+      Items sharing one partition-key value form a logical partition and share locality and transaction scope.
+  - title: Physical partition range
+    detail: >-
+      Physical ranges host logical partitions and a share of throughput. One hot logical key can remain a bottleneck.
+  - title: Partition-key trade-off
+    detail: >-
+      Select for both request distribution and routing. A random key can distribute writes but make tenant queries fan out.
+  - title: RU and RU/s
+    detail: >-
+      RUs measure operation work; RU/s is throughput per time. Charges vary with item size, indexing, query work, and routing.
+  - title: Throughput is a budget
+    detail: >-
+      Manual and autoscale throughput have configured limits. Background consumers and retries also consume capacity.
+  - title: Normalized RU
+    detail: >-
+      The metric reflects the busiest physical partition range in its interval, so aggregate averages can hide hot spots.
+  - title: 429 behavior
+    detail: >-
+      Respect SDK retries and server retry guidance, bound deadlines, and diagnose partition skew before raising capacity.
+  - title: Session consistency
+    detail: >-
+      Session gives read-your-writes within preserved client session state; separate clients do not automatically share it.
+  - title: Five consistency levels
+    detail: >-
+      Strong, bounded staleness, session, consistent prefix, and eventual trade freshness and ordering for latency and availability.
+  - title: Indexing policy
+    detail: >-
+      Broad indexing eases queries but adds write and storage work. Exclusions must be tested against actual query paths.
+  - title: Query fan-out
+    detail: >-
+      Partition targeting and indexing solve different problems. A well-indexed query can still be expensive across many partitions.
+  - title: Transaction scope
+    detail: >-
+      Native NoSQL transactional batch and stored procedures are scoped to one logical partition; external systems are outside it.
+  - title: Change feed delivery
+    detail: >-
+      Feed processing is typically at least once; checkpoint after durable effects and make downstream work idempotent.
+traps:
+  - Treating the logical partition key and physical partition range as the same thing.
+  - Assuming more overall RU/s or autoscale can split a single hot logical key.
+  - Treating the SQL-like NoSQL query language as relational SQL with arbitrary joins and cross-partition transactions.
+  - Assuming a timeout proves a write did not commit, or that an SDK retry guarantees exactly-once business effects.
+  - Treating latest-version change feed as an unlimited log of every update and delete.
+  - Assuming multi-region writes are strongly consistent or that Last Write Wins encodes business intent.
+advanced:
+  - Changing a partition key for existing data normally requires a target-container migration; include backfill, change capture, and cutover reconciliation.
+  - Multi-region write conflicts can overwrite semantically independent edits; partition ownership or explicit merge rules may be safer than timestamp resolution.
+  - A small 429 rate can be acceptable if SDK retries succeed within latency objectives; inspect partition-level skew rather than relying on one global percentage.
+  - A change-feed checkpoint must follow durable downstream effects; an outage beyond the selected history window needs a backfill and coordinated live handoff.
+  - Throughput, storage, regions, backup, and background processing all affect cost; calculate with current regional configuration and pricing tools.
+  - Azure Cosmos DB for PostgreSQL is a distinct service on a retirement path; evaluate current Azure Database for PostgreSQL guidance for new PostgreSQL work.
+comparisons:
+  - a: Logical partition
+    b: Physical partition range
+    difference: >-
+      A logical partition groups items with one application key; a physical range is infrastructure that can host many logical values and a share of RU/s.
+  - a: Point read
+    b: Query
+    difference: >-
+      Point read uses `id` and partition key for direct addressing; a query evaluates predicates and may fan out across partitions.
+  - a: Provisioned throughput
+    b: Autoscale throughput
+    difference: >-
+      Manual provision sets a fixed RU/s rate; autoscale varies within a configured maximum and can still throttle a hot range.
+  - a: Session
+    b: Strong consistency
+    difference: >-
+      Session preserves read-your-writes within a session; strong provides linearizable latest reads with different latency and availability trade-offs.
+  - a: Latest-version feed
+    b: All-versions-and-deletes feed
+    difference: >-
+      Latest version emphasizes current item state and can omit deletes/intermediate states; all-versions mode has prerequisites and bounded history.
+  - a: Bulk execution
+    b: Transactional batch
+    difference: >-
+      Bulk improves throughput for independent operations; batch is atomic for supported operations sharing one logical partition key.
+  - a: Single-region writes
+    b: Multi-region writes
+    difference: >-
+      One write region simplifies conflict behavior; multiple write regions reduce local write distance but require conflict semantics and lag handling.
+commands:
+  - label: Create an account (Azure CLI; review flags for current CLI version)
+    code: >-
+      az cosmosdb create --name <account> --resource-group <group> --locations regionName=<region> failoverPriority=0
+  - label: Create a NoSQL database
+    code: >-
+      az cosmosdb sql database create --account-name <account> --resource-group <group> --name <database>
+  - label: Create a container with a partition key
+    code: >-
+      az cosmosdb sql container create --account-name <account> --resource-group <group> --database-name <database> --name <container> --partition-key-path /tenantId
+  - label: Read one item using the NoSQL SDK (Python)
+    code: >-
+      container.read_item(item="order-1042", partition_key="contoso")
+  - label: Query within a known partition (Python SDK)
+    code: >-
+      container.query_items("SELECT c.id, c.status FROM c WHERE c.status = @s", parameters=[{"name": "@s", "value": "open"}], partition_key="contoso")
+  - label: Inspect request charge from SDK diagnostics
+    code: >-
+      response.get_response_headers()["x-ms-request-charge"]
+  - label: Configure a stable retry deadline (Python-style pseudocode)
+    code: >-
+      for attempt in range(max_attempts): request_with_sdk_retry(deadline=deadline)
+  - label: Query the current Azure CLI account context
+    code: >-
+      az account show --output table

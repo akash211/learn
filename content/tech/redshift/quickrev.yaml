@@ -1,0 +1,90 @@
+concepts:
+  - title: Leader and compute
+    detail: "The leader plans and coordinates SQL; compute nodes store user data and execute the parallel work. Don't treat the leader as a substitute for compute capacity."
+  - title: Slice parallelism
+    detail: "Slices execute pieces of a plan and own portions of distributed tables. Skew or a serial step can leave most slices idle while one limits latency."
+  - title: Columnar scans
+    detail: "Columnar storage reads selected columns efficiently; compression and sort-key block pruning reduce I/O only when the query shape and data layout support them."
+  - title: RA3 managed storage
+    detail: "RA3 separates managed storage capacity from local compute cache. Cold data is not automatically as fast as warm local data; benchmark realistic access patterns."
+  - title: Distribution key
+    detail: "KEY distribution can collocate joins but risks skew. Choose from join frequency, value distribution, table size, and workload evidence, not distinct count alone."
+  - title: DISTSTYLE ALL
+    detail: "ALL replicates a table to each node. It can help a small dimension but multiplies storage and load/update work; it is not a default for large facts."
+  - title: Compound sort key
+    detail: "Leading columns matter most for block pruning. A date-leading key helps date ranges, not necessarily filters on a later customer column alone."
+  - title: DS_DIST_NONE
+    detail: "No redistribution is required for that join step, usually indicating collocated data. Confirm the entire plan and runtime rather than optimizing one label blindly."
+  - title: DS_BCAST_INNER
+    detail: "The inner relation is broadcast to nodes. It may be efficient when small after filters; verify actual rows and bytes before changing distribution."
+  - title: VACUUM
+    detail: "Redshift vacuum can sort data and reclaim deleted-row space; automatic sort and delete-only vacuum also run. Its default behavior differs from PostgreSQL."
+  - title: ANALYZE
+    detail: "ANALYZE refreshes optimizer statistics. Recheck after major loads or data-shape changes; stale estimates can produce bad joins and data movement."
+  - title: WLM queue time
+    detail: "Separate queue delay from execution. Queue-heavy incidents suggest routing or concurrency pressure; execution-heavy incidents need plan and data investigation."
+  - title: SQA
+    detail: "Short Query Acceleration identifies eligible short work and gives it dedicated resources. It does not turn large scans into short queries."
+  - title: Concurrency scaling
+    detail: "Adds transient capacity for eligible queued queries. It is a burst mechanism, not a general accelerator for a single inefficient query."
+  - title: Spectrum
+    detail: "External tables are metadata over S3 files, not local copies. File size, format, partition registration, pushdown, IAM, and catalog access all matter."
+  - title: COPY manifest
+    detail: "A manifest explicitly identifies the objects in a load batch. It bounds input but does not make retries idempotent; staging and batch keys still matter."
+
+traps:
+  - "Assuming a SQL GRANT alone permits Spectrum access; IAM, S3, catalog, KMS, and possibly Lake Formation controls also apply."
+  - "Treating DS_BCAST_INNER as always harmful instead of checking the filtered inner input's actual size."
+  - "Running manual VACUUM everywhere without inspecting automatic maintenance, table state, and MV dependencies."
+  - "Increasing WLM concurrency without measuring spills and per-query memory pressure."
+  - "Assuming a date predicate prunes Spectrum partitions even when it casts or transforms the partition column."
+  - "Retrying COPY into an append-only table after a timeout without checking partial load history or deduplicating."
+
+advanced:
+  - "STL_ history has bounded retention; STV_ tables are transient snapshots. Export long-term evidence and protect query text."
+  - "A stale dependent materialized view can make vacuum retain deleted base-table rows for incremental refresh; FORCE can imply a later full recompute."
+  - "SVV_TABLE_INFO helps inspect distribution, skew, sort state, and table health, but metadata must be tied to actual query behavior."
+  - "SYS monitoring views can unify query history across environments; validate view availability and field semantics for the target deployment."
+  - "RA3 local cache, managed storage, concurrency scaling, and Serverless capacity are different layers; distinguish cold scans from queueing before changing size."
+  - "Row-level security and dynamic masking address different disclosure risks; neither replaces least-privilege IAM, encryption, or careful query-log access."
+
+comparisons:
+  - a: DISTSTYLE EVEN
+    b: DISTSTYLE KEY
+    difference: "EVEN balances rows without a join-key assumption; KEY can collocate matching joins but creates skew risk when key values are uneven."
+  - a: DISTSTYLE KEY
+    b: DISTSTYLE ALL
+    difference: "KEY distributes rows by a key; ALL replicates the full relation to each node, trading storage and load work for local access."
+  - a: Compound sort key
+    b: Interleaved sort key
+    difference: "Compound order prioritizes leading columns; interleaved keys balance multiple filter dimensions but have different maintenance and design trade-offs."
+  - a: Local Redshift table
+    b: Spectrum external table
+    difference: "Local data is stored and maintained in the warehouse; Spectrum reads S3 objects through catalog metadata and IAM-governed access."
+  - a: Standard view
+    b: Late-binding view
+    difference: "Standard views bind dependencies at creation; late-binding views use WITH NO SCHEMA BINDING and defer dependency checks until query time."
+  - a: Provisioned cluster
+    b: Redshift Serverless
+    difference: "Provisioned exposes explicit cluster capacity; Serverless manages workgroup capacity, but both require query, security, and workload operations."
+  - a: VACUUM
+    b: ANALYZE
+    difference: "VACUUM addresses sort order and deleted-row space; ANALYZE refreshes optimizer statistics. They solve different maintenance problems."
+
+commands:
+  - label: Explain a query plan
+    code: "EXPLAIN SELECT customer_id, SUM(amount) FROM fact_sales GROUP BY 1;"
+  - label: Analyze predicate columns
+    code: "ANALYZE sales PREDICATE COLUMNS;"
+  - label: Inspect table health
+    code: "SELECT * FROM svv_table_info WHERE \"table\" = 'sales';"
+  - label: Inspect WLM query history
+    code: "SELECT * FROM stl_wlm_query WHERE userid > 1 ORDER BY query DESC LIMIT 20;"
+  - label: Copy an explicit manifest
+    code: "COPY staging.events FROM 's3://bucket/batch/manifest.json' IAM_ROLE 'arn:aws:iam::123456789012:role/redshift-load' MANIFEST FORMAT AS PARQUET;"
+  - label: Unload with a manifest
+    code: "UNLOAD ('SELECT * FROM sales') TO 's3://bucket/export/run_' IAM_ROLE 'arn:aws:iam::123456789012:role/redshift-export' MANIFEST;"
+  - label: Create a late-binding view
+    code: "CREATE VIEW analytics.events_v AS SELECT * FROM lake.events WITH NO SCHEMA BINDING;"
+  - label: Refresh a materialized view
+    code: "REFRESH MATERIALIZED VIEW analytics.daily_sales;"

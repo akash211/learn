@@ -1,0 +1,216 @@
+- id: cosmos-basic-001
+  topic: data model
+  difficulty: beginner
+  question: What is the difference between a Cosmos DB database, container, item, and partition?
+  answer: |
+    A database is a logical namespace that groups containers. A container stores items and defines important operational properties such as its partition-key path, indexing policy, and throughput configuration. An item is a JSON document in the native NoSQL API; other APIs expose their own terminology and representations. A logical partition is the set of items sharing one partition-key value, while physical partitions are underlying service allocations that hold one or more logical partitions and divide throughput. These terms are related but not interchangeable. In particular, a container is not one machine, and a logical partition is not necessarily a physical partition. Understanding the distinction helps explain routing, transaction scope, hot keys, and scaling behavior.
+
+    For a new design, draw the item boundary and partition key together, then test the exact point reads and transactional operations that depend on them.
+  tags: [database, container, item, partitions]
+- id: cosmos-basic-002
+  topic: APIs
+  difficulty: intermediate
+  question: How should a team choose among Cosmos DB's APIs?
+  answer: |
+    Choose based on required data semantics and feature support, not just a familiar connection string. The native NoSQL API uses JSON items and Cosmos-specific SQL-like queries; MongoDB uses a compatibility protocol; Gremlin models vertices and edges; Table is key-value oriented; Cassandra exposes CQL and a partitioned model. Each API has different SDKs, query behavior, limits, and features. Test the application's real queries, transaction needs, indexing, backup, consistency, and change capture against the exact API and version. A successful client connection is only a compatibility check, not proof that all operators or tools work. Azure Cosmos DB for PostgreSQL is a distinct distributed PostgreSQL offering on a retirement path, so check current lifecycle guidance before considering it.
+
+    Keep an API compatibility test in CI and rerun it after service, SDK, region, or driver changes; protocol familiarity alone is not a guarantee.
+  tags: [api, compatibility, architecture]
+- id: cosmos-basic-003
+  topic: data modeling
+  difficulty: intermediate
+  question: What makes a good item boundary in the native NoSQL API?
+  answer: |
+    A good item boundary usually matches a bounded aggregate that the application commonly reads or updates together. Embedding tightly related fields can reduce requests and keep updates within one item or logical partition. Separate independently changing, shared, or unbounded children into their own items. This is not only a document-size decision: it also affects partition locality and transactional scope. In the NoSQL API, transactional batch and stored procedures operate within one logical partition, so a multi-item business invariant should be designed with that boundary in mind. Start from access patterns and invariants, then choose the item shape. Avoid mechanically copying relational tables into JSON if that forces frequent cross-partition joins or coordination.
+
+    For a new design, draw the item boundary and partition key together, then test the exact point reads and transactional operations that depend on them.
+  tags: [modeling, aggregate, transaction]
+- id: cosmos-basic-004
+  topic: partitioning
+  difficulty: intermediate
+  question: What is the difference between a logical partition and a physical partition?
+  answer: |
+    A logical partition is the group of items with the same partition-key value, such as all items for one tenant. The service hashes and maps logical partitions into physical partition ranges, which are infrastructure units that store data and serve a share of provisioned throughput. A physical partition can contain many logical partitions, but one hot logical partition is not ordinarily split into independent key values just because the service adds physical capacity. This explains why a container can have unused total RU/s while one key is throttled. Metrics by physical range help find skew, but additional key-level diagnostics may be needed to identify which logical value is responsible.
+
+    Monitor both storage and RU distribution by key over time; a balanced initial load can become skewed as tenant sizes and behavior diverge.
+  tags: [logical-partition, physical-partition, hot-key]
+- id: cosmos-basic-005
+  topic: partition keys
+  difficulty: advanced
+  question: How do you evaluate a candidate partition key?
+  answer: |
+    Evaluate whether common reads and writes know the key, how many distinct values exist, how data and RU consumption vary by value, and whether operations that must be atomic share the key. A tenant key can make tenant-scoped access simple, but a dominant tenant may create a hot logical partition. A random high-cardinality key may distribute traffic well while making tenant-wide queries fan out. Include expected lifetime growth and query routing, not only today's record counts. Model a few candidate keys against the actual request mix and skewed test data. Since changing the partition key for populated data requires migration to a new container, document the trade-offs before launch and include a repartitioning plan.
+
+    Benchmark a hot-key dataset and include the migration path in the design record, because partition-key changes are not routine in-place edits.
+  tags: [partition-key, workload, design]
+- id: cosmos-basic-006
+  topic: throughput
+  difficulty: beginner
+  question: What does an RU measure, and what does RU/s mean?
+  answer: |
+    A request unit (RU) is Cosmos DB's normalized measure of database work, abstracting resources such as CPU and I/O for operations including reads, writes, and queries. RU/s is a rate of throughput available over time, not a balance of units that can be saved indefinitely. An operation's charge depends on factors such as item size, indexed paths, query selectivity, and partition routing. A point read of a small item can be inexpensive, but no one fixed charge applies to every read. SDK responses and diagnostics expose request charge so teams can measure their actual workload. Use representative measurements and current pricing tools rather than translating RU directly into a memorized monetary figure.
+
+    Measure the operation against representative data and inspect the returned request charge; use current pricing tools for money estimates.
+  tags: [ru, throughput, capacity]
+- id: cosmos-basic-007
+  topic: throughput
+  difficulty: intermediate
+  question: What is normalized RU consumption and why can one hot partition matter?
+  answer: |
+    Normalized RU consumption is a utilization metric that generally reflects the most-used physical partition range during an interval, reported as a percentage of its available throughput. A high value can therefore occur even when average container utilization seems moderate: one range may be saturated while other ranges are quiet. This often indicates skewed traffic or a hot logical key, though the range metric alone does not identify the exact key. Compare normalized RU by range with 429 counts, request charges, operation types, and diagnostic logs. If all ranges are busy, more capacity or query optimization may help; if one range dominates, changing key distribution or workload shape may be needed.
+
+    Measure the operation against representative data and inspect the returned request charge; use current pricing tools for money estimates.
+  tags: [normalized-ru, hot-partition, monitoring]
+- id: cosmos-basic-008
+  topic: throttling
+  difficulty: intermediate
+  question: What should an application do when Cosmos DB returns HTTP 429?
+  answer: |
+    A 429 means the request was rate-limited by the relevant throughput budget. Use the supported SDK's retry behavior, which respects service retry guidance, rather than an immediate, unbounded custom loop. Set an overall deadline and surface an explicit failure if retries are exhausted. Investigate whether throttling is broad or isolated to a partition range, which operations consume the RU budget, and whether queries or item sizes changed. A small number of retried 429s can be normal capacity utilization, but acceptable behavior depends on tail latency and customer impact. More total throughput can help broad saturation; a hot logical partition may require key redesign, tenant isolation, or reduced contention instead.
+
+    Use business-level reconciliation and a rollback gate; matching item counts cannot detect semantic differences or missing concurrent writes.
+  tags: [429, retry, throttling]
+- id: cosmos-basic-009
+  topic: cost
+  difficulty: intermediate
+  question: What belongs in a Cosmos DB cost model?
+  answer: |
+    Model throughput mode and scope, baseline and peak RU/s, storage, region count, backups and retention, background change-feed work, nonproduction environments, and any associated networking or analytics features. Autoscale has a configured maximum and is not unbounded; shared throughput may improve utilization but creates a shared capacity pool. Include headroom for failover and burst objectives. RU consumption is a performance measure, not a universal per-unit price; monetary pricing varies by region and configuration. Use current Azure pricing tools and explicit assumptions, then compare estimates with a representative pilot. Also account for engineering and operational cost: a design that needs frequent fan-out, manual reconciliation, and hot-key workarounds can outweigh differences in the database invoice.
+
+    Recalculate after region, backup, retention, throughput, or workload changes; historical costs do not guarantee current capacity or price.
+  tags: [cost, autoscale, modeling]
+- id: cosmos-basic-010
+  topic: consistency
+  difficulty: beginner
+  question: Name Cosmos DB's five consistency levels and describe the spectrum.
+  answer: |
+    The native NoSQL API defines strong, bounded staleness, session, consistent prefix, and eventual consistency, from strongest to weakest. Strong provides linearizable reads of the latest committed value. Bounded staleness permits lag within a configured bound. Session provides read-your-writes and write-follows-reads within a session when session state is maintained. Consistent prefix preserves write order while allowing lag, and eventual allows the weakest freshness and ordering assumptions while replicas converge. The levels trade freshness and ordering guarantees against latency, availability, and throughput behavior. They are not five interchangeable speed settings. Define the application's invariant first, test the chosen SDK behavior across clients and regions, and verify API-specific consistency mappings rather than assuming every compatibility API behaves identically.
+
+    State the allowed stale-read behavior in user-facing terms and verify it with independent SDK clients and the actual region topology.
+  tags: [consistency, session, replication]
+- id: cosmos-basic-011
+  topic: consistency
+  difficulty: intermediate
+  question: What does session consistency guarantee, and when might it not be enough?
+  answer: |
+    Session consistency provides read-your-writes and write-follows-reads behavior within a client session when the SDK's session state is preserved. It is a practical default for interactive applications because a client can read its own recent updates without paying the full cost of strong global consistency. However, separate SDK clients, devices, or backend workers do not automatically share one application-wide session. If a write occurs in one process and a different process must immediately observe it, session-token propagation or a stronger design may be needed. Session consistency also does not prevent lost updates by itself; use ETags or conditional writes for concurrent modification. Test client handoffs explicitly instead of inferring strong semantics from one client repeatedly reading its own writes.
+
+    State the allowed stale-read behavior in user-facing terms and verify it with independent SDK clients and the actual region topology.
+  tags: [session-consistency, session-token, clients]
+- id: cosmos-basic-012
+  topic: indexing
+  difficulty: intermediate
+  question: Why might a team customize the default indexing policy?
+  answer: |
+    Broad automatic indexing is convenient for evolving JSON, but index maintenance consumes work on writes and storage. A write-heavy workload can exclude large or frequently changing paths that are never queried, reducing unnecessary index updates. Conversely, excluding a path can make filters or sorts on it inefficient or unavailable, so policy changes must be tested against real queries. Inventory predicates, orderings, frequency, and partition scope before changing the policy. Measure request charge and latency with realistic item distributions, and account for index transformation time when a policy changes. Keep the policy in source control and associate paths with the query patterns that require them. Do not remove indexes just because a small development dataset appears to work.
+
+    Keep a query inventory linked to index paths, then rerun correctness and charge tests after every policy change.
+  tags: [indexing-policy, write-cost, queries]
+- id: cosmos-basic-013
+  topic: query optimization
+  difficulty: intermediate
+  question: How do partition targeting and indexing solve different query problems?
+  answer: |
+    Partition targeting limits which logical or physical partitions a query must contact; indexing helps locate matching items within the partitions that are searched. A query can have suitable indexes and still be expensive if it fans out across many partitions. Conversely, a perfectly targeted query can still scan too much data inside its partition if predicates are unselective or paths are not indexed. Include the partition key in query scope when the application knows it, project only needed fields, and inspect SDK query metrics and RU charge. This distinction helps diagnose whether latency comes from broad routing, inefficient candidate selection, large responses, or retries. Neither more indexes nor more RU/s automatically fixes every query problem.
+
+    Inspect diagnostics and partition routing before changing capacity; test with skewed data and all pages of the result set.
+  tags: [query, partitioning, indexing]
+- id: cosmos-basic-014
+  topic: change feed
+  difficulty: intermediate
+  question: What is Cosmos DB's change feed commonly used for?
+  answer: |
+    The change feed lets a consumer process item changes asynchronously, often to maintain a search index, materialized view, cache, or integration pipeline. In the native NoSQL API, latest-version mode exposes current item state and can omit intermediate updates that are superseded before reading; deletes also need explicit handling. A processor library manages leases and checkpoints, but typical processing is at least once, so downstream effects should be idempotent. Changes are ordered within a logical partition, not globally across the container. Use the feed for change-driven processing, not as an assumed unlimited event log. If every business transition must be retained, store durable events explicitly or use the supported all-versions-and-deletes mode with its documented prerequisites and retention limits.
+
+    Practice duplicate delivery and history-gap recovery in a test environment; a healthy process indicator alone does not prove projection freshness.
+  tags: [change-feed, idempotency, event-driven]
+- id: cosmos-basic-015
+  topic: change feed
+  difficulty: advanced
+  question: How should a consumer handle duplicate change-feed delivery and recovery after an outage?
+  answer: |
+    Assume the consumer may process an item more than once: a crash can happen after a downstream write but before its checkpoint is durable. Use stable IDs, version checks, or idempotency keys so replay does not duplicate effects. Persist progress only after the downstream effect succeeds. Monitor checkpoint age and consumer lag against the selected feed mode's history horizon. If an outage outlasts available history, do not skip to the newest point and silently lose changes; rebuild or reconcile the projection with a backfill and a coordinated handoff to live changes. Make deletes explicit, isolate poison items with a repair path, and rehearse recovery. A change feed is not a substitute for a backup or an unlimited immutable log.
+
+    Practice duplicate delivery and history-gap recovery in a test environment; a healthy process indicator alone does not prove projection freshness.
+  tags: [change-feed, checkpoint, recovery]
+- id: cosmos-basic-016
+  topic: multi-region
+  difficulty: advanced
+  question: What is the difference between single-region and multi-region writes?
+  answer: |
+    A single-write-region account routes writes to one region and replicates them to others; remote regions can serve reads according to the consistency configuration. This centralizes writes and simplifies concurrent conflict handling, but may add distance for writers and requires a failover plan. Multi-region writes can accept writes in several regions, reducing local write distance and improving availability for distributed clients, but replicas converge asynchronously and concurrent updates to the same item can conflict. Applications should route traffic consistently, define conflict policy, and avoid assuming global linearizability. Reads in a different region may lag behind a recent write. Validate failover, endpoint discovery, conflict behavior, and consistency guarantees for the exact account topology.
+
+    Rehearse failover and failback, including requests whose outcome is ambiguous and the conflict behavior of concurrent edits.
+  tags: [multi-region, writes, failover]
+- id: cosmos-basic-017
+  topic: conflict resolution
+  difficulty: advanced
+  question: What does Last Write Wins resolve, and what does it not solve?
+  answer: |
+    Last Write Wins (LWW) chooses one version when concurrent updates to the same item conflict, using a service timestamp by default. In the native NoSQL API, a custom numeric conflict-resolution path can be configured where supported. LWW allows replicas to converge, but it does not understand business intent: a timestamp winner may overwrite a valid field change, and clock/order semantics do not implement a merge rule. If concurrent edits need field-wise reconciliation, use a domain-specific approach, avoid conflicts by assigning ownership, or evaluate supported custom resolution. Custom procedures have API and container-configuration constraints. Test delete conflicts and failure paths as well. Conflict resolution is a consistency mechanism, not a replacement for application invariants or audit history.
+
+    Use business-level reconciliation and a rollback gate; matching item counts cannot detect semantic differences or missing concurrent writes.
+  tags: [conflicts, last-write-wins, multi-write]
+- id: cosmos-basic-018
+  topic: transactions
+  difficulty: intermediate
+  question: What is the transaction boundary for native NoSQL transactional batch?
+  answer: |
+    A transactional batch groups supported point operations that use the same logical partition key in one container. The operations commit together or roll back together, making the batch useful for a partition-local invariant such as changing an order and its bounded status record. It is not a transaction across multiple partition keys, containers, or external systems. If the business workflow spans partitions, redesign the aggregate if appropriate or use a saga/outbox with idempotency and reconciliation. Inspect per-operation outcomes when a batch fails; the overall response may identify one failure and related dependency failures. Keep batches within documented request and execution limits and validate the SDK's exact batch support. Do not call a multi-partition sequence atomic merely because it is submitted by one service method.
+
+    If an invariant crosses the stated scope, model a saga or change the aggregate instead of assuming the database can extend atomicity.
+  tags: [transactional-batch, partition-scope, atomicity]
+- id: cosmos-basic-019
+  topic: server-side programming
+  difficulty: advanced
+  question: When might a stored procedure be appropriate in Cosmos DB?
+  answer: |
+    A stored procedure can coordinate a small read-modify-write operation that must be atomic within one logical partition in the native NoSQL API. It executes server-side JavaScript and has a bounded runtime, so it is not suitable for an unbounded scan or long workflow. It cannot transact across partitions or commit an external queue publish or API call. Compare it with transactional batch, which often provides clearer application-language code and deployment. Keep procedures small, versioned, and tested, and handle continuation or partial multi-call progress explicitly because separate invocations are separate transactions. Use server-side execution only when reduced round trips or transaction semantics justify the language and operational constraints.
+
+    Version and deploy server-side code through CI/CD, and test its execution bounds and behavior when a caller retries.
+  tags: [stored-procedure, javascript, transactions]
+- id: cosmos-basic-020
+  topic: SDK and retries
+  difficulty: intermediate
+  question: Why should an application reuse a long-lived Cosmos DB SDK client?
+  answer: |
+    SDK clients maintain connection and routing state, and can manage endpoint discovery, session tokens, and retries. Recreating a client per web request adds connection setup and resource overhead and can undermine efficiency. Create a client at application startup with deliberate region preferences, consistency configuration, serializer settings, and credential handling, then reuse it. Capture SDK diagnostics on slow or failed operations, including retries, activity IDs, and request charge when available. Client reuse does not remove the need for bounded retry deadlines or idempotent writes. Configuration changes may require a new client instance or process restart depending on SDK behavior, so apply settings through a controlled deployment rather than mutating assumptions mid-flight.
+
+    Log status, retries, activity IDs, and operation identity without recording secrets or unnecessary personal data.
+  tags: [sdk, client, diagnostics]
+- id: cosmos-basic-021
+  topic: SDK and retries
+  difficulty: advanced
+  question: Why is a timed-out write an uncertain outcome, and how can an application stay safe?
+  answer: |
+    A client timeout means it stopped waiting; it does not prove the service did not commit the request before the response was lost. Blindly retrying a non-idempotent create can produce a duplicate or a conflict. Use deterministic item IDs or business idempotency keys, and on retry read or reconcile the existing item before applying another business effect. Handle a conflict by verifying that the stored record represents the same request, not by assuming every conflict is success. Keep retries bounded within a request deadline, and log operation identifiers for investigation. This pattern also applies to cancellation and transient network errors. Exactly-once behavior across a database and external services requires explicit idempotency or an outbox/saga, not just an SDK retry policy.
+
+    Log status, retries, activity IDs, and operation identity without recording secrets or unnecessary personal data.
+  tags: [timeout, idempotency, retry]
+- id: cosmos-basic-022
+  topic: bulk and batch
+  difficulty: intermediate
+  question: How does bulk execution differ from transactional batch?
+  answer: |
+    Bulk execution aims to send many independent operations efficiently and can improve throughput for ingestion, but it does not make all operations one atomic unit. A subset may fail or be throttled, so inspect per-item results and make the process restartable with deterministic IDs and checkpoints. Transactional batch groups supported point operations for one logical partition key and commits all or none, but it is limited in size and scope. Use bulk for parallel independent writes with bounded concurrency; use batch when a small same-partition group must be atomic. Neither strategy makes cross-partition or external operations transactional. Benchmark both with realistic RU budgets and measure end-to-end latency, retries, and failure handling rather than throughput alone.
+
+    Verify every operation result and make restarts deterministic; neither bulk throughput nor one API call implies all-or-nothing semantics.
+  tags: [bulk, batch, ingestion]
+- id: cosmos-basic-023
+  topic: when not to use
+  difficulty: intermediate
+  question: What workload characteristics suggest a relational database may fit better?
+  answer: |
+    Frequent joins across independently managed entities, foreign-key constraints, transactions spanning many rows, and evolving ad hoc SQL reporting often favor a relational database. Cosmos DB's SQL-like query syntax and JSON model do not provide general relational semantics, and native NoSQL transactions are partition-scoped. A document model may still work, but if it requires repeated fan-out, application-managed integrity, and complex cross-partition orchestration, the overall design can become harder to reason about. Evaluate the real access patterns, consistency needs, operational burden, and cost rather than ruling Cosmos out by feature labels alone. Azure SQL or managed PostgreSQL may give a simpler model. Cosmos can also complement a relational source as a projection for a distinct low-latency access pattern.
+
+    Compare at equivalent reliability and regional objectives, then include the engineering work needed to preserve constraints and reporting.
+  tags: [trade-offs, relational, architecture]
+- id: cosmos-basic-024
+  topic: migration
+  difficulty: advanced
+  question: What are the major steps in a safe migration away from Cosmos DB?
+  answer: |
+    Inventory APIs, partition keys, item shapes, TTL, indexes, consistency, stored procedures, change-feed consumers, and query patterns. Design the target schema around its own access patterns and map semantic differences such as nulls, numeric precision, ordering, and transaction boundaries. Establish an authoritative source and a consistent snapshot or change-capture boundary; backfill in restartable, idempotent batches while capturing concurrent writes. Replay changes, reconcile business-level values and deletes, then shadow-read and shift traffic gradually with a rollback plan. Cosmos change feed can assist only when its selected mode and retention fit the migration. Validate backups, consumers, and scheduled jobs before decommissioning. Counts alone do not prove that the target reproduces business meaning.
+
+    Use business-level reconciliation and a rollback gate; matching item counts cannot detect semantic differences or missing concurrent writes.
+  tags: [migration, cutover, reconciliation]

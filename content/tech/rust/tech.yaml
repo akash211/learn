@@ -1,0 +1,122 @@
+slug: rust
+title: Rust
+category: programming
+summary: A compiled systems language that uses ownership and types to provide memory safety without a garbage collector, with explicit trade-offs in build time and development complexity.
+level: advanced
+relations:
+  - to: linux
+    type: complements
+    note: Rust is widely used for Linux system components and tools, while Linux provides the kernel, process, and deployment environment Rust software targets.
+intro:
+  what: |
+    Rust is a statically typed, ahead-of-time compiled language designed for systems programming.
+    Its central design move is to make ownership, borrowing, and mutation rules visible to the
+    compiler. Safe Rust prevents data races and use-after-free errors without requiring a tracing
+    garbage collector, while allowing predictable control over allocation and representation.
+
+    The language combines algebraic data types, pattern matching, traits, generics, and explicit
+    error values with low-level capabilities such as C interoperability and control of memory
+    layout. Cargo—the standard build, test, dependency, and workspace tool—is part of the practical
+    language experience. Rust is not simply C++ with a borrow checker: its safety model, package
+    ecosystem, and emphasis on explicit interfaces shape how systems are designed.
+  why: |
+    Teams adopt Rust when reliability, resource use, and deployment predictability matter together.
+    The compiler catches many lifetime, aliasing, and concurrency mistakes before a program ships;
+    the resulting native binary can run with low overhead and without a language runtime or GC
+    pauses. This is valuable in infrastructure services, command-line tools, embedded software,
+    performance-sensitive libraries, and components exposed to untrusted input.
+
+    Its type system also makes invalid states harder to represent and errors explicit at API
+    boundaries. Teams that invest in Rust's learning curve can often reduce memory-safety defects
+    and make refactors safer. That benefit is not free: compilation, dependency builds, and the
+    need to model ownership can slow early delivery, especially when the problem does not require
+    systems-level control. Rust is a poor fit for one-off scripts, notebooks, rapidly changing CRUD
+    applications, or teams that cannot support the learning and build-time costs when managed or
+    interpreted tools already meet reliability and performance needs. It can also be a risky rewrite
+    when a mature C ABI or vendor library dominates the design and the integration boundary is the
+    main source of complexity.
+  problems:
+    - Prevent use-after-free, dangling references, and unsynchronised data races in safe code.
+    - Deliver native performance with explicit control over memory and resource lifetimes.
+    - Build robust low-level components that can be embedded in services or called through FFI.
+    - Make failure and absence explicit through Result and Option instead of unchecked conventions.
+    - Produce portable command-line tools and infrastructure software with a mature build workflow.
+  where_used:
+    - Operating-system components, networking stacks, storage engines, and developer tools.
+    - Cloud infrastructure, proxies, observability agents, and high-throughput services.
+    - Embedded and WebAssembly software where footprint or predictable behavior matters.
+    - Native libraries and extensions that need a safe interface to C or higher-level languages.
+  ecosystem: |
+    Cargo manages crates, lockfiles, tests, features, and workspaces; crates.io is the public
+    package registry. Tokio and related crates provide async I/O, while serde handles common
+    serialization formats. Rust complements Linux system development and can replace C/C++ in
+    selected components, but interoperates with both through C ABIs. It can also sit underneath
+    Python or JavaScript applications as a native library. Ecosystem choice matters: async runtimes,
+    TLS providers, and serialization formats are explicit dependencies rather than built-in global
+    services.
+  alternatives:
+    - name: C or C++
+      note: Better when an established codebase, ABI, hardware toolchain, or ecosystem requires it; safety then depends more heavily on discipline and tooling.
+    - name: Go
+      note: Often simpler for network services and teams that prioritize fast builds and straightforward concurrency over fine-grained control.
+    - name: Java or C#
+      note: Better when managed runtimes, mature enterprise frameworks, and GC ergonomics outweigh low-level control.
+    - name: Python
+      note: Better for scripting, data analysis, and rapid iteration when native-level resource guarantees are not central.
+  related: [linux, python]
+chapters:
+  - id: ownership-borrowing-lifetimes
+    title: Ownership, Borrowing, and Lifetimes
+    file: chapters/01-ownership-borrowing-lifetimes.md
+    minutes: 13
+    level: advanced
+  - id: types-and-patterns
+    title: Structs, Enums, Pattern Matching, and Option/Result
+    file: chapters/02-types-enums-patterns.md
+    minutes: 13
+    level: advanced
+  - id: traits-generics
+    title: Traits, Generics, and Trait Objects
+    file: chapters/03-traits-generics.md
+    minutes: 12
+    level: advanced
+  - id: error-handling
+    title: Error Handling with Result and the ? Operator
+    file: chapters/04-error-handling.md
+    minutes: 11
+    level: advanced
+  - id: collections-iterators
+    title: Collections, Iterators, and Zero-Cost Abstractions
+    file: chapters/05-collections-iterators.md
+    minutes: 13
+    level: advanced
+  - id: concurrency
+    title: "Concurrency: Threads, Send/Sync, Channels, Mutex/Arc"
+    file: chapters/06-concurrency.md
+    minutes: 14
+    level: advanced
+  - id: async-tokio
+    title: Async Rust and the Tokio Mental Model
+    file: chapters/07-async-tokio.md
+    minutes: 14
+    level: advanced
+  - id: modules-cargo
+    title: Modules, Crates, Cargo, and Workspaces
+    file: chapters/08-modules-cargo.md
+    minutes: 12
+    level: advanced
+  - id: testing-tooling
+    title: Testing, Benchmarking, and Tooling
+    file: chapters/09-testing-tooling.md
+    minutes: 12
+    level: advanced
+  - id: production-interop
+    title: Interop and Production Concerns
+    file: chapters/10-interop-production.md
+    minutes: 14
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

@@ -1,0 +1,132 @@
+- id: cosmos-recent-001
+  topic: API selection
+  difficulty: intermediate
+  question: How would you evaluate an existing MongoDB application's move to a Cosmos DB-compatible API?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Begin with a compatibility inventory: server and driver versions, operators, aggregation stages, index definitions, transactions, change streams, administration commands, and monitoring tools. Run the application's real query and write tests against the target API rather than relying on a connection-string smoke test. Compare consistency mapping, partition-key requirements, request charge, throttling behavior, and unsupported features. Model the target partition key around routing and hot-key risk, then measure representative latency and RU consumption. Define a rollback path and data reconciliation plan before moving writes. Also compare current MongoDB-compatible offerings; Azure service names and compatibility surfaces change, and Microsoft documentation may recommend a different product for some MongoDB-native requirements.
+
+    Use business-level reconciliation and a rollback gate; matching item counts cannot detect semantic differences or missing concurrent writes.
+  tags: [api, mongodb, compatibility]
+- id: cosmos-recent-002
+  topic: PostgreSQL lifecycle
+  difficulty: intermediate
+  question: What should a team do if evaluating Azure Cosmos DB for PostgreSQL for a new project?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Treat Azure Cosmos DB for PostgreSQL as a distinct distributed PostgreSQL service, not as the native Cosmos NoSQL API, and check Microsoft's current retirement and support guidance before making a decision. The service is on a retirement path and is not recommended for new projects. For PostgreSQL workloads, evaluate Azure Database for PostgreSQL Elastic Clusters and its current migration guidance; for document-oriented distributed workloads, assess the native NoSQL API separately. Compare the required extensions, sharding and SQL behavior, availability, and migration costs. Do not infer availability or lifecycle status from older API comparison pages that still list PostgreSQL alongside the current APIs.
+
+    Use business-level reconciliation and a rollback gate; matching item counts cannot detect semantic differences or missing concurrent writes.
+  tags: [postgresql, lifecycle, azure]
+- id: cosmos-recent-003
+  topic: partitioning
+  difficulty: advanced
+  question: A container shows low average utilization but one partition range repeatedly reaches 100%. How would you investigate?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Correlate normalized RU by partition range with 429 rate, request charge, operation type, and SDK diagnostics over the same time window. Determine whether a small set of logical key values drives the range by using supported diagnostic logs or application-level telemetry, while remembering that one range can host many logical partitions. Check for tenant skew, a hot item, bursty writes, large item updates, or a cross-partition query pattern. If the range is temporarily saturated, bounded SDK retry and capacity tuning may be adequate; if a stable key is hot, increasing overall RU/s can be inefficient. Consider a synthetic key, tenant isolation, or a target-container migration, and test the new query fan-out and transaction trade-offs.
+
+    Monitor both storage and RU distribution by key over time; a balanced initial load can become skewed as tenant sizes and behavior diverge.
+  tags: [hot-partition, normalized-ru, diagnosis]
+- id: cosmos-recent-004
+  topic: RU capacity
+  difficulty: intermediate
+  question: How would you build a defensible RU/s estimate for a new workload?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Build a workload mix from measured operations rather than a single generic read charge. Benchmark point reads, writes, queries, deletes, and background work with production-like item sizes, index policy, partition-key distribution, and consistency. Multiply operation rates by observed charges, then model peak and p95/p99 behavior, failover headroom, and retry load. Use a skewed dataset to expose hot partitions, and include storage growth, regions, backup settings, and throughput scope in a separate cost model. Compare manual and autoscale capacity under actual burst patterns using current Azure pricing tools. Re-run the estimate after query, item-shape, or index changes; throughput is a capacity budget, not a fixed property of the application.
+
+    Use business-level reconciliation and a rollback gate; matching item counts cannot detect semantic differences or missing concurrent writes.
+  tags: [ru, capacity-planning, cost]
+- id: cosmos-recent-005
+  topic: 429 handling
+  difficulty: intermediate
+  question: When are 429 responses a healthy signal, and when do they indicate a problem?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A small share of 429s can indicate that provisioned throughput is being used efficiently when the SDK retries successfully and end-to-end latency remains within the service objective. The status metric may show throttles that the SDK resolved internally. It becomes a problem when retries exhaust, tail latency breaches objectives, or throttling is concentrated on a hot range despite low overall utilization. Examine 429 rate alongside retry delays, normalized RU by partition range, request diagnostics, and query patterns. Do not use a universal percentage as a guarantee: distribution, burst shape, and user impact matter. For broad saturation, consider capacity or query optimization; for one hot key, address key skew or workload design.
+
+    Use business-level reconciliation and a rollback gate; matching item counts cannot detect semantic differences or missing concurrent writes.
+  tags: [429, latency, retries]
+- id: cosmos-recent-006
+  topic: consistency
+  difficulty: advanced
+  question: A service writes in one region and reads immediately in another. What assumptions must be tested?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Cross-region visibility depends on account topology, consistency level, SDK session state, and replication lag. A successful write response in one region does not imply an independent client in another region immediately sees that version, especially with asynchronous replication or multi-region writes. Determine whether read-your-writes needs to cross client or region boundaries, whether session tokens are propagated, and whether the app can tolerate bounded staleness. Test regional failover and client handoff with the exact SDK. For workflows requiring strict latest-value semantics, evaluate strong consistency and its latency, availability, and topology constraints. Do not rely on a timing observation from a healthy test environment as a consistency guarantee.
+
+    State the allowed stale-read behavior in user-facing terms and verify it with independent SDK clients and the actual region topology.
+  tags: [consistency, regions, session-token]
+- id: cosmos-recent-007
+  topic: conflict resolution
+  difficulty: advanced
+  question: Why may default Last Write Wins be insufficient for concurrent multi-region updates?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    LWW selects one conflicting item version based on timestamps or a configured path; it does not merge independent field updates or understand business priority. Two valid edits to different fields can therefore result in one being lost if the whole item versions conflict. Identify which entities can be written concurrently and define domain behavior: assign a home region, separate independently owned state into different items, append immutable changes, or use a supported custom resolution mechanism where available. Test deletes and procedure failures, and verify API constraints: custom resolution is not a generic feature for every compatibility API. Record conflicts and provide a reconciliation path for cases that cannot be automatically resolved.
+
+    Use business-level reconciliation and a rollback gate; matching item counts cannot detect semantic differences or missing concurrent writes.
+  tags: [lww, conflicts, multi-region]
+- id: cosmos-recent-008
+  topic: change feed
+  difficulty: advanced
+  question: Can a latest-version change-feed consumer be used as an audit log of every update and delete?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Not safely. Latest-version mode is oriented toward current item state; intermediate updates may be superseded before consumption, and deletes are not generally represented as ordinary latest-version item records. If a consumer needs every change, evaluate all-versions-and-deletes mode, its account backup prerequisites, supported retention window, and API availability. If the business requires durable, long-term audit history, write explicit immutable events to an authoritative log or event store and define its retention and recovery. In either mode, consumers need checkpoints, idempotency, and a backfill plan because delivery may be replayed and history has operational limits. Confirm exact behavior against current service documentation before depending on it.
+
+    Practice duplicate delivery and history-gap recovery in a test environment; a healthy process indicator alone does not prove projection freshness.
+  tags: [change-feed, audit, retention]
+- id: cosmos-recent-009
+  topic: indexing and query
+  difficulty: intermediate
+  question: A query's RU charge increased after a schema change. What should be compared before adding throughput?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Compare the old and new item shapes, indexed paths, query predicates, projections, result sizes, partition-key filters, and data distribution. Use SDK query metrics and request diagnostics to see whether more items or index entries are examined, whether a cross-partition path was introduced, and whether a policy transformation is still underway. Check for increased item size, less selective values, or a broader query generated by the application. Benchmark with realistic data and compare both RU charge and latency. Add throughput if efficient demand genuinely exceeds capacity, but first fix unnecessary scans, large responses, or hot-key skew. Index changes trade read work against write and storage overhead.
+
+    Keep a query inventory linked to index paths, then rerun correctness and charge tests after every policy change.
+  tags: [indexing, query, schema-evolution]
+- id: cosmos-recent-010
+  topic: server-side programming
+  difficulty: advanced
+  question: When would transactional batch be preferable to a stored procedure?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Prefer transactional batch when the required work is a bounded set of supported point operations under one logical partition key and can be expressed clearly in the application's language. It keeps code in the normal SDK and CI/CD path and exposes per-operation responses. A stored procedure may fit a compact server-side read-modify-write flow that benefits from fewer round trips, but it uses JavaScript, has bounded execution time, and adds a separately deployed artifact. Neither option spans partition keys or external services. Benchmark the real workflow and compare maintainability, response semantics, and rollback. If an invariant routinely crosses partition boundaries, reconsider the data model or use a saga rather than hiding the distributed workflow in server-side code.
+
+    Version and deploy server-side code through CI/CD, and test its execution bounds and behavior when a caller retries.
+  tags: [transactional-batch, stored-procedure, design]
+- id: cosmos-recent-011
+  topic: migration
+  difficulty: advanced
+  question: How can a migration preserve writes while backfilling Cosmos DB data to a new store?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Establish a consistent snapshot or change-capture boundary, then backfill in restartable, idempotent batches while continuing to capture source writes. Cosmos change feed may support this for a particular mode and retention window, but verify delete semantics, per-partition ordering, and the handoff protocol. Replay changes to the target, make duplicate application safe, compare business-level aggregates and sampled records, then shadow-read before gradually shifting traffic. Define which system owns writes during each phase; dual writes need reconciliation because one side can fail independently. Keep a rollback trigger and avoid decommissioning the source until consumers and scheduled jobs are verified. A row count alone cannot detect semantic mismatches in nulls, numeric values, or deletes.
+
+    Use business-level reconciliation and a rollback gate; matching item counts cannot detect semantic differences or missing concurrent writes.
+  tags: [migration, change-capture, cutover]
+- id: cosmos-recent-012
+  topic: architecture trade-offs
+  difficulty: intermediate
+  question: What evidence would convince you that Cosmos DB is the wrong choice for an application?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Evidence includes frequent joins across independently changing entities, invariants requiring atomic transactions across many partitions, extensive ad hoc SQL reporting, and a traffic profile that does not justify the operational or capacity model. Also investigate whether the needed compatibility API lacks a required feature or has a lifecycle concern. Quantify fan-out queries, throughput utilization, hot-key mitigation work, storage/index costs, and engineering effort. Compare with a relational system at equivalent availability, latency, and recovery objectives; do not compare a single-region SQL bill with a global Cosmos deployment and call the result equivalent. Cosmos DB may still serve a derived projection or latency-sensitive access pattern alongside a relational source of truth.
+
+    Use business-level reconciliation and a rollback gate; matching item counts cannot detect semantic differences or missing concurrent writes.
+  tags: [trade-offs, architecture, relational]

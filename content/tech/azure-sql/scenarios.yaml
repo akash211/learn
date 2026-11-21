@@ -1,0 +1,78 @@
+- id: azsql-scn-001
+  title: Tenant databases saturate an elastic pool at month end
+  technologies: [azure-sql, sql-server]
+  difficulty: advanced
+  prompt: |
+    A SaaS service uses one Azure SQL Database elastic pool for 80 tenant databases. Most of the month, CPU and data IO are modest. At month end, several tenants run invoicing jobs at the same time; requests time out, and the pool metrics show sustained resource pressure. One customer asks for a contractual latency guarantee. The team proposes doubling pool capacity and increasing every database's maximum.
+  approach: |
+    First establish user impact and affected time window from application telemetry and Azure Monitor. Correlate pool and per-database CPU, data IO and log IO with Query Store and job schedules. Determine whether a query regression or aligned batch workload caused the peak, and calculate aggregate concurrency rather than average utilization. Review per-database bounds; a high maximum is not a reservation. Test query or scheduling changes and a controlled pool resize against a representative month-end workload. If the customer's objective requires isolation, move that database to a dedicated pool or standalone resource and define capacity and alert ownership. Validate after change using tail latency, timeouts, resource headroom and the next peak cycle.
+  red_flags:
+    - Doubling pool size based only on average use or a single percentage.
+    - Assuming per-database maximum settings reserve capacity inside the pool.
+    - Offering strict tenant isolation while keeping synchronized peaks in shared capacity.
+    - Ignoring Query Store and batch schedule evidence.
+- id: azsql-scn-002
+  title: Managed identity connection errors after an application rollout
+  technologies: [azure-sql]
+  difficulty: intermediate
+  prompt: |
+    An application moved from a SQL login to a managed identity. It succeeds from a developer's machine but some production instances fail intermittently with authentication errors. Instances are deployed across two subnets; one uses private endpoint connectivity. The incident team considers restoring a shared SQL password as a quick fix.
+  approach: |
+    Separate identity, token, network and SQL authorization paths. Verify which identity is attached to each production instance, the driver's authentication mode and token refresh behavior. Confirm the Entra principal exists as a database user with the intended grants; Azure RBAC alone is insufficient. Compare DNS resolution, private DNS links, routes and public access settings across the two subnets. Check driver versions, pool behavior, connection strings and token expiry without logging tokens. Reproduce from each actual runtime and correlate error times with deployment changes. Fix the inconsistent identity or network configuration, then test rotation and failover. If a SQL credential is temporarily needed, limit scope, use a secret store and time-bound its removal.
+  red_flags:
+    - Assuming local developer authentication proves production managed identity is configured.
+    - Granting broad database ownership to make authentication errors disappear.
+    - Logging bearer tokens or storing a shared password in deployment files.
+    - Changing firewall rules without identifying the failing subnet and path.
+- id: azsql-scn-003
+  title: Recover from an accidental production delete
+  technologies: [azure-sql]
+  difficulty: advanced
+  prompt: |
+    A deployment ran an incorrect `DELETE` against an orders table. The database is healthy and online, but new orders continue arriving. PITR is enabled. The team wants to restore the production database to ten minutes before the deployment and overwrite the damaged database immediately.
+  approach: |
+    Preserve evidence and stop or constrain the faulty writer so damage does not continue. Identify the incident time, transaction scope and expected lost-write window. PITR creates a separate restored database, so restore to a new resource at the selected point and validate schema, affected rows and business aggregates. Decide how to reconcile valid orders written since that point using transaction logs, an application event stream or controlled replay. Verify restored identity, network, firewall, diagnostics and capacity. Run application smoke tests and compare data before a coordinated cutover. Retain the original resource until acceptance and keep a rollback path. Afterward, correct the deployment guardrail, permissions or transaction strategy and document measured recovery time.
+  red_flags:
+    - Expecting PITR to rewind the active database in place.
+    - Ignoring legitimate writes after the chosen recovery point.
+    - Cutting over before checking data correctness and security settings.
+    - Treating a replica as the sole protection against user error.
+- id: azsql-scn-004
+  title: Regional outage exposes an untested failover design
+  technologies: [azure-sql]
+  difficulty: advanced
+  prompt: |
+    A primary region is unavailable. The database has an auto-failover group to a secondary region, but users still cannot connect after the service reports a role change. The application uses a long-lived connection pool and a private endpoint in the primary virtual network. Recovery staff are unsure whether the secondary app environment has the same identity and DNS configuration.
+  approach: |
+    Confirm database role and failover state, then diagnose the application path separately. Ensure clients use the failover-group listener rather than a primary endpoint, discard stale pooled sessions, and apply bounded retries. Verify secondary-region private endpoint, private DNS, routing, firewall policy and name resolution from the deployed application. Check managed identity and database grants, secrets, app capacity, monitoring and downstream dependencies. Determine the data-loss window because geo-replication is asynchronous, then reconcile business operations with application owners. Do not start duplicate scheduled jobs or consumers until primary/secondary roles are clear. Validate read/write behavior and user-facing health; record RTO and required corrective actions. Plan failback only when data and roles are understood.
+  red_flags:
+    - Assuming a database role change automatically updates stale client connections.
+    - Ignoring private DNS, identity or application compute in the secondary region.
+    - Claiming zero data loss with asynchronous replication during forced failover.
+    - Running background consumers in both regions without role-aware coordination.
+- id: azsql-scn-005
+  title: SQL Server migration blocked by instance dependencies
+  technologies: [azure-sql, sql-server]
+  difficulty: intermediate
+  prompt: |
+    A SQL Server database passes a first compatibility scan with a few warnings, but production code uses three-part cross-database names, a nightly SQL Agent job and server-level logins. The project assumes Azure SQL Database can be selected because the table schema and stored procedures compile in a test. The cutover window is limited to one hour.
+  approach: |
+    Inventory each dependency and establish actual usage from source, traces and operational owners. Use Data Migration Assistant findings as evidence, not a complete proof, and check current Azure migration guidance. Decide whether to redesign cross-database access and scheduling for a database-scoped service, select Managed Instance for closer instance compatibility, or use SQL Server on an Azure VM if host-level control is necessary. Map logins to Entra or contained database users and explicitly recreate grants. Choose a supported data movement path that fits database size and downtime, then rehearse sync, validation, cutover and rollback. Test compatibility level and workload plans separately. Do not commit to the one-hour cutover until the end-to-end migration rehearsal meets it with margin.
+  red_flags:
+    - Treating compilation of tables and stored procedures as full compatibility validation.
+    - Assuming the static assessment covers jobs, dynamic SQL and external dependencies.
+    - Assuming an Azure SQL Database can transparently preserve server-level logins.
+    - Promising a cutover duration without a representative migration rehearsal.
+- id: azsql-scn-006
+  title: Reduce database costs without sacrificing the response objective
+  technologies: [azure-sql]
+  difficulty: intermediate
+  prompt: |
+    A finance review identifies a high Azure SQL bill. A single database shows low average CPU but brief evening peaks and a report with inconsistent latency. The owner proposes moving it to serverless, reducing the maximum compute bound and disabling geo-replication and long-term retention in one change. The application has a strict response objective and monthly audit retention requirements.
+  approach: |
+    Break down cost by compute model, tier, storage, backups, redundancy and replicas, and identify the database owner. Correlate a representative business cycle of CPU, data IO, log IO, query plans, concurrency and application percentiles. Diagnose the report and determine whether its plan or schedule can be improved. Evaluate serverless only if pause/resume and peak scale behavior fit the response objective; test maximum bounds and cold start using the actual client. Review geo-replication against regional RPO/RTO and LTR against audit retention before proposing changes. Change one variable at a time and test a lower configuration at peak. Use budgets, tags and alerts to govern spend without treating an alert as a hard cap.
+  red_flags:
+    - Cutting backup retention or geo-resilience without mapping business and compliance obligations.
+    - Choosing serverless from low average CPU alone.
+    - Making multiple changes at once, making regressions impossible to attribute.
+    - Reporting a lower bill as success without checking latency, errors and recovery objectives.

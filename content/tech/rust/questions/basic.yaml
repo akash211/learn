@@ -1,0 +1,422 @@
+- id: rust-basic-001
+  topic: ownership
+  difficulty: beginner
+  question: What does it mean for a Rust value to have one owner?
+  answer: "An owned value has one binding responsible for its lifetime. When that owner leaves scope,\
+    \ Rust drops the value and releases its resources. Assigning a non-`Copy` value, such as a `String`\
+    \ or `Vec<T>`, moves ownership rather than silently duplicating its heap allocation; the old binding\
+    \ can no longer be used. A function parameter passed by value similarly takes ownership unless it\
+    \ returns the value. Types such as integers implement `Copy` because duplicating their fixed-size\
+    \ representation is inexpensive. Ownership makes resource cleanup deterministic without a tracing\
+    \ garbage collector and helps prevent use-after-free in safe code.\n This also makes cleanup deterministic\
+    \ across early returns and error paths. For example, pass `&str` when a function only reads text,\
+    \ and take `String` only when it must own or store the allocation. Returning an owned value transfers\
+    \ that responsibility explicitly."
+  tags:
+  - ownership
+  - move-semantics
+  - memory-safety
+- id: rust-basic-002
+  topic: borrowing
+  difficulty: beginner
+  question: What is the difference between `&T` and `&mut T`?
+  answer: '`&T` is an immutable shared borrow: code can read the value but cannot mutate it through that
+    reference. `&mut T` is an exclusive mutable borrow: code may mutate the value, and no other active
+    borrow may access it concurrently. Rust allows multiple shared references or one mutable reference
+    at a time. This rule prevents aliasing a location while it changes and keeps references from outliving
+    their owner. Borrowing avoids transferring ownership for temporary use. For a function that only inspects
+    text, `fn count(s: &str) -> usize` is usually more flexible than taking a `String`, because callers
+    can borrow from different string-like owners. For example, `fn inspect(value: &str) -> usize { value.len()
+    }` borrows text without consuming the caller’s `String`. Keep a mutable borrow only for the operations
+    that actually need mutation.'
+  tags:
+  - borrowing
+  - references
+  - mutability
+- id: rust-basic-003
+  topic: lifetimes
+  difficulty: intermediate
+  question: What does a lifetime annotation express, and what does it not do?
+  answer: 'A lifetime annotation names a validity relationship between references. In `fn choose<''a>(a:
+    &''a str, b: &''a str) -> &''a str`, the returned reference is tied to input references and cannot
+    outlive the shared lifetime `''a`. The compiler still verifies that the underlying values live long
+    enough. An annotation does not keep memory alive, extend a scope, or make a dangling reference valid.
+    Most local lifetimes are inferred. Explicit annotations are useful when a function returns a borrowed
+    value or a struct stores references. If the relationship becomes awkward, consider returning an owned
+    value or storing data in an owner whose lifetime is explicit. The compiler infers local relationships
+    but cannot choose between multiple possible input sources for a returned reference. State that relationship
+    explicitly or return owned data when no borrowed contract fits.'
+  tags:
+  - lifetimes
+  - borrowing
+  - references
+- id: rust-basic-004
+  topic: types and enums
+  difficulty: beginner
+  question: When should a state be represented as an enum rather than several booleans?
+  answer: "Use an enum when a value must be exactly one of a known set of alternatives, especially when\
+    \ each alternative carries different data. For example, `enum Status { Pending, Failed(String), Complete\
+    \ }` cannot represent the contradictory state “pending and complete” that two independent booleans\
+    \ permit. `match` then requires code to handle every variant or consciously cover the remainder. This\
+    \ makes adding a state visible at compile time. Booleans remain suitable for independent yes/no facts,\
+    \ but mutually exclusive modes should usually be an enum. Keep fields private or validate constructors\
+    \ if variants need invariants beyond their type shape.\n It also makes the allowed state space visible\
+    \ in the type definition. Model transitions with methods when changes require validation; the enum\
+    \ defines the allowed shapes, while private fields can control who constructs or changes them."
+  tags:
+  - enums
+  - algebraic-data-types
+  - modeling
+- id: rust-basic-005
+  topic: option
+  difficulty: beginner
+  question: What does `Option<T>` represent, and how should it be handled?
+  answer: "`Option<T>` represents a value that may be absent: it is either `Some(T)` or `None`. It is\
+    \ used for normal optionality, such as a lookup that may find no entry, instead of a null pointer\
+    \ or sentinel value. A `match` handles both cases explicitly; methods like `map`, `and_then`, and\
+    \ `unwrap_or` transform or provide defaults. Use `unwrap` only when absence violates a clearly established\
+    \ invariant, not on routine user input or network data. If absence needs an explanation, such as why\
+    \ parsing failed, use `Result<T, E>` instead. `Option` and `Result` can compose, and `ok_or` converts\
+    \ absence into a specified error.\n This keeps absence visible in function signatures and compiler-checked\
+    \ branches.\n\n    ```rust\n    let maybe_len = raw.map(str::len); // Option<usize>\n    ``` For example,\
+    \ `Some(\"Ada\").map(str::len)` produces an `Option<usize>` without a manual branch. Use `match` when\
+    \ each case needs distinct behavior."
+  tags:
+  - option
+  - error-handling
+  - types
+- id: rust-basic-006
+  topic: result
+  difficulty: beginner
+  question: How do `Result<T, E>` and `Option<T>` differ?
+  answer: "`Option<T>` says a value may be absent, without explaining why. `Result<T, E>` says an operation\
+    \ may succeed with `T` or fail with an error `E`. Use `Option` when absence is an ordinary state,\
+    \ for example an optional nickname. Use `Result` when callers may need to understand or respond to\
+    \ failure, such as a file permission error or malformed input. Both are enums and can be matched or\
+    \ transformed. `Result` also supports `?` to propagate compatible errors. Avoid flattening informative\
+    \ failures into `None`, because that discards diagnostic information; conversely, do not invent an\
+    \ error just to represent normal absence.\n Choosing deliberately lets callers distinguish a normal\
+    \ empty outcome from a failed operation. A useful distinction is `Option<User>` for an ordinary lookup\
+    \ miss versus `Result<User, DatabaseError>` when the lookup operation itself can fail. Callers can\
+    \ respond differently."
+  tags:
+  - result
+  - option
+  - errors
+- id: rust-basic-007
+  topic: pattern matching
+  difficulty: beginner
+  question: Why is an exhaustive `match` useful?
+  answer: '`match` requires each possible variant to be handled, unless a wildcard intentionally groups
+    remaining cases. This prevents a branch from being forgotten and makes changes safer: adding an enum
+    variant produces compiler errors at relevant matches. Patterns can destructure values and bind payloads,
+    so the branch sees only data appropriate to that state. `if let` is shorter when only one case matters,
+    while `let ... else` supports early return on an unexpected shape. Avoid a wildcard for a closed domain
+    if a new variant should prompt a decision; it may silently treat new states like old ones. Guard expressions
+    are useful but do not replace exhaustive coverage. Use `if let` for one relevant case when others
+    need no action; prefer a full match when every alternative requires a decision. Exhaustiveness supports
+    future maintenance.'
+  tags:
+  - match
+  - enums
+  - exhaustiveness
+- id: rust-basic-008
+  topic: traits
+  difficulty: intermediate
+  question: What does a trait provide in Rust?
+  answer: 'A trait declares behavior that types can implement, such as formatting, iteration, or an application-specific
+    operation. A generic function can require a trait bound and use those methods without knowing the
+    concrete type. Implementations are explicit (`impl Display for Point`), so the compiler checks that
+    required methods exist. Traits can also provide default method bodies and associated types. They are
+    not class inheritance: a trait does not automatically carry object state or establish a parent-child
+    hierarchy. Standard traits integrate types with common APIs, while domain traits can represent narrow
+    capabilities. Public traits are API commitments because downstream crates may implement them. A trait
+    should express a stable capability rather than bundle unrelated conveniences. Smaller contracts are
+    easier to implement, test, and evolve without imposing unused methods.'
+  tags:
+  - traits
+  - abstraction
+  - generics
+- id: rust-basic-009
+  topic: generics
+  difficulty: intermediate
+  question: What is static dispatch in a generic function?
+  answer: "With a generic function such as `fn show<T: Display>(x: T)`, the compiler checks that each\
+    \ supplied type implements `Display` and typically generates a specialized version for each concrete\
+    \ type. The call target is known at compile time: this is static dispatch. It enables inlining and\
+    \ optimization without a virtual call, but many instantiations may increase compile time and binary\
+    \ size. Bounds should name the behaviors the function needs. Generic code does not mean untyped code;\
+    \ the compiler verifies all uses against the declared constraints. Use generics when callers know\
+    \ their concrete types and runtime heterogeneity is not required.\n The trade-off is generated code\
+    \ per concrete type rather than one erased implementation. Monomorphization is not a promise of faster\
+    \ code: many generic instantiations can increase compile time and instruction-cache pressure. Profile\
+    \ before trading those costs for potential optimization."
+  tags:
+  - generics
+  - static-dispatch
+  - monomorphization
+- id: rust-basic-010
+  topic: trait objects
+  difficulty: intermediate
+  question: When would you use `dyn Trait` instead of a generic type parameter?
+  answer: '`dyn Trait` provides dynamic dispatch through a trait object, often written `&dyn Trait` or
+    `Box<dyn Trait>`. It is useful when one collection must contain different concrete implementors or
+    when an API needs runtime-selected behavior. A generic parameter is preferable when the concrete type
+    is known at compile time and static dispatch is useful. Trait objects typically require an indirection
+    and vtable call; boxed values may also allocate. Not every trait is dyn-compatible, because some methods
+    cannot be represented by one fixed vtable. If the possible variants are a small closed set, an enum
+    may be simpler and allow exhaustive matching. For a small closed set of alternatives, an enum may
+    offer simpler storage and exhaustive handling. Use `dyn Trait` when runtime selection or an open set
+    is useful.'
+  tags:
+  - trait-objects
+  - dynamic-dispatch
+  - abstraction
+- id: rust-basic-011
+  topic: error handling
+  difficulty: beginner
+  question: What does the `?` operator do on a `Result`?
+  answer: "In a function returning `Result`, `?` extracts the success value from `Ok(value)` or returns\
+    \ early with the error from `Err(error)`. The error must match the function's error type or convert\
+    \ into it, commonly through `From`. It does not panic, retry, log, or automatically add context. For\
+    \ example, `let text = std::fs::read_to_string(path)?;` propagates an I/O error from a function whose\
+    \ return type accepts it. Use `?` when the current layer cannot recover and should pass failure to\
+    \ its caller. Handle the error explicitly when this layer owns a meaningful fallback or translation\
+    \ policy.\n It therefore keeps the failure path explicit in the function signature.\n\n    ```rust\n\
+    \    fn parse_port(raw: &str) -> Result<u16, std::num::ParseIntError> {\n        Ok(raw.parse()?)\n\
+    \    }\n    ``` The operator returns from the current function, not merely the nearest block. Add\
+    \ context where a layer knows why the operation matters, while preserving the underlying source error."
+  tags:
+  - question-mark
+  - result
+  - propagation
+- id: rust-basic-012
+  topic: error handling
+  difficulty: intermediate
+  question: How should a library choose an error type?
+  answer: "A reusable library should expose errors that let callers distinguish meaningful failure categories\
+    \ without depending on unstable implementation details. An enum can represent cases such as invalid\
+    \ input or a wrapped I/O failure; implementing `Display` and `std::error::Error` integrates it with\
+    \ standard tooling. Preserve source errors so diagnostics retain causes. Avoid returning `String`\
+    \ for every failure, because callers cannot reliably match cases and the chain is lost. Derive helpers\
+    \ such as `thiserror` can reduce boilerplate but do not make design decisions. Applications may prefer\
+    \ a broader erased error at the top-level boundary, where reporting matters more than exposing matchable\
+    \ variants.\n The goal is to preserve useful detail while keeping the public contract stable. Treat\
+    \ public variant names and matching behavior as part of the library contract. Avoid exposing internal\
+    \ paths or incidental dependency errors unless callers need to rely on them."
+  tags:
+  - error-types
+  - libraries
+  - api-design
+- id: rust-basic-013
+  topic: collections
+  difficulty: beginner
+  question: When is `Vec<T>` an appropriate collection?
+  answer: "`Vec<T>` is the default growable sequence: its elements are contiguous, indexing is constant\
+    \ time, iteration is cache-friendly, and append is amortized constant time. Inserting or removing\
+    \ near the beginning shifts later elements. Use it when order matters and the common operations are\
+    \ iteration, indexing, or appending. If efficient operations at both ends matter, consider `VecDeque`;\
+    \ if lookup by key dominates, use a map. `Vec` owns its elements, so borrowing with `iter()` preserves\
+    \ the vector while `into_iter()` consumes it. Reserve capacity when a reliable size estimate is available,\
+    \ but do not allocate an unnecessarily huge buffer for every request.\n For small collections, a linear\
+    \ scan can still be the simplest and fastest choice. A vector can also retain insertion order and\
+    \ be sorted later. Prefer the simpler contiguous representation unless profiling or required operations\
+    \ show a map or queue is a better fit."
+  tags:
+  - vec
+  - collections
+  - data-structures
+- id: rust-basic-014
+  topic: iterators
+  difficulty: beginner
+  question: Why does an iterator chain sometimes do no work?
+  answer: "Iterator adapters such as `map`, `filter`, and `take` are lazy: they construct a pipeline describing\
+    \ transformations but do not consume items. A terminal operation—`collect`, `sum`, `fold`, `for_each`,\
+    \ or a `for` loop—drives it. For example, `let doubled: Vec<_> = values.iter().map(|x| x * 2).collect();`\
+    \ performs the mapping while collecting results. Calling `.map(...)` and then dropping the returned\
+    \ iterator does not execute the closure. Laziness allows adapters to compose and can avoid intermediate\
+    \ collections. It does not mean every chain is allocation-free: `collect` commonly allocates, and\
+    \ repeated terminal traversals repeat the work.\n This can avoid intermediate collections while still\
+    \ requiring a terminal consumer. Iterators are commonly stateful and single-pass. Build a collection\
+    \ when you need random access or multiple traversals; otherwise a pipeline can avoid storing intermediate\
+    \ results."
+  tags:
+  - iterators
+  - laziness
+  - collections
+- id: rust-basic-015
+  topic: collections
+  difficulty: intermediate
+  question: What is the difference between `iter`, `iter_mut`, and `into_iter`?
+  answer: "For a collection, `iter()` yields shared references to elements, allowing read-only access\
+    \ while the collection remains owned by its caller. `iter_mut()` yields mutable references, allowing\
+    \ in-place changes while retaining the collection. `into_iter()` consumes the collection and yields\
+    \ owned elements, transferring their ownership to the loop or pipeline. This distinction often avoids\
+    \ unnecessary clones: consume a vector if it is no longer needed, borrow if it must remain available,\
+    \ or borrow mutably when elements should be updated. Exact `IntoIterator` behavior depends on the\
+    \ receiver type, so `for x in &collection` and `for x in collection` intentionally have different\
+    \ ownership effects.\n The choice communicates whether a caller expects to keep using the original\
+    \ collection. For example, `for value in &items` borrows elements, while `for value in items` consumes\
+    \ the vector. Check binding types before adding clones to satisfy the borrow checker."
+  tags:
+  - iterators
+  - ownership
+  - borrowing
+- id: rust-basic-016
+  topic: concurrency
+  difficulty: intermediate
+  question: What do the `Send` and `Sync` traits mean?
+  answer: "`Send` means ownership of a value can be transferred safely to another thread. `Sync` means\
+    \ shared references to a value can be used safely from multiple threads; equivalently, `&T` is `Send`\
+    \ when `T: Sync`. The compiler auto-implements these marker traits when a type's fields satisfy the\
+    \ rules. `Rc<T>` is not thread-safe because its reference count is non-atomic; `Arc<T>` supports shared\
+    \ ownership across threads when its contents meet the bounds. These traits express safety, not speed\
+    \ or logical correctness. An unsafe manual implementation is a serious promise that the type maintains\
+    \ its invariants under cross-thread transfer or sharing.\n The compiler uses these bounds to reject\
+    \ unsafe thread sharing before execution. These auto traits follow the fields recursively. If a bound\
+    \ fails, inspect contained types and the thread boundary rather than adding an unsafe implementation\
+    \ just to silence a diagnostic."
+  tags:
+  - send
+  - sync
+  - threads
+- id: rust-basic-017
+  topic: concurrency
+  difficulty: intermediate
+  question: Why is `Arc<Mutex<T>>` commonly used for shared mutable state?
+  answer: '`Arc<T>` lets multiple threads share ownership using an atomic reference count; `Mutex<T>`
+    provides exclusive access to mutable data. Together they allow threads to clone a handle and coordinate
+    updates by locking. `Arc` alone does not make data mutable or synchronized. A mutex guard controls
+    access and unlocks when dropped. Keep its critical section short, avoid holding it across blocking
+    I/O, and use a consistent lock order to reduce deadlocks. A heavily contended mutex can serialize
+    work, so message passing or partitioned state may be better. Recover from poisoning only if the protected
+    data is known to remain valid after a panic. Poisoning signals a panic while a guard was held; it
+    does not prove corruption. Check invariants before recovering, or fail closed when the protected state
+    cannot be trusted.'
+  tags:
+  - arc
+  - mutex
+  - shared-state
+- id: rust-basic-018
+  topic: concurrency
+  difficulty: beginner
+  question: What is message passing, and when can it help?
+  answer: A channel lets one task send a message to another, usually transferring ownership of the message.
+    The receiver becomes responsible for processing it, so producers do not need direct mutable access
+    to the same state. This can simplify synchronization and clarify task boundaries. Rust's standard
+    `mpsc` channel supports multiple producers and one consumer, but it is unbounded; a slow consumer
+    can allow queued messages to consume growing memory. Use a bounded channel when backpressure is required,
+    handle receiver closure, and define what senders do when the queue is full. Message passing is not
+    automatically better than shared immutable data or a short mutex-protected update. The receiver’s
+    closure makes later sends fail, so producers should handle that result and stop or redirect work.
+    Queue capacity is part of the system’s resource policy.
+  tags:
+  - channels
+  - concurrency
+  - backpressure
+- id: rust-basic-019
+  topic: async
+  difficulty: intermediate
+  question: Does calling an `async fn` immediately execute its body?
+  answer: "No. Calling an `async fn` creates a future, a value describing suspended computation. An executor\
+    \ must poll that future for it to make progress. An `.await` polls the awaited future and yields control\
+    \ if it is pending; it does not create a new operating-system thread. Independent operations need\
+    \ to be joined or spawned to overlap. A future that performs long CPU work without yielding can monopolize\
+    \ a runtime worker. Tokio supplies an executor and asynchronous I/O facilities, while the Rust standard\
+    \ library defines the `Future` abstraction but not a general async runtime.\n The future can be composed\
+    \ with other futures before an executor starts polling it. An async function can be awaited in an\
+    \ async context or passed to an executor. Constructing it alone resembles constructing an iterator:\
+    \ it describes work but does not drive it."
+  tags:
+  - async
+  - futures
+  - executors
+- id: rust-basic-020
+  topic: async
+  difficulty: intermediate
+  question: Why should blocking calls be kept off an async runtime worker?
+  answer: "Async runtimes schedule many tasks on a limited set of worker threads. A synchronous blocking\
+    \ call occupies its worker until it returns, preventing other tasks assigned there from progressing.\
+    \ A blocking SDK hidden inside an `async fn` is still blocking. Use an asynchronous client where possible,\
+    \ or offload bounded blocking operations to a runtime's blocking pool. CPU-heavy sustained work may\
+    \ need a dedicated bounded pool. Also limit concurrency so the downstream service is not overwhelmed.\
+    \ Adding an `.await` around a blocking function does not convert it to nonblocking I/O, and creating\
+    \ unlimited blocking tasks can exhaust threads and memory.\n Instrument worker saturation and downstream\
+    \ queueing to confirm the chosen fix. The blocking pool is finite too. Bound submissions and observe\
+    \ queue wait, active threads, and deadlines; otherwise offloading only moves the queue and may hide\
+    \ overload."
+  tags:
+  - async
+  - blocking
+  - tokio
+- id: rust-basic-021
+  topic: modules
+  difficulty: beginner
+  question: How do modules differ from crates and packages?
+  answer: "A module organizes names and controls visibility inside a crate. A crate is a compilation unit,\
+    \ either a library or executable. A package is a Cargo project that can contain library and binary\
+    \ targets, tests, examples, and configuration. A workspace groups related packages under shared Cargo\
+    \ management. `mod` declares a module, while `pub` exposes an item; `use` only brings a path into\
+    \ scope and does not make it public. `pub use` can re-export an item as part of a deliberate public\
+    \ API. Knowing the distinction helps diagnose visibility and dependency issues and choose a maintainable\
+    \ project layout.\n A clean boundary also lets a crate reorganize private modules without changing\
+    \ users paths. Visibility follows the whole module path: a public item inside a private parent is\
+    \ not externally reachable. Re-exports create stable names without exposing implementation modules."
+  tags:
+  - modules
+  - crates
+  - cargo
+- id: rust-basic-022
+  topic: cargo
+  difficulty: beginner
+  question: What are `Cargo.toml` and `Cargo.lock` for?
+  answer: "`Cargo.toml` is the manifest: it declares package metadata, dependency requirements, targets,\
+    \ features, and other build configuration. `Cargo.lock` records the precise resolved dependency graph.\
+    \ Applications and workspaces generally commit the lockfile so builds resolve consistently; libraries\
+    \ commonly omit it from published packages so downstream applications choose their own dependency\
+    \ graph. Reproducibility also depends on toolchain, platform, and build inputs, not only a lockfile.\
+    \ Review lockfile changes because transitive dependencies may change. Use `cargo build --locked` in\
+    \ CI or release workflows when a lockfile should not be modified during the build.\n This also makes\
+    \ unexpected dependency resolution changes visible during review. Review tools can compare lockfile\
+    \ changes to the declared manifest requirements. A lockfile does not pin the compiler, operating system\
+    \ libraries, environment, or generated inputs. Record those too when release provenance or repeatable\
+    \ artifacts matter."
+  tags:
+  - cargo
+  - dependencies
+  - reproducibility
+- id: rust-basic-023
+  topic: testing
+  difficulty: beginner
+  question: What is the difference between unit and integration tests?
+  answer: "Unit tests usually live near implementation under `#[cfg(test)]` and can access private items\
+    \ through a child test module. They are well suited to checking internal logic and edge cases. Integration\
+    \ tests live under `tests/` and compile as separate crates, so they exercise only the public API available\
+    \ to a downstream user. Both are run by `cargo test`; documentation tests compile code examples from\
+    \ documentation. Use unit tests for local invariants and integration tests for end-to-end API behavior.\
+    \ Neither category substitutes for testing operational boundaries such as timeouts, malformed external\
+    \ data, or target-specific behavior.\n Integration tests help catch missing exports and awkward consumer-facing\
+    \ signatures. Import the crate by its public name in integration tests. This catches reliance on private\
+    \ paths and verifies that documented setup works for downstream consumers."
+  tags:
+  - testing
+  - unit-tests
+  - integration-tests
+- id: rust-basic-024
+  topic: production
+  difficulty: intermediate
+  question: What are the main safety concerns at a Rust/C FFI boundary?
+  answer: "The compiler cannot verify foreign pointer validity, buffer lengths, aliasing, ownership transfer,\
+    \ or whether C callbacks obey Rust's assumptions. Keep `unsafe` blocks narrow and document their preconditions.\
+    \ Use `extern \"C\"` for the C calling convention and `#[repr(C)]` for data whose layout must match\
+    \ C; Rust's default ABI and layout are not stable for arbitrary types. Define who allocates and frees\
+    \ each buffer, how errors and nulls are represented, and whether calls can occur concurrently. Do\
+    \ not expose `String`, `Vec`, or trait objects as if they were stable C types, and prevent unwinding\
+    \ across an incompatible ABI boundary.\n Keep these assumptions close to the unsafe block so later\
+    \ maintainers can audit them. Treat raw-pointer conversion as a proof obligation: document alignment,\
+    \ lifetime, valid length, aliasing, and deallocation responsibility. Convert to safe slices or owned\
+    \ values promptly."
+  tags:
+  - ffi
+  - unsafe
+  - abi

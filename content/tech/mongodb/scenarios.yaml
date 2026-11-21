@@ -1,0 +1,143 @@
+- id: mongo-scn-001
+  title: A growing document slows order reads
+  technologies: [mongodb]
+  difficulty: intermediate
+  prompt: |
+    The `orders` collection embeds every shipment update in an `events` array. Most reads fetch a
+    single order and its latest status, but some documents are approaching the 16 MiB limit and
+    writes to popular orders are getting slower. Design a migration that preserves history and
+    keeps the normal order page fast.
+  approach: |
+    1. Confirm actual document sizes, array growth rates, update patterns, and required history queries.
+    2. Keep a bounded `recentEvents` subset and current status on the order; move full history into an
+       `orderEvents` collection indexed by `{ orderId: 1, occurredAt: -1 }`.
+    3. Define event identity, ordering, and whether events are immutable. Use idempotent dual-write
+       or a transactional/outbox flow during transition rather than silently dropping concurrent events.
+    4. Backfill in restartable batches, compare event counts and latest status, then switch reads and
+       remove the old array only after reconciliation.
+    5. Monitor document size, query latency, write conflicts, and backfill lag; preserve rollback data
+       through the validation window.
+  red_flags:
+    - Keeping an unbounded history array and assuming the document-size limit is only a theoretical concern.
+    - Deleting the embedded history before verifying the separate event collection.
+    - Moving events but omitting an index for the order's chronological history query.
+- id: mongo-scn-002
+  title: An index exists but the query is still slow
+  technologies: [mongodb]
+  difficulty: intermediate
+  prompt: |
+    An API query filters `tenantId` and `state`, sorts by `createdAt: -1`, and returns 25 records.
+    The collection has separate indexes on each field, but p95 latency increased as data grew.
+    Explain what you would inspect and how you would choose a fix without assuming a benchmark.
+  approach: |
+    1. Capture the exact filter, sort, projection, data distribution, and representative parameter values.
+    2. Run `explain("executionStats")`; compare `nReturned`, `totalDocsExamined`, and `totalKeysExamined`,
+       and inspect for collection scans, blocking sort, fetches, and plan changes.
+    3. Evaluate a compound candidate such as `{ tenantId: 1, state: 1, createdAt: -1 }` against the
+       Equality-Sort-Range shape and all important query prefixes; verify index direction.
+    4. Test under production-like data and concurrency, including skewed tenants. Measure read work,
+       write overhead, index size, cache pressure, and latency percentiles.
+    5. Roll out with monitoring and a rollback plan; remove redundant indexes only after observing
+       all relevant query shapes over a meaningful period.
+  red_flags:
+    - Declaring the index successful merely because the winning plan contains IXSCAN.
+    - Adding several overlapping indexes without measuring write and cache costs.
+    - Relying only on an explain plan from a tiny or uniformly distributed test dataset.
+- id: mongo-scn-003
+  title: Checkout must atomically reserve inventory
+  technologies: [mongodb]
+  difficulty: advanced
+  prompt: |
+    Checkout changes an order document and decrements inventory documents for multiple SKUs.
+    Concurrent checkouts must not oversell, and the payment provider is an external service. Describe
+    a safe design and the failure cases the application must handle.
+  approach: |
+    1. State the invariant and decide whether inventory can be modeled as one bounded document per
+       SKU; use conditional updates such as `{ sku, available: { $gte: qty } }` with `$inc` to prevent
+       negative stock.
+    2. If reserving several SKU documents must commit all-or-nothing, use a short transaction on a
+       replica set/sharded deployment and verify each matched count. Include idempotent checkout IDs.
+    3. Do not call the payment provider inside a retryable transaction callback. Commit a reservation
+       and durable payment intent/outbox record; a worker calls the provider idempotently and advances
+       order state through a saga with compensation/expiry for failed payments.
+    4. Handle transient transaction retries, unknown commit results, duplicate requests, and timeout
+       reconciliation using stable operation keys.
+    5. Monitor reservation age, transaction aborts, payment reconciliation, and inventory invariants.
+  red_flags:
+    - Calling the payment API inside the transaction callback and charging twice on retry.
+    - Reading stock and later decrementing it without a conditional predicate or transaction strategy.
+    - Assuming a MongoDB transaction can atomically include the external payment provider.
+- id: mongo-scn-004
+  title: Replica-set failover causes uncertain writes
+  technologies: [mongodb]
+  difficulty: advanced
+  prompt: |
+    After a primary outage, an API reports intermittent write timeouts and some clients retry an
+    order-creation request. Support staff find duplicate orders and cannot tell whether a timed-out
+    request committed. Propose a diagnosis and remediation plan that avoids both silent loss and
+    duplicate business effects.
+  approach: |
+    1. Check replica-set status, election history, member health, replication lag, oplog window, and
+       server logs; distinguish connectivity, write-concern timeout, and application timeout.
+    2. Treat a timeout as an uncertain outcome. Add a client-generated idempotency key protected by a
+       unique index, and return/reconcile the existing order for repeated requests.
+    3. Choose explicit write concern based on durability requirements, commonly majority for critical
+       order creation, and set appropriate driver timeouts and retryable writes.
+    4. Verify driver topology discovery and retry behavior. Do not implement unbounded blind retries
+       or assume `w: 1` cannot be rolled back after primary failure.
+    5. Reconcile duplicates with an auditable business rule, then test planned stepdown and network
+       interruption in a safe environment.
+  red_flags:
+    - Increasing timeouts alone without investigating election and replication state.
+    - Retrying non-idempotent order creation without a unique request identity.
+    - Claiming majority write concern provides exactly-once behavior across the application.
+- id: mongo-scn-005
+  title: Sharded ingestion has a write hotspot
+  technologies: [mongodb]
+  difficulty: advanced
+  prompt: |
+    A sharded time-series-like collection uses an increasing timestamp as a range shard key. New
+    writes queue on one shard, though older data is spread across the cluster. Range reports by
+    tenant and time are also important. How would you diagnose and redesign without asserting an
+    untested shard-key fix?
+  approach: |
+    1. Inspect per-shard write and latency metrics, chunk distribution, current chunk boundaries,
+       balancer activity, key frequency, and whether the ingestion range is concentrated at one end.
+    2. Map the actual access patterns: tenant-time range reports, point reads, retention, and write
+       distribution. Quantify skew by tenant rather than assuming uniform traffic.
+    3. Evaluate candidate compound keys or a hashed component with representative query routing;
+       explain the trade-off between distributing writes and targeting time ranges. Consider bucketed
+       writes only if the model's time-window semantics and bounds support it.
+    4. Load-test hot keys and range queries on realistic data, review unique-index and resharding
+       implications, and plan capacity for data movement.
+    5. Use a supported resharding/migration plan, monitor scatter-gather and per-shard latency, and
+       verify that the new design improves workload balance rather than only chunk counts.
+  red_flags:
+    - Replacing the key with a hashed timestamp without checking range-query scatter.
+    - Looking only at total cluster utilization while one shard is saturated.
+    - Assuming the balancer can eliminate a hotspot caused by a single active key range.
+- id: mongo-scn-006
+  title: A change-stream consumer cannot resume
+  technologies: [mongodb]
+  difficulty: advanced
+  prompt: |
+    A downstream search indexer was stopped for maintenance longer than the replica set's oplog
+    window. On restart, its saved change-stream token is no longer resumable. The search index is
+    stale, and updates continue arriving. Describe a recovery strategy and changes to prevent a
+    repeat.
+  approach: |
+    1. Confirm the resume failure and current oplog window; preserve the existing checkpoint and
+       measure consumer lag. Do not advance the token to the newest event and silently skip the gap.
+    2. Establish a consistent backfill strategy: take a snapshot or scan with a change-capture
+       boundary, rebuild the search projection idempotently, then resume live changes from the
+       coordinated boundary.
+    3. Make projection writes idempotent using document identity/version or event token, and make
+       deletes explicit so stale search records are removed.
+    4. Increase or size oplog retention for expected outages only after capacity review; alert when
+       consumer lag approaches the retention window and track checkpoint age.
+    5. Run periodic reconciliation between source documents and the projection and rehearse a full
+       reindex so recovery is an operation, not an improvisation.
+  red_flags:
+    - Treating a change stream as an unlimited historical event log.
+    - Resuming from the latest point without rebuilding missed changes.
+    - Increasing oplog retention without considering disk capacity or still lacking a backfill plan.

@@ -1,0 +1,239 @@
+- id: rs-basic-001
+  topic: architecture
+  difficulty: beginner
+  question: What roles do the leader node, compute nodes, and slices play in Redshift?
+  answer: |
+    The leader node accepts client connections, parses and plans SQL, coordinates execution, and returns results. Compute nodes store user-table data and perform most table scans and parallel processing. Each compute node is divided into slices, which provide units of parallel execution and own portions of distributed data.
+
+    A query plan is split into work that slices can execute locally and steps that exchange data or combine results. If a join is collocated, slices can match their local rows without a cluster-wide shuffle. If data is skewed, one slice may receive much more work and determine total latency. Therefore, node count alone does not predict performance: distribution, query shape, memory, queueing, and data movement matter. The leader coordinates, but should not be imagined as a second compute node that can scan all user data when workers are busy.
+  tags: [architecture, leader-node, slices]
+
+- id: rs-basic-002
+  topic: architecture
+  difficulty: beginner
+  question: How does Redshift's columnar storage help analytical queries?
+  answer: |
+    In a columnar table, values from the same column are stored together rather than storing every row's fields as one contiguous record. A query that needs only a few columns can avoid reading unrelated columns, which reduces I/O on wide analytical tables. Encodings can also compress repeated or patterned values, further reducing the amount of data read.
+
+    Sort order provides another optimization: block-level value ranges can let Redshift skip blocks that cannot satisfy a predicate, especially when filters use leading sort-key columns. Columnar storage does not make every query cheap. Selecting every column, filtering on an unrelated field, or reading poorly sorted data can still require broad scans. This layout is optimized for scans and aggregates, not frequent single-row transactional lookups. Query projection, sort design, and realistic plans determine whether the storage advantage is realized.
+  tags: [columnar, compression, scans]
+
+- id: rs-basic-003
+  topic: distribution
+  difficulty: intermediate
+  question: Compare EVEN, KEY, ALL, and AUTO distribution styles.
+  answer: |
+    `EVEN` spreads rows across slices to balance storage and work when there is no useful join key. `KEY` places rows with the same distribution-key value together, which can collocate joins when both tables are distributed on the join column. It can also cause skew if a few values dominate. `ALL` keeps a full copy on each compute node, useful for relatively small dimensions that are joined often, but it increases storage and load/update work. `AUTO` lets Redshift choose and adjust a distribution strategy based on its observations.
+
+    Start with `AUTO` unless workload evidence supports a manual choice. Compare table sizes, key frequency, join patterns, and plans. Distribution is a workload-level trade-off: a key that benefits one join may not help others. Validate that it reduces movement without creating uneven slices or making ingestion and maintenance disproportionately expensive.
+  tags: [distribution, diststyle, skew]
+
+- id: rs-basic-004
+  topic: distribution and sort keys
+  difficulty: intermediate
+  question: How do compound sort keys work, and why does column order matter?
+  answer: |
+    A compound sort key stores rows in the declared sequence. Its leading columns are most useful for block pruning, so a key `(event_date, customer_id)` suits date-range scans and may also help queries that constrain date and customer. It is much less useful for filtering only on customer because blocks are not primarily ordered by that value across the whole table.
+
+    Sort keys are not indexes that point to individual rows. They help the engine skip blocks whose stored value ranges cannot match, and effectiveness depends on data being sufficiently sorted. Choose leading columns from frequent, selective range filters and evaluate the actual workload, not merely the columns in a schema. After large loads or changes, inspect `SVV_TABLE_INFO` and query plans. A sort key that matches the filter pattern but has degraded physical order may deliver little pruning until maintenance restores order.
+  tags: [sort-key, compound, pruning]
+
+- id: rs-basic-005
+  topic: query plans
+  difficulty: intermediate
+  question: What does DS_BCAST_INNER mean in an EXPLAIN plan?
+  answer: |
+    `DS_BCAST_INNER` means Redshift broadcasts the join's inner input to the other compute nodes so each node has a copy for matching against local rows. This avoids redistributing the outer table, and can be efficient when the inner relation is genuinely small after filters. It can be expensive when the inner input is large, estimates are wrong, or the broadcast happens repeatedly in a costly plan.
+
+    Do not treat the label as automatically bad. Check estimated and actual row counts, filters, table sizes, and query-step metrics. `DS_DIST_NONE` indicates a collocated join, while `DS_DIST_BOTH` means both sides move. Before changing distribution keys, determine whether stale statistics or a missing predicate caused the optimizer to misjudge the input. A permanent `DISTSTYLE ALL` choice also carries storage and load costs, so benchmark the whole workload rather than optimizing one join label in isolation.
+  tags: [explain, broadcast, redistribution]
+
+- id: rs-basic-006
+  topic: maintenance
+  difficulty: beginner
+  question: What does VACUUM do in Redshift?
+  answer: |
+    Redshift `VACUUM` can restore sort order and reclaim space occupied by rows marked for deletion. This matters because unsorted data can reduce block skipping on sort-key predicates, while deleted-row space consumes storage and may affect scans. Redshift also performs automatic sorting and delete-only vacuum work in the background, so manual vacuum should be driven by observed table state rather than run indiscriminately after every statement.
+
+    The default vacuum behavior differs from PostgreSQL: Redshift's default is effectively `FULL`, combining sorting and deletion cleanup when needed. Other modes include `SORT ONLY`, `DELETE ONLY`, `REINDEX`, and `RECLUSTER` for particular cases. Vacuum can consume resources, and a delete-only vacuum can temporarily block updates and deletes. Inspect `SVV_TABLE_INFO`, relevant query plans, maintenance progress, and dependent materialized views before scheduling work. Afterward, verify that table state and representative query performance improved.
+  tags: [vacuum, unsorted, deleted-rows]
+
+- id: rs-basic-007
+  topic: maintenance
+  difficulty: beginner
+  question: Why is ANALYZE important after a large data load?
+  answer: |
+    `ANALYZE` updates the statistics that Redshift's optimizer uses to estimate row counts and selectivity. Those estimates influence join order, join method, memory expectations, and whether an input is broadcast or redistributed. A large load can change both table size and value frequencies, so statistics that were reasonable before ingestion may cause a poor plan afterward.
+
+    Redshift automatically analyzes tables under appropriate conditions, and some table-creation operations analyze their output. Still, verify statistics after important loads or data-shape changes, especially when a critical query regresses. `ANALYZE table PREDICATE COLUMNS` focuses on columns relevant to filters, joins, grouping, distribution, or sorting. External tables are not analyzed with this command. Avoid analyzing system tables. If observed row counts differ greatly from estimates, refreshing statistics is a useful early diagnostic, but also investigate skew and query predicates rather than assuming statistics are the only cause.
+  tags: [analyze, statistics, optimizer]
+
+- id: rs-basic-008
+  topic: workload management
+  difficulty: intermediate
+  question: What problem does workload management solve?
+  answer: |
+    Workload management (WLM) routes and schedules queries so competing workloads share capacity intentionally. A dashboard query, a large transformation, and an analyst's exploratory scan have different latency and resource needs. Without separation, a long-running or memory-intensive job can make interactive work wait, while high concurrency can leave each query with too little memory and cause spills.
+
+    WLM queues and routing rules can separate users or query groups, while automatic WLM dynamically allocates resources based on workload needs. Manual WLM provides explicit queue and slot configuration but requires careful tuning. Track queue time separately from execution time: high queue time indicates contention or routing pressure, while high execution time suggests plan, data, or resource problems. Query monitoring rules can enforce guardrails, and Short Query Acceleration can prioritize eligible short work. Neither feature removes the need to understand the workload mix or test under realistic concurrency.
+  tags: [wlm, queues, concurrency]
+
+- id: rs-basic-009
+  topic: workload management
+  difficulty: intermediate
+  question: How does Short Query Acceleration improve interactive workloads?
+  answer: |
+    Short Query Acceleration (SQA) identifies eligible queries expected to finish quickly and runs them in dedicated resources, rather than forcing them to wait behind longer queries in a regular WLM queue. Redshift predicts duration from workload behavior and can use a dynamic maximum runtime; an operator may also configure a threshold. Eligible reads and certain CTAS queries can use SQA, subject to current service rules.
+
+    It is useful for dashboard and interactive requests where queue delay is a large share of total response time. It does not make a genuinely long scan short, and a query that runs beyond the expected threshold may return to a normal queue. Monitor the SQA service class, queue duration, completion, and eviction behavior. Do not route every query to SQA or label large jobs as short to gain priority. That defeats isolation and can make both interactive and batch workloads less predictable.
+  tags: [sqa, wlm, interactive]
+
+- id: rs-basic-010
+  topic: workload management
+  difficulty: intermediate
+  question: What does concurrency scaling do, and what does it not do?
+  answer: |
+    Concurrency scaling can add transient compute capacity for eligible queries when a configured WLM queue experiences concurrency pressure. Rather than waiting behind queued work on the main cluster, eligible queries may run on a concurrency-scaling cluster. Supported operations include many reads and some ingestion or write operations, but eligibility depends on statement type, table design, node configuration, and service constraints.
+
+    This is a burst-handling feature, not a general-purpose accelerator for one badly planned query or a replacement for right-sizing regular capacity. A scan that spills or reads too much data may remain slow on additional capacity. Monitor query history for concurrency-scaling status and compare queue and execution time with main-cluster runs. If the feature is used continuously, review routing, repeated work, and baseline capacity. Test supported operations in the current environment before relying on scaling behavior in a production workflow.
+  tags: [concurrency-scaling, wlm, capacity]
+
+- id: rs-basic-011
+  topic: spectrum
+  difficulty: beginner
+  question: What is Redshift Spectrum, and how does an external table differ from a local table?
+  answer: |
+    Redshift Spectrum lets SQL queries read data stored in S3 through external-table metadata, commonly registered in the Glue Data Catalog. An external table describes files, columns, partitions, and format; it does not contain a Redshift-managed copy of the data. A local table stores data inside the warehouse and is loaded and maintained as a Redshift table.
+
+    Spectrum is useful for querying lake data, historical datasets, or occasional workloads without loading every object into the cluster. Performance depends on file format, size, partition layout, predicate pushdown, and permissions. A local copy may be better for hot data repeatedly scanned under tight latency requirements. Both can be joined in SQL, but external reads have distinct S3, catalog, and IAM dependencies. Decide whether a dataset should remain external or be loaded by considering freshness, access frequency, performance, governance, and transformation needs.
+  tags: [spectrum, external-table, s3]
+
+- id: rs-basic-012
+  topic: spectrum
+  difficulty: intermediate
+  question: Why is Parquet commonly preferred for analytical Spectrum scans?
+  answer: |
+    Parquet is a columnar file format, so a query can read only the columns it needs instead of parsing every field in every row. Its metadata and encodings can help skip irrelevant data and reduce bytes transferred. This is particularly valuable for wide analytical datasets where consumers select a subset of columns and filter on useful fields.
+
+    Format alone does not guarantee efficiency. Tiny files create listing and scheduling overhead; huge or poorly partitioned datasets may still scan excessively. Catalog column types must agree with the physical file schema, and schema evolution needs an explicit policy. Partition paths should reflect common filters without creating excessive partition counts. Use `EXPLAIN` and Spectrum monitoring to confirm pruning and bytes scanned. The best design combines Parquet with sensible file sizing, compression, partitioning, and a governed schema contract between producers and query consumers.
+  tags: [parquet, spectrum, columnar]
+
+- id: rs-basic-013
+  topic: ingestion
+  difficulty: beginner
+  question: Why is COPY preferred over many INSERT statements for loading data?
+  answer: |
+    `COPY` is designed to load data in parallel from multiple files or streams. Redshift can distribute input across compute resources, perform the load efficiently, and apply table distribution and sorting as part of the operation. Issuing many individual `INSERT` statements creates excessive statement and commit overhead and usually fails to use the warehouse's parallel loading path effectively.
+
+    A reliable pipeline prepares a bounded set of files, uses a least-privilege IAM role, and loads to a staging table when validation or deduplication is needed. Batch files should be numerous enough to expose parallel work but not so tiny that metadata overhead dominates. A manifest can list exactly which objects belong to a batch. Record load identifiers, counts, and errors so that retries are controlled. `COPY` is not automatically idempotent: the pipeline still needs a batch key or deduplication design to prevent duplicate data after a retry.
+  tags: [copy, ingestion, staging]
+
+- id: rs-basic-014
+  topic: ingestion
+  difficulty: intermediate
+  question: What is a COPY manifest and when should you use one?
+  answer: |
+    A manifest is a JSON file that explicitly lists the S3 object URLs to include in a `COPY` load. The command uses the `MANIFEST` option to interpret that file rather than treating a prefix as the input set. It can also mark required entries, so missing expected objects fail the load instead of silently reducing the batch.
+
+    A manifest is valuable when a prefix contains historical files, multiple producers, or asynchronously delivered objects. It creates a reproducible boundary between a pipeline batch and the broader bucket. Keep the manifest or its identifier with the batch record so an operator can determine which objects were intended. A manifest does not itself validate row content or make a load transactionally idempotent; use staging, validation, and duplicate handling as needed. Ensure the IAM role can read both the manifest and every referenced object, including any required encryption keys.
+  tags: [manifest, copy, reproducibility]
+
+- id: rs-basic-015
+  topic: ingestion
+  difficulty: intermediate
+  question: How should an ingestion pipeline handle retries and partial failures?
+  answer: |
+    Design retries around a stable batch identity and known source objects. Load each batch to staging, record the manifest or object list, and capture accepted and rejected rows. Validate required columns, row counts, duplicate rules, and key constraints before publishing. If a load fails, inspect its load history and errors rather than assuming no files were loaded; a multi-file operation may have processed some input before the failure.
+
+    Make the publish step idempotent, for example by using a batch key, deleting/replacing a bounded target range, or deduplicating by a source event identifier. Commit metadata that indicates which batches are complete only after target data and downstream outputs are ready. Do not blindly rerun a batch into an append-only target. System load logs have bounded retention, so persist operational metadata externally. This gives the team a reliable replay path without depending on transient system views or guesswork during an incident.
+  tags: [retry, idempotency, load-errors]
+
+- id: rs-basic-016
+  topic: views
+  difficulty: beginner
+  question: How does a materialized view differ from a standard view?
+  answer: |
+    A standard view stores a SQL definition and evaluates it when queried; it does not store the query's result. A materialized view (MV) stores a result set, so consumers can avoid repeating an expensive join or aggregation. The MV trades storage and refresh work for faster reads and a defined freshness lag.
+
+    Refresh can be incremental for eligible definitions and changes, or require a full recomputation. Never assume every query is incrementally refreshable; verify current restrictions and monitor actual refresh behavior. An MV is not automatically current with base tables unless its refresh contract ensures that. Query rewrite may let Redshift substitute an eligible MV for part of a query, but creation alone does not guarantee this. Test plans. Refresh failure and staleness should be visible to consumers, and maintenance such as vacuum can interact with stale dependent MVs that need base-table rows for incremental refresh.
+  tags: [materialized-view, refresh, freshness]
+
+- id: rs-basic-017
+  topic: views
+  difficulty: intermediate
+  question: What is a late-binding view, and what trade-off does it make?
+  answer: |
+    A late-binding view is created with `WITH NO SCHEMA BINDING`. Redshift delays checking referenced objects until the view is queried, so the view can be defined even when a referenced table is not yet present or can survive changes that would otherwise affect a dependency-bound view. This is useful for deployment ordering and for views that include external Spectrum tables.
+
+    The trade-off is delayed error detection. If a referenced table is missing or a required column changes, the view can fail at query time rather than at deployment. References must be schema-qualified. A late-binding view is not a security bypass: users need appropriate access to the view and underlying objects according to the owner's privileges and Redshift's rules. Use it to decouple deployment lifecycles, then add tests that query the view after schema changes so the interface remains valid for consumers.
+  tags: [late-binding, views, spectrum]
+
+- id: rs-basic-018
+  topic: query tuning
+  difficulty: intermediate
+  question: How do you distinguish a slow query from a query that is waiting in WLM?
+  answer: |
+    Separate total elapsed time into queue time and execution time using WLM history or supported query-history views. On provisioned clusters, `STL_WLM_QUERY` records queue and execution timing, and `STL_QUERY` contains statement history. Current state can be inspected through views such as `STV_WLM_QUERY_STATE`. Use the supported `SYS` monitoring views for a more unified view where appropriate.
+
+    High queue time with normal execution time points toward concurrency, routing, or queue resource pressure. High execution time with little queueing points toward the plan, data volume, spills, stale statistics, or external scans. A query can suffer from both. Compare the same query under similar concurrency and data conditions; avoid treating one isolated runtime as a trend. This distinction determines whether to change WLM, improve SQL or table design, or adjust capacity. Resizing compute alone will not necessarily resolve poorly routed work.
+  tags: [queue-time, execution-time, wlm]
+
+- id: rs-basic-019
+  topic: query tuning
+  difficulty: intermediate
+  question: What does a disk spill indicate, and how can you investigate it?
+  answer: |
+    A disk spill means an execution operation such as a sort or hash join could not keep all needed intermediate state in memory and wrote data to disk. Spills can make a query much slower, especially for large joins or aggregations. They may result from high concurrency, inaccurate row estimates, wide intermediate rows, an inefficient join, or insufficient resources for the particular query shape.
+
+    Investigate the query plan and step-level execution history, including rows processed and spill or temporary I/O indicators exposed by supported system views. Compare estimated and actual cardinalities, and check whether statistics are current. Reduce unnecessary columns, filter earlier, fix join multiplicity, or isolate heavy workloads before increasing overall concurrency. Raising concurrency slots can leave less memory per query and increase spill frequency. Tune with realistic workload concurrency, and verify that the proposed change improves throughput or latency without causing queueing elsewhere.
+  tags: [spill, query-tuning, memory]
+
+- id: rs-basic-020
+  topic: query tuning
+  difficulty: intermediate
+  question: What system views help diagnose Redshift performance, and what are their limits?
+  answer: |
+    Redshift exposes several system-view families. `STL_` views contain persisted log history, `STV_` views represent current in-memory snapshots, and `SVL_` views provide derived details about main-cluster execution. `SVCS_` views include concurrency-scaling details. `SYS` monitoring views offer a consolidated interface for many workloads and can be useful across provisioned and Serverless environments.
+
+    These families are not interchangeable. A snapshot can change while it is queried, and STL history has bounded retention, so export long-term metrics or audit data elsewhere. Some rows are user- or superuser-visible, and system logs can contain sensitive query text. Use the least privilege needed. Confirm the available view and columns for the specific deployment before building dashboards. Filter out system-generated activity when appropriate, and correlate query ID, WLM time, step details, and table metadata instead of drawing a conclusion from one view alone.
+  tags: [system-tables, stl, stv, svl]
+
+- id: rs-basic-021
+  topic: security
+  difficulty: intermediate
+  question: What permissions are needed for a Redshift query against S3 through Spectrum?
+  answer: |
+    Several layers must allow the operation. The database principal needs permission to use the external schema and query the external table. The Redshift cluster or Serverless workgroup must have an associated IAM role that the service can assume. That role needs access to the relevant S3 objects and catalog metadata, plus use of the KMS key if the files are encrypted with one.
+
+    Lake Formation may add catalog and data-location grants for governed data. Bucket policies, organization controls, and key policies can further restrict access. A SQL `GRANT` cannot override a missing IAM or KMS permission, while an overly broad IAM role can expose more S3 data than database users should query. Test using the actual execution role and a least-privilege database identity. When access fails, trace each boundary instead of granting broad bucket permissions as a shortcut.
+  tags: [iam, spectrum, lake-formation]
+
+- id: rs-basic-022
+  topic: security
+  difficulty: intermediate
+  question: Explain the difference between row-level security and dynamic data masking.
+  answer: |
+    Row-level security (RLS) controls which rows a user or role can see. It is useful for isolating tenants or business units that share a table. Dynamic data masking (DDM) changes how selected column values are presented to a user or role, for example hiding or partially obscuring personally identifiable information while leaving other columns available.
+
+    The controls solve different problems and may be combined. RLS should use a trusted identity or context; a user-supplied tenant ID that can be changed is not a secure boundary. Masking is not encryption, deletion, or a substitute for object permissions. Test policies as each intended role, including views, joins, filters, exports, and privileged users. Consider inference and logging exposure as well as visible query results. A secure design documents which principals can bypass controls and why, and audits policy changes alongside schema and role changes.
+  tags: [row-level-security, masking, privacy]
+
+- id: rs-basic-023
+  topic: operations
+  difficulty: beginner
+  question: What is the difference between provisioned Redshift and Redshift Serverless?
+  answer: |
+    Provisioned Redshift uses a cluster with explicitly selected compute capacity and a managed cluster lifecycle. This can suit steady workloads, teams that want direct capacity control, or workloads whose behavior is well understood. Redshift Serverless uses a workgroup and namespace model and manages capacity scaling, reducing some infrastructure administration for intermittent or variable workloads.
+
+    Neither model removes query-design or security responsibilities. Queueing, skew, data movement, external scans, permissions, and freshness still matter. Serverless scaling does not guarantee fixed latency or cost, while a provisioned cluster can have underused capacity during quiet periods. Compare a representative operating cycle, including peaks and idle time, workload isolation, sharing, and management needs. Review usage guardrails and current feature availability in AWS documentation. Avoid choosing based on one peak query or assuming that one model is universally cheaper.
+  tags: [serverless, provisioned, operations]
+
+- id: rs-basic-024
+  topic: operations
+  difficulty: intermediate
+  question: How should you evaluate whether a Redshift capacity change helped?
+  answer: |
+    Establish a baseline for a representative workload before resizing or changing Serverless capacity. Record queue time, execution time, concurrency, throughput, bytes scanned, spill behavior, load duration, and relevant table state. Compare similar query mixes and data volumes, not a single warmed-up query. Track the change window and note topology or configuration changes that may alter distribution or cache behavior.
+
+    After the change, test critical plans and end-to-end service objectives under realistic concurrency. More capacity may reduce queueing while leaving an inefficient scan unchanged; a topology change can also alter data placement and query behavior. Include recurring cost and idle-period behavior in the decision, without relying on a context-free price comparison. Keep the change only when it improves the intended metric without unacceptable regressions in freshness, reliability, or other workloads. Preserve monitoring history outside transient system tables so future comparisons remain possible.
+  tags: [capacity, benchmarking, monitoring]

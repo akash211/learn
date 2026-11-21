@@ -1,0 +1,142 @@
+concepts:
+  - title: Document boundary
+    detail: >-
+      A document is the useful atomic unit: embed related bounded values read and updated together;
+      reference independently queried, shared, or unbounded entities.
+  - title: Single-document atomicity
+    detail: >-
+      A write to one document is atomic, including nested and array changes. An updateMany operation
+      is not one atomic transaction across all matched documents.
+  - title: Bounded arrays
+    detail: >-
+      Bound embedded arrays by count, bytes, or time. Unbounded histories grow toward the 16 MiB
+      document limit and increase transfer, index, and update costs.
+  - title: Bucket pattern
+    detail: >-
+      Group bounded time-window measurements with metadata and summaries; rotate when the count,
+      size, or window limit is reached.
+  - title: BSON types
+    detail: >-
+      BSON includes typed dates, ObjectIds, binary values, and Decimal128. Use types that preserve
+      comparison and precision semantics instead of encoding values as strings.
+  - title: Compound index prefix
+    detail: >-
+      An index `{a: 1, b: 1}` supports leading-prefix queries on `a` (and `a` plus `b`), but is not
+      a general index for `b` alone.
+  - title: Multikey index
+    detail: >-
+      Indexing an array creates keys for its elements. Compound multikey indexes have restrictions,
+      and `$elemMatch` is important when predicates must match one array element.
+  - title: Partial index eligibility
+    detail: >-
+      A query can use a partial index only when its filter implies the partial filter expression;
+      smaller indexes are useful only for queries that qualify.
+  - title: TTL cleanup
+    detail: >-
+      TTL indexes asynchronously remove documents based on a BSON Date. They are not exact-time
+      schedulers or an authorization check for expiry.
+  - title: Explain work ratios
+    detail: >-
+      Compare `nReturned`, `totalDocsExamined`, and `totalKeysExamined`; an `IXSCAN` can still
+      examine far more keys or documents than it returns.
+  - title: Aggregation cardinality
+    detail: >-
+      `$unwind` multiplies stream size by array elements. `$group`, `$sort`, and `$lookup` costs
+      depend on input size, memory, indexes, and topology.
+  - title: Lookup join
+    detail: >-
+      `$lookup` is a left outer join that adds an array of matches. Index the foreign join field and
+      bound local input; weigh repeated joins against intentional denormalization.
+  - title: Read and write concerns
+    detail: >-
+      Read preference selects eligible members; read concern controls visibility. Write concern
+      controls acknowledgment. State the required guarantee rather than treating these settings as
+      generic speed knobs.
+  - title: Majority acknowledgment
+    detail: >-
+      `w: "majority"` reduces the chance an acknowledged write is rolled back after primary failure
+      but can increase latency and depend on a reachable voting majority.
+  - title: Shard-key trade-off
+    detail: >-
+      Choose a key for distribution and query targeting together. Monotonic keys can hotspot writes;
+      hashed keys spread values but may scatter range queries.
+  - title: Resume-token limits
+    detail: >-
+      Change streams can resume only while the needed oplog history exists. Consumers must persist
+      tokens after durable effects, tolerate replay, and have a resync plan.
+traps:
+  - Treating flexible document shapes as an excuse to skip schema validation, versioning, and controlled migrations.
+  - Assuming references enforce foreign keys or cascading deletion; MongoDB leaves that policy to the application.
+  - Assuming separate dotted predicates on an array match the same element; use `$elemMatch` when that is the requirement.
+  - Treating TTL deletion as immediate or relying on it to authorize expired credentials or sessions.
+  - Assuming a secondary read is fresh because it is a replica; replication can lag and read preference is not a freshness guarantee.
+  - Assuming a transaction is exactly once or includes an external API, queue publish, or email.
+advanced:
+  - Transactions can span shards, but distributed commit raises coordination costs; keep transactions short and align shard placement with common transactional work.
+  - A write-concern timeout can leave the result uncertain; reconcile using a stable operation ID rather than blindly repeating a non-idempotent business action.
+  - Change-stream `updateLookup` can return a document version newer than the triggering update; use pre/post images when exact images are needed and configured.
+  - A scatter-gather query may be acceptable for a low-rate report but multiplies work and tail latency; inspect router explain and per-shard execution.
+  - MongoDB 8.0 query settings replace deprecated index filters for influencing query shapes, but allowed indexes do not force an index plan.
+  - Replica-set replication is not backup: accidental deletes and corruption replicate too, so test independent restores and point-in-time recovery.
+comparisons:
+  - a: Embedding
+    b: Referencing
+    difference: >-
+      Embedding provides locality and single-document atomicity for bounded owned data; references
+      fit independently managed, shared, or unbounded entities but need application-level integrity.
+  - a: find()
+    b: aggregation pipeline
+    difference: >-
+      `find()` handles filter, sort, limit, and projection simply; aggregation adds computed stages,
+      grouping, joins, and reshaping with pipeline execution costs.
+  - a: Full index
+    b: Partial index
+    difference: >-
+      A full index covers all documents for eligible query shapes; a partial index is smaller but
+      usable only when the query implies its filter.
+  - a: TTL index
+    b: application expiry check
+    difference: >-
+      TTL eventually removes expired documents; an application check enforces access policy at
+      request time and must not assume cleanup already ran.
+  - a: 'w: 1'
+    b: 'w: "majority"'
+    difference: >-
+      `w: 1` waits for primary acknowledgment; majority waits for a voting majority and reduces
+      rollback risk while potentially increasing latency and quorum dependence.
+  - a: Range sharding
+    b: Hashed sharding
+    difference: >-
+      Range keys preserve locality for range queries but can hotspot on monotonic writes; hashed
+      keys spread point values but often scatter range queries.
+  - a: MongoDB
+    b: PostgreSQL
+    difference: >-
+      MongoDB centers flexible BSON documents and document-level atomicity; PostgreSQL centers
+      relational tables, SQL joins, and database-enforced constraints, with JSONB available for
+      semi-structured fields.
+commands:
+  - label: Inspect collection indexes
+    code: >-
+      db.orders.getIndexes()
+  - label: Explain a sorted query
+    code: >-
+      db.orders.find({ tenantId: "t-9", status: "open" }).sort({ createdAt: -1 }).limit(25).explain("executionStats")
+  - label: Create a compound access-path index
+    code: >-
+      db.orders.createIndex({ tenantId: 1, status: 1, createdAt: -1 })
+  - label: Aggregate and group array items
+    code: >-
+      db.orders.aggregate([{ $unwind: "$lines" }, { $group: { _id: "$lines.sku", units: { $sum: "$lines.qty" } } }])
+  - label: Check replica-set state
+    code: >-
+      rs.status()
+  - label: Inspect current operations
+    code: >-
+      db.currentOp()
+  - label: Connect with mongosh to a local database
+    code: >-
+      mongosh "mongodb://localhost:27017/shop"
+  - label: Create a logical database dump
+    code: >-
+      mongodump --uri="mongodb://localhost:27017/shop" --out=./backup

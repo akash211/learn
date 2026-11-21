@@ -1,0 +1,102 @@
+concepts:
+  - title: Azure SQL Database boundary
+    detail: A database-scoped PaaS resource; Microsoft manages hosts and patching. Managed Instance and SQL Server on Azure VMs are distinct deployment choices.
+  - title: Logical server
+    detail: Azure management, endpoint and policy boundary for databases, not a customer-administered SQL Server machine.
+  - title: DTU
+    detail: Bundled compute, memory, data IO and log IO abstraction; utilization alone does not identify the bottleneck.
+  - title: vCore
+    detail: More explicit compute sizing with storage configured separately within the tier's limits.
+  - title: General Purpose
+    detail: General workload tier with compute separated from remote storage; benchmark actual latency and IO.
+  - title: Business Critical
+    detail: Local SSD and replica-oriented architecture for demanding latency/availability needs; not a fix for poor query plans.
+  - title: Hyperscale
+    detail: Distributed storage with primary compute, page servers and log service; distinct scaling and recovery behavior.
+  - title: Serverless
+    detail: Automatically scales within configured bounds and may auto-pause when eligible; resumption and minimum capacity matter.
+  - title: Elastic pool
+    detail: Multiple databases share pool capacity. Per-database maximums do not reserve that capacity.
+  - title: Microsoft Entra auth
+    detail: Token-based identity authentication; database users and grants still define authorization.
+  - title: Managed identity
+    detail: Azure workload identity avoids stored passwords; least-privilege SQL grants remain necessary.
+  - title: Private endpoint
+    detail: Private Link network path using private IP and DNS; it neither grants SQL rights nor disables public access by itself.
+  - title: TDE
+    detail: Encrypts database files, log and backups at rest; does not hide plaintext from authorized queries.
+  - title: Always Encrypted
+    detail: Client-side encryption for selected columns; server sees ciphertext unless supported enclave operations apply.
+  - title: Query Store
+    detail: Persisted query, plan and runtime history used to compare performance and investigate regressions.
+  - title: PITR
+    detail: Point-in-time restore creates a separate database within configured retention; plan validation and cutover.
+traps:
+  - Treating Azure SQL Database, Managed Instance and SQL Server on Azure VMs as interchangeable names.
+  - Reading DTU utilization as a direct CPU measure or assuming DTUs convert exactly to vCores.
+  - Assuming a private endpoint provides database authorization or automatically disables the public endpoint.
+  - Treating TDE as protection against authorized users reading plaintext.
+  - Assuming an elastic pool reserves every database's maximum or that replicas replace backups.
+  - Retrying a write after an ambiguous timeout without idempotency or checking whether it committed.
+advanced:
+  - Geo-replication is asynchronous; forced failover can lose transactions not yet replicated, and apps must reconnect through the right listener.
+  - Query Store's historical value depends on capture mode, retention and read-write status; DMV caches are transient.
+  - RLS based on SESSION_CONTEXT requires trusted assignment and reset on every pooled-connection checkout.
+  - Serverless min/max bounds and background activity affect auto-pause, scaling latency and consumption.
+  - Hyperscale replicas can serve read-only workloads but may lag; route consistency-sensitive reads deliberately.
+  - Migration assessment (including DMA) finds potential issues but cannot prove all runtime paths or operational dependencies.
+comparisons:
+  - a: Azure SQL Database
+    b: Azure SQL Managed Instance
+    difference: Database-scoped PaaS vs instance-oriented PaaS with broader compatibility; validate exact feature needs.
+  - a: Azure SQL Database
+    b: SQL Server on Azure VM
+    difference: Platform-managed database vs IaaS where the customer owns more OS, SQL patching and HA operations.
+  - a: DTU
+    b: vCore
+    difference: Bundled resource abstraction vs explicit compute sizing with separately configured storage.
+  - a: General Purpose
+    b: Business Critical
+    difference: Remote-storage general tier vs local SSD and replica-oriented architecture; benchmark workload and feature fit.
+  - a: TDE
+    b: Always Encrypted
+    difference: Storage-level encryption managed by engine vs selected-column encryption/decryption in trusted client.
+  - a: PITR
+    b: Geo-replication
+    difference: Restore to a chosen past time in a new database vs asynchronous secondary for regional continuity.
+  - a: Pool maximum
+    b: Pool reservation
+    difference: A database maximum caps use; it does not reserve that capacity from the shared pool.
+commands:
+  - label: Inspect active requests and blocking
+    code: |
+      SELECT session_id, status, wait_type, blocking_session_id, cpu_time, logical_reads
+      FROM sys.dm_exec_requests WHERE session_id <> @@SPID;
+  - label: Read Azure SQL database resource statistics
+    code: |
+      SELECT TOP (20) end_time, avg_cpu_percent, avg_data_io_percent, avg_log_write_percent
+      FROM sys.dm_db_resource_stats ORDER BY end_time DESC;
+  - label: Inspect Query Store query runtime aggregates
+    code: |
+      SELECT TOP (20) q.query_id, SUM(rs.count_executions) AS executions
+      FROM sys.query_store_query AS q
+      JOIN sys.query_store_plan AS p ON p.query_id = q.query_id
+      JOIN sys.query_store_runtime_stats AS rs ON rs.plan_id = p.plan_id
+      GROUP BY q.query_id ORDER BY executions DESC;
+  - label: Inspect database compatibility level
+    code: |
+      SELECT name, compatibility_level FROM sys.databases WHERE database_id = DB_ID();
+  - label: Check Query Store state
+    code: |
+      SELECT actual_state_desc, desired_state_desc, current_storage_size_mb
+      FROM sys.database_query_store_options;
+  - label: Inspect database scoped configurations
+    code: |
+      SELECT name, value, value_for_secondary FROM sys.database_scoped_configurations;
+  - label: Create a database user from a Microsoft Entra principal
+    code: |
+      CREATE USER [app-identity-name] FROM EXTERNAL PROVIDER;
+      ALTER ROLE db_datareader ADD MEMBER [app-identity-name];
+  - label: Verify current database name and server
+    code: |
+      SELECT DB_NAME() AS database_name, @@SERVERNAME AS server_name;

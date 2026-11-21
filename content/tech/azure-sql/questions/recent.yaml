@@ -1,0 +1,108 @@
+- id: azsql-recent-001
+  topic: purchasing models
+  difficulty: intermediate
+  question: How would you choose between serverless and provisioned compute for an application with sharp bursts and long idle periods?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Start with a demand profile that includes idle intervals, burst duration, concurrency, latency objectives and background activity. Serverless may fit if the workload is eligible, the configured compute range covers the burst, and resume latency after auto-pause is acceptable. Provisioned compute is often preferable when traffic is continuous or the application cannot tolerate cold start. Check whether scheduled jobs, monitoring, connection pools or other background processes prevent pause. Run a test through the real driver and hosting environment, including scale response and token renewal. Compare workload performance and consumption over a representative cycle rather than a single benchmark. Set explicit minimum and maximum bounds, alerts and a fallback plan if capacity pressure appears.
+  tags: [serverless, capacity-planning]
+- id: azsql-recent-002
+  topic: elastic pools
+  difficulty: advanced
+  question: Several databases in an elastic pool report saturation during the same hour. How do you determine whether to resize or repartition the pool?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Correlate pool-level CPU, data IO and log IO with per-database metrics, Query Store and application latency over the incident window. Identify which tenants and jobs were active and whether one query regression or synchronized batch schedules drove demand. Compare the combined peak profile, not average utilization, with pool capacity and per-database limits. A pool increase may be the fastest mitigation, but first verify it addresses the saturated resource. If peaks are correlated or a tenant has a strict objective, move it to a separate pool or standalone database and remeasure. Coordinate pool membership, capacity and cutover, and use database-level guardrails to avoid a noisy neighbor. Validate under concurrent peak load after the change.
+  tags: [elastic-pools, noisy-neighbor]
+- id: azsql-recent-003
+  topic: authentication
+  difficulty: advanced
+  question: An application using managed identity intermittently fails to connect after deployment. What do you check?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Separate token acquisition, network reachability and SQL authorization. Confirm the deployed compute resource has the intended system- or user-assigned identity and that the driver uses the correct authentication mode. Verify the Entra principal is represented in the database and has required grants, rather than relying on Azure RBAC alone. Check token expiry and refresh behavior for the exact driver version, as well as pool reuse across identity or connection-string changes. Validate private DNS, firewall rules and public access policy from the deployed subnet. Review deployment identity changes and role propagation. Capture error class and correlation details without logging tokens or secrets. Reproduce from the same runtime; success from a developer workstation is not sufficient evidence.
+  tags: [managed-identity, authentication]
+- id: azsql-recent-004
+  topic: networking
+  difficulty: intermediate
+  question: A private endpoint is provisioned, but an application still connects through the public endpoint. How would you investigate?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    From the application subnet, resolve the documented Azure SQL FQDN and inspect the answer and DNS search path. Verify the private DNS zone record and virtual-network link, then confirm routing reaches the private endpoint IP. Check whether the app's resolver, container DNS or custom forwarder bypasses the expected zone. Review the logical server's public network access policy separately; private endpoint creation alone does not disable public access. Test from an allowed and an intentionally disallowed network and inspect connection logs where available. Confirm the driver uses the hostname, not an IP or alternate endpoint. Avoid widening firewall rules as a workaround. Correct DNS and validate the actual path from the deployed application process.
+  tags: [private-endpoint, private-dns]
+- id: azsql-recent-005
+  topic: performance monitoring
+  difficulty: advanced
+  question: A database's CPU metric is high but users report acceptable latency. How do you decide whether to act?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Establish the user-facing latency and error objectives first; high utilization alone does not prove a service problem. Examine duration and percentile trends, concurrency, queueing and remaining headroom during peak periods. Use Query Store to identify CPU consumers and plan changes, and relate them to application traces and expected workload growth. Check whether the high value is a short burst or sustained saturation, and whether the database shares an elastic pool. Consider a forecasted launch, batch window or recovery event that may consume the remaining headroom. If risk is rising, test query optimization, concurrency controls or a capacity increase. Define a threshold for intervention and continue monitoring after changes; don't scale only to make a chart look quieter.
+  tags: [cpu, performance]
+- id: azsql-recent-006
+  topic: Query Store
+  difficulty: advanced
+  question: A query regresses after a deployment, and Query Store shows an earlier faster plan. What is a safe response?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Confirm that the query, parameters, data volume and workload window are comparable, and check Query Store capture state and waits. Compare the actual plans and runtime statistics, including estimates, reads, CPU and blocking. If the earlier plan is consistently better for the affected distribution, plan forcing can be a temporary mitigation where supported. Monitor forcing success and other parameter populations, since a plan that helps one tenant may hurt another. Investigate the code, index, statistics, compatibility level or data change that introduced the regression. Preserve evidence before changing the tier or cache. Remove the forced plan when a durable fix is validated, and add deployment performance checks for high-impact queries.
+  tags: [query-store, plan-regression]
+- id: azsql-recent-007
+  topic: automatic tuning
+  difficulty: intermediate
+  question: What governance would you put around automatic index management in production?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Confirm that the feature is supported for the database and that Query Store capture and retention are healthy. Choose recommendation-only or automatic actions according to risk tolerance and change policy. Review tuning history, created and dropped indexes, storage growth, write latency and affected queries. Ensure owners receive alerts and can investigate a regression. Rare reports and seasonal traffic may be missing from the workload history, so monitor through a full business cycle before treating an action as stable. Keep an explicit rollback path and do not manually create duplicate indexes that conflict with automatic management. Automatic tuning should operate within documented index, storage and performance guardrails and should be reassessed after major workload or schema changes.
+  tags: [automatic-tuning, indexing]
+- id: azsql-recent-008
+  topic: geo-replication
+  difficulty: advanced
+  question: What should an application team consider before using an auto-failover group for regional DR?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Define acceptable RPO and RTO and choose a failover policy accordingly. Geo-replication is asynchronous, so forced failover can lose transactions not yet replicated; a planned failover can synchronize when the primary is reachable. Configure clients for the group's listener, bounded retries and pool refresh, then test DNS behavior and in-flight transaction outcomes. Prepare the secondary region's private DNS, network access, Entra principals, secrets, app compute, monitoring and downstream dependencies. Confirm that jobs and consumers do not run twice after role changes. Maintain PITR and long-term retention because replication can carry logical mistakes. Rehearse failover and failback in a controlled exercise and measure end-to-end application recovery, not just database role transition.
+  tags: [failover-groups, disaster-recovery]
+- id: azsql-recent-009
+  topic: connectivity
+  difficulty: intermediate
+  question: A team proposes increasing connection-pool size to resolve request timeouts. What evidence do you gather first?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Separate time waiting to acquire a connection from time executing a SQL command. Inspect pool exhaustion, connection counts across all application replicas, worker concurrency, database sessions and resource metrics. A larger pool may reduce client queueing if the database has headroom, but it can also increase contention and resource pressure. Check for leaked connections, long transactions, slow queries and dynamic connection strings creating many pools. Set a bounded maximum and calculate the aggregate worst case across pods, workers and slots. Use Query Store and live request telemetry to identify server-side waits. Test with realistic concurrency and failure behavior. Increase pool limits only when the evidence shows a pool bottleneck and the database can support the additional sessions.
+  tags: [connection-pooling, capacity]
+- id: azsql-recent-010
+  topic: migration
+  difficulty: advanced
+  question: A SQL Server migration assessment finds many cross-database references and SQL Agent jobs. How do you choose the target service?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Inventory each dependency and determine whether it is used, how frequently, and what consistency it requires. Database-scoped Azure SQL Database may require redesign for cross-database access and external scheduling, using application APIs, orchestration or supported data access features; these are not transparent replacements for every instance pattern. Managed Instance may provide a closer fit for some instance dependencies, while SQL Server on a VM offers more control with greater operational responsibility. Validate every finding with a workload and feature test, not just a static assessment. Compare migration effort, network topology, security, downtime, recovery and operating cost. Use current Azure migration guidance and document why the target best satisfies the feature and ownership requirements.
+  tags: [migration, managed-instance]
+- id: azsql-recent-011
+  topic: Hyperscale
+  difficulty: advanced
+  question: How would you evaluate Hyperscale for a large database that also needs read scale?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Map the requirement to Hyperscale's distributed storage design and supported replica options, then verify current feature and regional availability. Benchmark primary write workload and read queries at expected data scale, including cold-page access, cache behavior and concurrency. Determine which reads can tolerate replica lag; route read-after-write or consistency-sensitive requests to the appropriate endpoint. Measure whether replicas reduce primary load and include their resource consumption in the design. Validate migration path, restore expectations, backup retention, encryption and any required SQL features against the current matrix. Hyperscale is not simply a large storage setting, and replicas do not repair inefficient plans. Run a migration and recovery rehearsal before production selection.
+  tags: [hyperscale, read-scale]
+- id: azsql-recent-012
+  topic: cost governance
+  difficulty: intermediate
+  question: How do you lower Azure SQL spend without weakening recovery or user experience?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Start with resource-level billing and performance evidence, tagging databases by owner, environment and workload. Identify idle capacity, inefficient queries, overlarge pools, unneeded replicas and backup retention that exceeds policy—but confirm each item's service objective and data obligations. Compare serverless for eligible intermittent workloads, provisioned capacity for steady traffic, and elastic pools only when peaks complement one another. Test a candidate right-size through representative peak and batch periods, watching latency, error rates, IO and recovery behavior. Keep PITR, LTR and geo-resilience aligned with documented RPO/RTO rather than cutting them blindly. Use budgets and alerts to route investigation to owners; they are not hard spending caps. Recheck actual billing after each controlled change.
+  tags: [cost, right-sizing]

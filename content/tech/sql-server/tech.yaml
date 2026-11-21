@@ -1,0 +1,122 @@
+slug: sql-server
+title: SQL Server
+category: databases
+summary: Microsoft's relational engine with T-SQL, a cost-based optimiser and integrated operational tooling.
+level: core
+relations:
+  - to: sql
+    type: uses
+    note: SQL Server executes relational queries using the T-SQL dialect and engine behaviour covered here.
+  - to: azure-sql
+    type: alternative
+    note: Azure SQL services are managed members of the SQL Server family with service-specific administration boundaries.
+  - to: postgresql
+    type: alternative
+    note: PostgreSQL is an open-source relational alternative with a different storage, concurrency and operations model.
+  - to: dbt
+    type: complements
+    note: dbt manages transformations and complements SQL Server's engine and operational responsibilities.
+intro:
+  what: |
+    SQL Server is Microsoft's relational database management system for transactional applications,
+    reporting and data integration. This module focuses on the Database Engine: its 8-KB pages,
+    buffer pool, transaction log, lock manager, query processor and system catalogues. Learn why a
+    clustered index determines row organisation, how the optimiser turns T-SQL into an execution
+    plan, and how to diagnose waits, blocking, spills and recovery problems with built-in DMVs.
+
+    Examples use T-SQL and real catalog and dynamic management view names. They assume you can write
+    joins, aggregates and subqueries already. The goal is to connect SQL Server's dialect and
+    behaviour to the engine mechanisms beneath them, not to repeat generic SQL material.
+  why: |
+    SQL Server remains common in enterprises because it combines a mature relational engine with
+    administration, security, backup, high availability and developer tooling. Operational
+    failures are often specific: a parameter-sensitive plan regresses, a transaction holds locks,
+    tempdb is contended, a log cannot truncate, or a restore chain was never tested. Knowing the
+    engine concepts and telemetry turns those symptoms into diagnosable causes.
+
+    This knowledge also matters when moving workloads to Azure SQL or another database. Syntax
+    portability is only one part of migration; isolation semantics, indexing, statistics, recovery
+    objectives, security features and operational ownership differ too.
+  problems:
+    - Providing transactional consistency with a write-ahead transaction log and explicit recovery model.
+    - Serving concurrent workloads through locking or row-versioned isolation with diagnosable blocking.
+    - Choosing row and columnar access paths through clustered, nonclustered and columnstore indexes.
+    - Turning declarative T-SQL into measurable plans with runtime and wait information.
+    - Supporting point-in-time recovery and failover through integrated backup and HA features.
+  where_used:
+    - Line-of-business applications and packaged enterprise products on Windows or Linux.
+    - Reporting and operational analytics using T-SQL, SQL Server Agent and Integration Services.
+    - Hybrid estates spanning on-premises SQL Server, Azure SQL Managed Instance and Azure SQL Database.
+    - Data integration and warehouse staging using bulk loading, CDC or change tracking.
+  ecosystem: |
+    SQL Server belongs to Microsoft's data platform but is distinct from Azure SQL service control
+    planes, Analysis Services, Power BI and the older SQL Server Integration Services (SSIS) ETL
+    runtime. SQL Server Management Studio and Azure Data Studio are client tools. SQL Server Agent
+    schedules jobs where supported. Always On availability groups provide database-level HA and DR
+    in supported deployments, while backups remain essential for recovering from deletion,
+    corruption and operator error. dbt can complement transformations. For cloud hosting, compare
+    the exact Azure SQL service rather than assuming every feature or administration right matches.
+  alternatives:
+    - name: PostgreSQL
+      note: Open-source alternative with a different concurrency, extension, planner and operations model.
+    - name: Azure SQL
+      note: Managed SQL Server-family services reduce infrastructure work but have service-specific feature boundaries.
+    - name: MySQL
+      note: A widely used alternative with different dialect, storage engines and operational tooling.
+  related: [sql, azure-sql, postgresql, dbt]
+chapters:
+  - id: storage-engine-pages-extents
+    title: "Storage Engine: Pages, Extents and the Buffer Pool"
+    file: chapters/01-storage-engine-pages-extents.md
+    minutes: 13
+    level: core
+  - id: t-sql-specifics
+    title: T-SQL Features and Semantic Edges
+    file: chapters/02-t-sql-specifics.md
+    minutes: 13
+    level: core
+  - id: indexing
+    title: "Indexing: Rowstore, Filtered and Columnstore"
+    file: chapters/03-indexing.md
+    minutes: 14
+    level: core
+  - id: execution-plans-optimizer
+    title: Execution Plans and the Optimiser
+    file: chapters/04-execution-plans-optimizer.md
+    minutes: 14
+    level: advanced
+  - id: transactions-isolation-locking
+    title: Transactions, Isolation and Locking
+    file: chapters/05-transactions-isolation-locking.md
+    minutes: 14
+    level: core
+  - id: tempdb-waits-triage
+    title: tempdb, Waits and Performance Triage
+    file: chapters/06-tempdb-waits-triage.md
+    minutes: 13
+    level: advanced
+  - id: partitioning-compression-maintenance
+    title: Partitioning, Compression and Maintenance
+    file: chapters/07-partitioning-compression-maintenance.md
+    minutes: 13
+    level: advanced
+  - id: backup-restore-ha
+    title: Backup, Restore and High Availability
+    file: chapters/08-backup-restore-ha.md
+    minutes: 14
+    level: core
+  - id: security
+    title: SQL Server Security
+    file: chapters/09-security.md
+    minutes: 12
+    level: core
+  - id: etl-change-capture
+    title: ETL, Bulk Loading and Change Capture
+    file: chapters/10-etl-change-capture.md
+    minutes: 13
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

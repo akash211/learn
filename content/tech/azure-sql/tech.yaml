@@ -1,0 +1,138 @@
+slug: azure-sql
+title: Azure SQL Database
+category: databases
+summary: A fully managed SQL Server-family database service with database-, pool- and instance-oriented deployment choices.
+level: core
+relations:
+  - to: sql-server
+    type: uses
+    note: Azure SQL Database runs the SQL Server-family relational engine, while the service controls infrastructure and exposes a narrower, evolving surface than an instance you administer.
+  - to: sql
+    type: uses
+    note: Azure SQL Database executes relational queries expressed in SQL and the Microsoft T-SQL dialect.
+  - to: microsoft-fabric
+    type: complements
+    note: Azure SQL Database serves operational workloads; Microsoft Fabric provides integrated analytical and lakehouse capabilities for downstream data use.
+  - to: cosmos-db
+    type: alternative
+    note: Cosmos DB is a globally distributed NoSQL option for document and other non-relational access patterns; choose by data model and consistency needs.
+intro:
+  what: |
+    Azure SQL Database is Microsoft's fully managed relational database service for application
+    workloads. It shares the SQL Server engine lineage and T-SQL, but the customer manages
+    databases and workload configuration rather than the host operating system, SQL Server
+    installation, patching, or traditional instance-level availability group. Azure handles
+    platform maintenance, automated backups, service health and much of the high-availability
+    machinery; the application team still owns schema design, access policy, query behavior,
+    capacity choices, recovery objectives and validation.
+
+    Keep the three Azure SQL deployment choices distinct. **Azure SQL Database** is a database-
+    scoped platform service: each database is an independently managed logical resource, with
+    optional shared elastic-pool capacity. **Azure SQL Managed Instance** offers a broader
+    instance-level programming and migration surface, including many SQL Server instance features,
+    while remaining a managed service. **SQL Server on Azure Virtual Machines** gives the customer
+    an IaaS virtual machine and SQL Server installation to operate, with the greatest control and
+    corresponding responsibility for OS, SQL patching, storage and HA configuration. This module
+    focuses on Azure SQL Database, not a generic label for all three.
+
+    Examples use real T-SQL, Azure service feature names and portal/ARM concepts. Service limits,
+    regional availability and supported features evolve, so verify the current documentation and
+    target-region capabilities before committing an architecture.
+  why: |
+    A managed database can remove routine host and engine maintenance without removing database
+    engineering. Teams still need to select a purchasing model, recognize resource saturation,
+    secure both identity and network paths, tune queries, budget for growth, and prove restore and
+    failover procedures. Misunderstanding the service boundary leads to brittle migrations, unexpected
+    throttling, unsafe network exposure or recovery plans that have never been exercised.
+
+    Azure SQL Database is also a practical cloud destination for SQL Server workloads that can fit
+    a database-scoped service model. A sound migration evaluates feature compatibility, connectivity,
+    latency, authentication, operational ownership and costs—not just whether a backup can be
+    imported. The chapters connect application behavior to the control plane and database engine.
+  problems:
+    - Operating relational workloads without administering database hosts, operating systems or engine patch windows.
+    - Matching compute and storage capacity to predictable, elastic, bursty or very large database workloads.
+    - Serving multiple databases with isolated settings or shared elastic-pool resources.
+    - Diagnosing query and resource regressions using Query Store, DMVs and Azure monitoring signals.
+    - Recovering from accidental changes and regional outages using managed backups and geo-redundancy.
+  where_used:
+    - SaaS and line-of-business application databases that use SQL Server-compatible T-SQL.
+    - Cloud migrations where database-level service boundaries are acceptable and instance features can be redesigned.
+    - Multi-tenant estates using elastic pools to share capacity across independently managed databases.
+    - Operational data stores that feed reporting platforms, Microsoft Fabric or other analytics services.
+  ecosystem: |
+    Azure SQL Database is an Azure PaaS resource with a logical server control-plane container and
+    one or more databases; a logical server is not a customer-managed SQL Server virtual machine.
+    Applications connect with supported TDS drivers and should use Microsoft Entra authentication
+    where practical, bounded connection pools and transient-fault retry policies. Azure Monitor,
+    diagnostic settings, Query Store and database-scoped DMVs complement each other. Azure SQL
+    Managed Instance is a closer fit when instance-level compatibility matters; SQL Server on Azure
+    VMs fits when operating-system and engine control is required. Microsoft Fabric can complement
+    the database for analytics, while Cosmos DB is an alternative for workloads whose access patterns
+    are better served by a distributed non-relational model.
+  alternatives:
+    - name: Azure SQL Managed Instance
+      note: Managed instance-oriented service with broader SQL Server compatibility and instance-level features; still not identical to a self-managed SQL Server.
+    - name: SQL Server on Azure Virtual Machines
+      note: IaaS deployment for teams that need OS/instance control and are prepared to own more operations.
+    - name: PostgreSQL
+      note: Open-source relational alternative with a different dialect, extension ecosystem and administration model.
+    - name: Azure Cosmos DB
+      note: Distributed non-relational database for suitable document, key-value and globally distributed access patterns.
+  related: [sql-server, sql, microsoft-fabric, cosmos-db]
+chapters:
+  - id: service-tiers-purchasing
+    title: Service Tiers and Purchasing Models
+    file: chapters/01-service-tiers-purchasing.md
+    minutes: 13
+    level: core
+  - id: provisioning-elastic-pools
+    title: Provisioning, Elastic Pools and Scaling
+    file: chapters/02-provisioning-elastic-pools.md
+    minutes: 13
+    level: core
+  - id: security
+    title: Identity, Network and Data Security
+    file: chapters/03-security.md
+    minutes: 14
+    level: core
+  - id: performance-monitoring
+    title: Performance Monitoring and Diagnosis
+    file: chapters/04-performance-monitoring.md
+    minutes: 14
+    level: core
+  - id: indexing-automatic-tuning
+    title: Indexing and Automatic Tuning
+    file: chapters/05-indexing-automatic-tuning.md
+    minutes: 13
+    level: core
+  - id: backup-restore-ha
+    title: Backup, Restore and Regional Resilience
+    file: chapters/06-backup-restore-ha.md
+    minutes: 14
+    level: core
+  - id: connectivity-drivers
+    title: Connectivity, Drivers and Resilience
+    file: chapters/07-connectivity-drivers.md
+    minutes: 12
+    level: core
+  - id: hyperscale
+    title: Hyperscale Architecture and Operations
+    file: chapters/08-hyperscale.md
+    minutes: 12
+    level: advanced
+  - id: migration-sql-server
+    title: Migration from SQL Server
+    file: chapters/09-migration-sql-server.md
+    minutes: 14
+    level: core
+  - id: cost-workload-governance
+    title: Cost Control and Workload Governance
+    file: chapters/10-cost-workload-governance.md
+    minutes: 13
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

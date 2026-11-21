@@ -1,0 +1,90 @@
+concepts:
+  - title: Single ownership
+    detail: A non-Copy value has one owner; assignment and by-value calls move it, and dropping the owner releases its resources.
+  - title: Borrowing rules
+    detail: Multiple shared references or one exclusive mutable reference at a time prevent aliased mutation in safe code.
+  - title: Lifetimes
+    detail: Lifetime annotations describe reference validity relationships; they do not extend the life of data.
+  - title: Copy versus Clone
+    detail: Copy is implicit bitwise duplication for eligible small values; Clone is explicit and may allocate or copy substantial data.
+  - title: Option and Result
+    detail: Option models ordinary absence; Result models success or a failure with an error value.
+  - title: Exhaustive match
+    detail: Match checks all enum variants unless a wildcard covers remaining cases, making new states visible during refactors.
+  - title: Trait bounds
+    detail: Generic bounds express required behavior and enable compile-time checking and static dispatch.
+  - title: Trait objects
+    detail: dyn Trait erases the concrete type for runtime dispatch, usually through a pointer and vtable.
+  - title: Vec and maps
+    detail: Vec is a contiguous growable sequence; HashMap offers average constant-time key lookup without stable iteration order.
+  - title: Iterator laziness
+    detail: Adapters such as map and filter do no work until a terminal operation consumes the iterator.
+  - title: Send and Sync
+    detail: Send permits safe ownership transfer across threads; Sync permits safe shared references across threads.
+  - title: Arc is not a lock
+    detail: Arc shares ownership atomically but does not synchronize mutable access; combine with Mutex or another suitable primitive.
+  - title: Async futures
+    detail: Calling an async function creates a future; an executor polls it, and await yields when the operation is pending.
+  - title: Cancellation
+    detail: Dropping a future cancels local progress, but does not prove an external side effect was not committed.
+  - title: Cargo lockfile
+    detail: Cargo.lock captures resolved dependency versions and should generally be committed for applications and workspaces.
+  - title: FFI boundary
+    detail: Unsafe FFI code must document pointer, layout, ownership, ABI, and unwind assumptions that Rust cannot verify.
+
+traps:
+  - "Adding Clone to satisfy the borrow checker without checking whether ownership transfer or a shorter borrow is the right design."
+  - "Assuming lifetime annotations keep objects alive; they only constrain reference validity."
+  - "Using unwrap on routine I/O or untrusted input instead of returning or handling a Result."
+  - "Assuming Arc makes inner data thread-safe or mutable without synchronization."
+  - "Treating async fn or await as a new thread; blocking work can still stall a runtime worker."
+  - "Assuming a target triple alone makes a cross-compiled binary runnable on the deployment host."
+
+advanced:
+  - "Rust 2024 changes default return-position impl Trait capture behavior; review borrowed futures and public opaque return APIs during migration."
+  - "Monomorphization enables static dispatch but many generic instantiations can increase compile time and binary size."
+  - "A public trait addition can break downstream implementors; adding an enum variant can break exhaustive downstream matches."
+  - "A mutex guard held across blocking I/O or await can cause contention, deadlock, or a non-Send future."
+  - "A timed-out async write may have committed remotely; use idempotency or reconciliation for uncertain outcomes."
+  - "C ABI interoperability needs explicit layout and ownership; Rust's default ABI is not a stable foreign interface."
+
+comparisons:
+  - a: String
+    b: '&str'
+    difference: String owns UTF-8 bytes; &str is a borrowed view and often makes a more flexible read-only parameter.
+  - a: Option<T>
+    b: Result<T, E>
+    difference: Option models absence; Result carries a success value or an explanatory error.
+  - a: 'T: Trait'
+    b: dyn Trait
+    difference: Generic bound uses static dispatch and monomorphization; dyn Trait uses runtime dispatch through a trait object.
+  - a: Vec<T>
+    b: VecDeque<T>
+    difference: Vec is contiguous and efficient for indexing/appending; VecDeque supports efficient operations at both ends.
+  - a: Arc<T>
+    b: Arc<Mutex<T>>
+    difference: Arc shares ownership; Mutex adds exclusive synchronized access to mutable inner state.
+  - a: std::thread
+    b: async task
+    difference: OS threads block independently; async tasks cooperate on executor workers and yield at suspension points.
+  - a: rustls
+    b: OpenSSL
+    difference: Rust-native TLS can simplify some builds; OpenSSL or platform TLS may better fit system integration or policy requirements.
+
+commands:
+  - label: Check the current crate quickly
+    code: cargo check
+  - label: Run all tests in a workspace
+    code: cargo test --workspace --locked
+  - label: Build an optimized binary
+    code: cargo build --release --locked
+  - label: Check formatting in CI
+    code: cargo fmt --all -- --check
+  - label: Run Clippy across targets and features
+    code: cargo clippy --workspace --all-targets --all-features -- -D warnings
+  - label: Inspect dependency feature activation
+    code: cargo tree -e features
+  - label: Build for a configured target triple
+    code: cargo build --release --target <triple>
+  - label: Check manifest and lockfile consistency
+    code: cargo metadata --locked --format-version 1

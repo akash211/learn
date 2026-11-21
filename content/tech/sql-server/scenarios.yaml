@@ -1,0 +1,139 @@
+- id: mssql-scn-001
+  title: The order API becomes slow only for one large tenant
+  technologies: [sql-server]
+  difficulty: advanced
+  prompt: |
+    A parameterized order-history endpoint filters by `customer_id`, sorts by `order_ts DESC`,
+    and returns 50 rows. Most tenants remain under 100 ms, but the largest tenant now takes
+    several seconds. The issue began after a data load. There is a nonclustered index on
+    `(customer_id, order_ts)` with no included columns. Application developers suggest adding
+    `WITH (NOLOCK)` or clearing the plan cache.
+  approach: |
+    Establish whether the regression is query-specific using Query Store and compare plans and
+    runtime by time and parameter population. Capture an actual plan and `SET STATISTICS IO,
+    TIME` for representative small and large customers. Check estimated versus actual rows,
+    key lookup counts, spills, waits and whether the index ordering matches the query. Examine
+    statistics and skew; determine if SQL Server reused a plan compiled for a different tenant.
+    Check SQL Server 2022 PSP eligibility at the database compatibility level, otherwise compare
+    carefully scoped alternatives such as recompilation or separate query shapes. Add included
+    columns only if lookup cost dominates and write/storage impact is acceptable. Use Query Store
+    to verify improvement. Do not clear the whole cache or trade correctness for dirty reads.
+  red_flags:
+    - Adding NOLOCK as a blanket latency fix without discussing inconsistent reads.
+    - Clearing the entire plan cache before retaining evidence of plans and parameters.
+    - Creating a wide covering index without measuring lookup cost and write overhead.
+    - Assuming a fresh statistics update alone solves every parameter-sensitive plan.
+- id: mssql-scn-002
+  title: Blocking chain appears after a nightly update job
+  technologies: [sql-server]
+  difficulty: intermediate
+  prompt: |
+    At 09:15, a user-facing service has many requests waiting on `LCK_M_S`. One report session
+    is idle with an open transaction from a scheduled job that started at 02:00. Killing random
+    waiters clears a few requests, but the queue returns. The team wonders whether to disable
+    lock escalation or add NOLOCK to the report.
+  approach: |
+    Identify the head blocker, transaction age, open transaction count, SQL text, client and
+    lock resources using `sys.dm_exec_requests`, `sys.dm_exec_sessions`, `sys.dm_tran_locks`
+    and `sys.dm_exec_sql_text`. Determine why the job left a transaction open, whether it is
+    waiting on client work, and which changes it made. Coordinate safe commit or rollback with
+    the application owner; killing a session can require expensive rollback. Inspect a deadlock
+    graph only if there is a cycle; simple blocking is not a deadlock. Then shorten/batch the job,
+    align resource access order, and evaluate RCSI only if read semantics and version-store capacity
+    support it. Verify that the blocking queue no longer forms.
+  red_flags:
+    - Killing blocked requests instead of locating the head blocker.
+    - Disabling lock escalation or applying NOLOCK before identifying the transaction.
+    - Assuming an idle session has no effect on locks or log reuse.
+    - Ignoring the rollback cost and application owner when terminating a transaction.
+- id: mssql-scn-003
+  title: Transaction log fills during a bulk import
+  technologies: [sql-server]
+  difficulty: advanced
+  prompt: |
+    A nightly import grows the database log until the volume is nearly full. The database uses
+    FULL recovery, but the operations team takes only nightly full backups and frequently runs
+    `DBCC SHRINKFILE`. A recent import also had to be rerun after a partial failure. No recent
+    restore drill exists.
+  approach: |
+    Check `sys.databases.log_reuse_wait_desc`, log usage and active transactions. In FULL recovery,
+    establish a valid full backup base and scheduled log backups; identify whether LOG_BACKUP,
+    ACTIVE_TRANSACTION or another condition prevents reuse. Stop repeated shrink cycles, pre-size
+    the log for peak work and define sensible growth increments. For the ETL, use durable batch
+    identifiers, staging, validation and restartable commits; choose batch size with atomicity and
+    recovery requirements in mind. Evaluate bulk minimal-logging prerequisites instead of assuming
+    BULK INSERT is minimally logged. Build a full, differential and log restore sequence and run a
+    timed restore drill, including validation of imported data and backup key access.
+  red_flags:
+    - Switching recovery model or shrinking the log without a recovery-policy decision.
+    - Assuming a full backup truncates the log under FULL recovery.
+    - Re-running a partially applied import without idempotency or a batch ledger.
+    - Declaring backups healthy without restoring them.
+- id: mssql-scn-004
+  title: tempdb and CPU pressure after adding a reporting workload
+  technologies: [sql-server]
+  difficulty: advanced
+  prompt: |
+    A reporting release increased CPU use and tempdb growth. Some queries show hash spills,
+    and administrators see `CXPACKET`, `RESOURCE_SEMAPHORE` and `PAGELATCH_*` waits in lifetime
+    totals. Someone proposes adding twelve tempdb files and raising the instance MAXDOP.
+  approach: |
+    Take interval wait deltas and establish whether current requests are CPU-bound, grant-bound,
+    allocation-contended or simply parallel. Use Query Store to find regressed statements and
+    actual plans to inspect cardinality errors, memory grants, spills and parallel skew. Review
+    tempdb allocation categories through `sys.dm_db_file_space_usage` and per-session/task space
+    usage. Distinguish PFS/GAM/SGAM allocation contention from data-page I/O or ordinary latch
+    activity. Sample `sys.dm_io_virtual_file_stats` to assess file latency. Correct query shape,
+    estimates or indexes first; tune file count and MAXDOP based on evidence, CPU topology and
+    concurrency. Recheck with a comparable workload interval.
+  red_flags:
+    - Treating lifetime wait totals as proof of a current bottleneck.
+    - Adding files or changing MAXDOP based only on a wait name.
+    - Raising global memory limits without considering concurrent grants and OS headroom.
+    - Assuming every spill is fixed by more tempdb capacity rather than better estimates.
+- id: mssql-scn-005
+  title: A monthly retention window must be purged without a long delete
+  technologies: [sql-server]
+  difficulty: advanced
+  prompt: |
+    A 4-TB fact table receives monthly batches and retains 24 months. The current retention job
+    deletes a month's rows in one transaction, causing log growth, blocking and a long rollback
+    after a cancellation. Queries filter by event date, but some also enforce uniqueness on an
+    event identifier that excludes the date. The team wants to partition by month and use SWITCH.
+  approach: |
+    Confirm retention, query and uniqueness semantics before redesign. Choose a date partition
+    function and boundary convention, ensure predicates can support elimination, and review whether
+    unique indexes must include the partition key. Design aligned indexes and identical staging
+    table constraints so `ALTER TABLE ... SWITCH` is legal. Build the next partition boundary in
+    advance, load and validate the staging range, then switch in a controlled window. Test the
+    exact switch and rollback sequence on a production-like copy. If uniqueness across all dates
+    cannot include the partition key, retain a separate unique structure or reconsider the design.
+    Compare storage/compression and statistics behavior, and monitor Query Store plans after rollout.
+  red_flags:
+    - Claiming partitioning will accelerate every query automatically.
+    - Ignoring the uniqueness constraint conflict with partition-aligned indexes.
+    - Assuming SWITCH works across mismatched indexes, constraints or filegroups.
+    - Dropping old partitions before validating the replacement load and recovery path.
+- id: mssql-scn-006
+  title: CDC consumer resumes after exceeding capture retention
+  technologies: [sql-server]
+  difficulty: advanced
+  prompt: |
+    A downstream warehouse consumer was offline for four days. When it resumes, its saved CDC
+    LSN is older than the minimum LSN available in the capture instance because cleanup removed
+    old change rows. The consumer usually writes warehouse rows and advances its watermark in
+    separate transactions. The team asks whether it can continue from the current minimum LSN.
+  approach: |
+    Do not silently advance past unavailable changes. Inspect CDC capture and cleanup job health,
+    retention configuration, capture latency and the consumer's saved LSN. If the watermark is
+    below the valid range, reinitialize from a consistent source snapshot and establish a new
+    starting LSN, with reconciliation to prevent gaps. Make apply operations idempotent and commit
+    target changes with the watermark atomically when possible; otherwise use a durable staging
+    ledger and replay-safe process. Monitor end-to-end lag and alert before the consumer approaches
+    retention. If long offline recovery is a requirement, increase retention with storage impact
+    assessed or retain changes in a durable downstream log. CDC is not indefinite audit storage.
+  red_flags:
+    - Skipping from the stale LSN to the minimum available LSN and declaring the load complete.
+    - Advancing the watermark before target changes commit.
+    - Treating CDC cleanup retention as a guarantee of permanent history.
+    - Reinitializing without a consistent snapshot boundary or reconciliation.

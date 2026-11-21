@@ -1,0 +1,297 @@
+- id: mssql-basic-001
+  topic: storage engine
+  difficulty: beginner
+  question: What are SQL Server pages and extents?
+  answer: |
+    A page is the basic data I/O unit and is 8 KB. An extent groups eight pages, or 64 KB.
+    Tables and indexes allocate pages through structures such as PFS, GAM and IAM. A page
+    has a header, records and a slot array. Extents describe allocation; they do not guarantee
+    that query results or records are read in a particular logical order.
+    
+    A page is identified within a database file and has a fixed 8-KB size, so page density affects both I/O and buffer-pool footprint. The slot array at the end of a page maps row slots to record offsets, allowing records to move within that page without changing slot identifiers. PFS, GAM, SGAM and IAM track allocation and free-space metadata; they are not row lookup indexes. `sys.dm_db_database_page_allocations` can help investigate allocation for a specific object, but page-level inspection is a targeted diagnostic, not routine tuning. For query behavior, start with the plan and logical reads.
+  tags: [pages, extents, storage]
+- id: mssql-basic-002
+  topic: storage engine
+  difficulty: beginner
+  question: How does a clustered index differ from a nonclustered index?
+  answer: |
+    A clustered index's B-tree leaf level contains the table rows, so it defines the rowstore's
+    logical key order. A nonclustered index is a separate B-tree whose leaf includes its key,
+    optional included columns and a row locator. On a clustered table that locator is the
+    clustered key; on a heap it is a RID. A table has at most one clustered index.
+    
+    The clustered key also acts as the row locator in nonclustered indexes, so a wide key can multiply storage and write cost across the index set. A clustered index does not promise physical contiguity on disk or sorted results without `ORDER BY`; it defines B-tree key order. A heap can be appropriate for some staging patterns, but forwarding records after updates that enlarge rows and RID lookups can affect access. Compare lookup count and writes before changing a table's organization.
+  tags: [clustered-index, nonclustered-index]
+- id: mssql-basic-003
+  topic: T-SQL
+  difficulty: beginner
+  question: Why should TOP queries include ORDER BY?
+  answer: |
+    `TOP` limits the number of rows but does not define which rows qualify unless an ordering
+    is specified. Even an order can be nondeterministic when its values tie, so add a unique
+    tiebreaker to make pagination and repeated processing stable. `TOP` in DML likewise does
+    not impose an order on the affected rows without an ordered key-selection subquery.
+    
+    For example, `ORDER BY created_at DESC, order_id DESC` gives a stable order when `order_id` is unique, while ordering only by a timestamp leaves ties ambiguous. This matters for top-N reports, queue claiming and pagination. In DML, select the intended key set in an ordered subquery or CTE and then update/delete those keys; do not assume the engine modifies rows in that order. The optimizer may choose a different physical plan as indexes or statistics change.
+  tags: [top, ordering]
+- id: mssql-basic-004
+  topic: T-SQL
+  difficulty: beginner
+  question: What is the difference between OFFSET/FETCH and keyset pagination?
+  answer: |
+    `OFFSET ... FETCH` skips a requested number of ordered rows and is convenient for shallow
+    pages, but deep offsets can require reading and discarding many rows. Keyset pagination
+    remembers the last key and seeks to rows after it, often using a matching index. Include a
+    unique tie-breaker in either ordering to avoid ambiguous boundaries.
+    
+    For descending ordering by `(created_at, order_id)`, keyset filtering must compare both columns lexicographically, for example earlier timestamps or the same timestamp with a smaller ID. The supporting index should align with the filter and order. Keyset navigation is efficient and typically avoids offset drift from concurrent inserts, but it does not provide a frozen multi-page snapshot; updates to sort keys can still move rows. Select an isolation and consistency contract that matches the user experience.
+  tags: [pagination, offset-fetch]
+- id: mssql-basic-005
+  topic: T-SQL
+  difficulty: intermediate
+  question: When would you use CROSS APPLY versus OUTER APPLY?
+  answer: |
+    APPLY evaluates a right-side table expression for each row on the left. `CROSS APPLY`
+    removes left rows when the expression returns nothing; `OUTER APPLY` preserves them with
+    null right-side values. It works well for correlated top-N seeks or table-valued functions.
+    It is not automatically faster than a join; inspect the plan and repeated execution counts.
+    
+    `OUTER APPLY` is especially useful when a customer with no matching order must remain in the output, whereas `CROSS APPLY` has inner-join-like row elimination. A correlated `TOP (1)` lookup needs a deterministic `ORDER BY`, including a unique tiebreaker, or the selected row may vary. An index such as `(customer_id, order_ts DESC, order_id DESC)` can support the seek. For a large outer input, compare repeated seeks with a ranking-based set query using actual rows and reads.
+  tags: [apply, joins]
+- id: mssql-basic-006
+  topic: T-SQL
+  difficulty: beginner
+  question: What does TRY_CAST do, and what risk does it introduce?
+  answer: |
+    `TRY_CAST(expression AS type)` returns the converted value or NULL for many conversion
+    failures, rather than raising the conversion error that `CAST` raises. It is useful for
+    messy staging data, but failed values can be confused with genuine missing values. Count
+    and quarantine conversion failures explicitly instead of silently accepting null output.
+    
+    A practical staging check separates source nulls from invalid non-null strings: count rows where the raw value is non-null but `TRY_CONVERT` returns null, then retain those rows in a reject table with batch and source metadata. Conversion styles and locale-sensitive date formats deserve particular care; use explicit styles or ISO-compatible inputs. A predicate that converts an indexed column row by row can be expensive, so normalize types at ingestion and keep comparisons type-compatible.
+  tags: [try-cast, data-quality]
+- id: mssql-basic-007
+  topic: T-SQL
+  difficulty: intermediate
+  question: What is a major correctness concern when using MERGE for an upsert?
+  answer: |
+    The source must not contain multiple rows matching one target row, and the target should
+    enforce uniqueness on the match key. Concurrent sessions can both observe a missing row
+    unless the operation has appropriate locking and constraints. `MERGE` also has a history
+    of version-specific edge cases; test the exact trigger, concurrency and isolation pattern.
+    Explicit update/insert logic may be easier to reason about.
+    
+    A unique constraint is the final integrity guard even when application logic checks for absence. If separate update and insert statements are used, concurrent writers still need a transaction and suitable locking or retry strategy to close the race. With `MERGE`, test duplicate source keys, triggers, deletes, constraints and concurrent sessions on the exact SQL Server build. The `OUTPUT` clause can record affected keys for reconciliation. Explain the invariant first, then defend the syntax choice.
+  tags: [merge, concurrency]
+- id: mssql-basic-008
+  topic: indexing
+  difficulty: beginner
+  question: What are included columns in a nonclustered index for?
+  answer: |
+    `INCLUDE` places non-key columns at the nonclustered index leaf so a query can return them
+    without a key lookup. Included columns do not provide seek ordering or key navigation.
+    They still consume page space and add insert/update maintenance, so include only the payload
+    that removes meaningful lookup work for important queries.
+    
+    For example, an index on `(customer_id, order_date)` with `INCLUDE (status, total_amount)` may cover a query that filters by customer and date range and returns those two attributes. The includes do not help a predicate seek on `status`, and changes to included values still maintain the index. Check the actual plan for key lookup executions and compare read savings against added storage and write cost. Keeping the key narrow also improves upper B-tree levels and cache efficiency.
+  tags: [included-columns, covering-index]
+- id: mssql-basic-009
+  topic: indexing
+  difficulty: intermediate
+  question: When is a filtered index useful, and what can prevent its use?
+  answer: |
+    A filtered index stores a subset such as rows where `status = 'open'`, reducing size and
+    maintenance when that subset is queried frequently. The query predicate must be provably
+    compatible with the filter. A reusable parameterised plan may not be able to assume the
+    parameter matches the filter. Test the actual application query and parameterization.
+    
+    Filtered indexes are particularly effective when the indexed subset is small and relatively stable, such as unprocessed queue rows. A predicate like `WHERE processed_at IS NULL` can keep the structure focused. SQL Server must prove the query implies the filter; parameter sniffing and parameterization can prevent that proof for a reusable plan. Use an actual parameterized application query to validate eligibility, and ensure statistics and constraints reflect the real predicate semantics.
+  tags: [filtered-index, predicates]
+- id: mssql-basic-010
+  topic: indexing
+  difficulty: intermediate
+  question: What workload is columnstore designed to accelerate?
+  answer: |
+    Columnstore stores values by column in compressed rowgroups and can process batches of rows,
+    making large scans and aggregations over fact tables efficient. Segment min/max metadata
+    enables elimination when data is ordered usefully. Small selective point lookups and frequent
+    single-row changes may fit rowstore better. A clustered columnstore is the table's primary
+    storage; a nonclustered columnstore adds an analytical structure to rowstore data.
+    
+    Batch mode reduces per-row operator overhead, and columnstore compression can reduce I/O and improve memory residency for analytic scans. Segment elimination is strongest when load order keeps value ranges compact; overlapping min/max ranges can force many segments to be read. Inspect rowgroup state and sizes with `sys.dm_db_column_store_row_group_physical_stats`, and test the production aggregation and selective lookup workload together. A hybrid rowstore index may help selective queries but increases maintenance.
+  tags: [columnstore, analytics]
+- id: mssql-basic-011
+  topic: query optimisation
+  difficulty: beginner
+  question: What does a SQL Server execution plan show?
+  answer: |
+    A plan describes physical operators and data flow chosen to execute a statement, including
+    access methods, joins, sorts and exchanges. An estimated plan contains compile-time estimates;
+    an actual plan adds runtime row counts and other execution data. Compare estimated and actual
+    rows at the earliest large divergence, then inspect reads, spills and waits rather than
+    labeling an operator type good or bad by itself.
+    
+    A plan is a tree/graph of physical operators with estimated costs, cardinalities and properties; execution proceeds according to data flow, not the visual left-to-right reading order. Actual plans add runtime row counts and warnings such as spills, but collection adds overhead and plans may include sensitive parameter values. The first large estimated/actual row mismatch is often more informative than the operator with the largest displayed cost. Correlate plan evidence with `STATISTICS IO/TIME` and Query Store history.
+  tags: [execution-plan, optimiser]
+- id: mssql-basic-012
+  topic: query optimisation
+  difficulty: intermediate
+  question: What is parameter sniffing?
+  answer: |
+    SQL Server can compile a parameterized query using the initial parameter value and reuse
+    that plan for later values. If the data distribution is skewed, the plan appropriate for a
+    rare value may be poor for a very common one, or vice versa. Query Store and representative
+    executions help identify this. Remedies include PSP optimization where available, recompilation
+    or separate query paths, each with compile and stability trade-offs.
+    
+    The first parameter's plan can be excellent for a selective value and poor for a common one because seeks with loops, scans with hashes and memory grants have different cardinality needs. The issue is often parameter sensitivity, not a broken optimizer. Use Query Store and representative executions to establish the skew and regression. SQL Server 2022 PSP optimization can provide variants for eligible predicates at a suitable compatibility level; verify it is active. Recompile, dynamic SQL or targeted hints each trade compile cost, reuse and stability differently.
+  tags: [parameter-sniffing, plans]
+- id: mssql-basic-013
+  topic: query optimisation
+  difficulty: intermediate
+  question: How can stale or inaccurate statistics harm a query?
+  answer: |
+    Statistics describe distributions and help estimate how many rows predicates and joins will
+    produce. An inaccurate estimate can change join order, join algorithm, memory grant and
+    parallelism decisions. Inspect actual versus estimated rows and statistics metadata before
+    updating statistics. Correlated columns and skew can remain difficult even with fresh
+    single-column statistics.
+    
+    Inspect `sys.dm_db_stats_properties` for last update, sampled rows and modification counts, and inspect histograms through `DBCC SHOW_STATISTICS` when appropriate. Statistics can be fresh yet insufficient: a single-column histogram cannot fully describe correlation between columns, and sampled statistics may miss rare values. Update only statistics plausibly related to the estimate error, then compare actual plans and workload metrics. Rebuilding an index refreshes its index statistics but does not automatically refresh every column statistic in the database.
+  tags: [statistics, cardinality]
+- id: mssql-basic-014
+  topic: transactions
+  difficulty: beginner
+  question: What is the difference between blocking and a deadlock?
+  answer: |
+    Blocking is one session waiting for a lock held by another. It can be expected and may end
+    when the transaction commits. A deadlock is a cycle of sessions waiting on each other; SQL
+    Server detects the cycle and chooses a victim to roll back. Find the head blocker for blocking
+    and inspect a deadlock graph for a cycle and resource acquisition order.
+    
+    A blocking chain can have many downstream sessions, but the head blocker may be idle with an open transaction and therefore absent from the active-request list. Check `sys.dm_exec_requests`, sessions, transaction metadata and locks; do not kill a visible waiter before locating the owner. A deadlock graph from Extended Events identifies the cycle, statements, resources and victim. Prevent recurring cycles with consistent access order, shorter transactions and suitable indexes, and retry the whole transaction only when safe.
+  tags: [blocking, deadlocks]
+- id: mssql-basic-015
+  topic: transactions
+  difficulty: intermediate
+  question: How does READ_COMMITTED_SNAPSHOT change read committed behavior?
+  answer: |
+    With `READ_COMMITTED_SNAPSHOT` enabled at database level, each statement under read committed
+    reads a row-versioned snapshot rather than taking shared data locks for ordinary reads.
+    This reduces reader-writer blocking, but writers still lock one another and version storage
+    must be maintained. Long readers can retain versions. It is a database configuration change
+    that should be tested with the application's isolation assumptions.
+    
+    RCSI changes the read committed implementation at database level; readers generally consume committed row versions and avoid shared data-lock waits, but schema stability locks and writer-writer blocking still exist. Each statement sees its own snapshot, so successive reads in one transaction can observe different committed states. Estimate version-store capacity, find long readers, review code relying on blocking for coordination, and test rollout behavior. The option is not equivalent to `NOLOCK`, which can return uncommitted or inconsistent results.
+  tags: [rcsi, row-versioning]
+- id: mssql-basic-016
+  topic: transactions
+  difficulty: intermediate
+  question: How do SNAPSHOT and SERIALIZABLE differ?
+  answer: |
+    SNAPSHOT reads a transaction-level versioned view and can reject a write with an update
+    conflict if another transaction changed the row. SERIALIZABLE uses locks and key-range locks
+    to prevent phantoms and can cause substantial blocking. They provide different concurrency
+    mechanisms and guarantees; choose based on acceptable anomalies and test version-store or
+    locking costs under realistic duration and load.
+    
+    Snapshot uses row versions and transaction-level visibility, and a concurrent update can cause an update conflict that application code must handle. Serializable uses locking, including key-range locks when needed, to prevent qualifying inserts and phantoms until transaction completion. It can sharply increase blocking and deadlock risk if ranges are broad. Demonstrate the required invariant, then test concurrency with realistic duration and indexes. Monitor version retention for snapshot and lock waits for serializable rather than treating either level as a free performance switch.
+  tags: [snapshot, serializable, isolation]
+- id: mssql-basic-017
+  topic: tempdb
+  difficulty: beginner
+  question: What uses tempdb?
+  answer: |
+    `tempdb` holds temporary tables and table variables, internal worktables for sorts, hashes
+    and spools, and row-versioning data for snapshot-based isolation. It is recreated at startup
+    and shared by the instance. A tempdb problem can therefore be caused by user objects, query
+    spills, version retention or allocation contention; examine the relevant usage DMVs first.
+    
+    A sort or hash spill can consume internal tempdb objects, while a long snapshot reader can retain versions and explicit temp tables consume user-object space. Distinguish these with `sys.dm_db_file_space_usage`, session/task space DMVs, actual plan warnings and transaction state. On ADR-enabled databases, ADR versions use a persistent version store associated with the user database, so tempdb is not the only version-storage location. File sizing helps capacity but does not fix a query producing excessive spill work.
+  tags: [tempdb, worktables]
+- id: mssql-basic-018
+  topic: performance
+  difficulty: intermediate
+  question: Why must wait statistics be interpreted over an interval?
+  answer: |
+    `sys.dm_os_wait_stats` contains cumulative wait totals that often span the server's uptime.
+    A large historical wait may not be occurring now. Capture two samples across a representative
+    workload window, compare deltas, filter benign waits appropriately and correlate with active
+    requests, Query Store, CPU and I/O evidence. Wait names are clues, not diagnoses.
+    
+    For each wait type, subtract `waiting_tasks_count`, `wait_time_ms` and `signal_wait_time_ms` between samples; interpret the interval alongside uptime and workload. A large lifetime `CXPACKET` total may simply reflect healthy parallel query work. Query Store helps attribute regressions to query and plan, while active-request DMVs show current waits and blockers. Keep raw snapshots and document any benign-wait filter so trend comparisons remain auditable. Avoid resetting the production counters as a substitute for taking a baseline.
+  tags: [wait-stats, diagnostics]
+- id: mssql-basic-019
+  topic: maintenance
+  difficulty: intermediate
+  question: How does index reorganize differ from rebuild?
+  answer: |
+    Reorganize incrementally defragments leaf pages and is an online operation, but cannot change
+    fill factor and does not have every rebuild effect. Rebuild recreates the index, may change
+    compression/fill factor and updates that index's statistics, but can consume significant
+    CPU, I/O, log and space. Neither should be run mechanically without assessing workload impact.
+    
+    A rebuild may require substantial transaction-log capacity and can introduce blocking or resource pressure; online availability depends on version, edition and index type, and brief schema locks may still occur. Reorganize is incremental and can be stopped and resumed operationally, but it does not refresh statistics. Evaluate table size, range-scan workload, density and fragmentation together with `sys.dm_db_index_physical_stats`. A maintenance job should skip low-impact structures and have a defined resource and failure policy.
+  tags: [index-maintenance, rebuild, reorganize]
+- id: mssql-basic-020
+  topic: partitioning
+  difficulty: intermediate
+  question: Does partitioning automatically make a query faster?
+  answer: |
+    No. Partitioning can help when predicates enable partition elimination or when lifecycle
+    operations such as switching out an old range matter. A query that touches every partition
+    may not improve. Partition boundaries, aligned indexes and unique-key requirements must be
+    designed carefully, and the actual execution plan should confirm elimination.
+    
+    Partitioning is most compelling for rolling retention, partition-level loading and switching, or queries whose predicates eliminate ranges. Validate the scheme, boundary values, aligned indexes and unique-key consequences before deployment. A query using a function on the partition key may lose elimination; half-open ranges with matching parameter types are safer. Inspect the actual plan to confirm accessed partitions and compare logical reads. Partitioning may add administrative complexity without performance gains when the workload scans all ranges.
+  tags: [partitioning, elimination]
+- id: mssql-basic-021
+  topic: backup and recovery
+  difficulty: beginner
+  question: What is the practical difference between FULL and SIMPLE recovery models?
+  answer: |
+    FULL recovery supports log backups and point-in-time recovery when the full log chain is
+    maintained. The log needs regular backups and can remain large if reuse is blocked. SIMPLE
+    allows log truncation after checkpoints but does not support log backups or point-in-time
+    recovery. The choice should follow the required recovery point objective, not just disk concerns.
+    
+    Under FULL recovery, take an initial full backup to establish the chain and schedule log backups frequently enough for the RPO; log reuse can still be blocked by an active transaction, replica or other cause. Restore full, optional differential and every required subsequent log in sequence, with `NORECOVERY` until the final restore. SIMPLE can still use full and differential backups, but cannot restore to an arbitrary time between them. Select the model based on tested recovery requirements and operational capacity.
+  tags: [recovery-model, backups]
+- id: mssql-basic-022
+  topic: high availability
+  difficulty: intermediate
+  question: Why is an availability group not a substitute for backups?
+  answer: |
+    An availability group can replicate a mistaken delete, logical corruption or unwanted schema
+    change to another replica. It primarily supports availability and failover, not recovery to
+    arbitrary earlier state. Independent backups allow restore to a point before the error. Test
+    both failover and restore procedures and verify their RPO/RTO.
+    
+    A replica provides a failover copy, not a historical clean point. It may replay accidental DML, malicious changes, application bugs or logical corruption, and retention on replicas does not replace independent recovery media. Preserve backups outside the primary failure domain, protect encryption keys, and regularly restore to an isolated environment. Test availability-group failover separately from point-in-time restore: they address different outage and data-loss scenarios and have different RPO/RTO characteristics. A documented restore drill should also name its owner and test interval.
+  tags: [availability-groups, backups]
+- id: mssql-basic-023
+  topic: security
+  difficulty: beginner
+  question: How do logins and database users differ?
+  answer: |
+    A login is an instance-level principal that can authenticate to SQL Server. A database user
+    is a database-level principal with permissions in that database and may map to a login.
+    Permissions should usually be granted through narrowly scoped database roles. Managed
+    identities, contained users and service-specific Azure SQL authentication have different
+    details that must be checked for the deployment.
+    
+    The login authenticates at the instance boundary; a mapped database user is authorized within a database. A contained user can authenticate without the same server-login mapping in supported scenarios. Orphaned users can occur after restore or migration if the SID mapping differs. Use database roles with least privilege and audit effective membership; do not give service accounts `sysadmin` merely to avoid permission analysis. Managed identity and Entra behavior varies across Azure SQL offerings, so verify the exact service.
+  tags: [logins, users, permissions]
+- id: mssql-basic-024
+  topic: data integration
+  difficulty: intermediate
+  question: How does Change Tracking differ from CDC?
+  answer: |
+    Change Tracking indicates which keys changed so a consumer can read current row state; it
+    does not retain every intermediate value. CDC asynchronously captures change rows with
+    operation metadata in change tables, adding storage and capture-job monitoring. Both have
+    retention and watermark concerns. Choose based on whether the consumer needs changed keys or
+    a captured change stream, and plan reinitialization and retries.
+    
+    Change Tracking returns changed keys and metadata so consumers can query current rows; intermediate updates are not retained as a full event history. CDC asynchronously stores captured change rows with operation metadata and has capture/cleanup jobs and storage requirements. Both have retention windows and consumers must validate their saved version or LSN before resuming. If data has aged out, reinitialize from a consistent snapshot. For durable domain events atomically coupled to writes, consider an outbox rather than treating either feature as an immutable audit log.
+  tags: [change-tracking, cdc]

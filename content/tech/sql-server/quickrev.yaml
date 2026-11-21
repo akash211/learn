@@ -1,0 +1,86 @@
+concepts:
+  - title: Page and extent
+    detail: A SQL Server page is 8 KB; an extent is eight pages (64 KB). Allocation maps such as PFS, GAM and IAM track free space and ownership.
+  - title: Clustered rowstore
+    detail: The clustered B-tree leaf contains table rows. Its key is the row locator carried by nonclustered indexes, so a wide key multiplies storage cost.
+  - title: Heap locator
+    detail: A nonclustered index on a heap points to a RID (file, page, slot); on a clustered table it points to the clustered key.
+  - title: Buffer pool and WAL
+    detail: Dirty data pages may be written later, but write-ahead logging requires the corresponding log records to be hardened first for durability.
+  - title: Key columns and INCLUDE
+    detail: Nonclustered key columns define navigation/order; included columns cover output at the leaf but still consume storage and write work.
+  - title: Filtered index
+    detail: A filtered index stores only rows meeting its predicate; the optimiser must be able to prove a query predicate is compatible, which parameterization can complicate.
+  - title: Columnstore rowgroups
+    detail: Columnstore groups compressed values by column; segment metadata enables elimination and batch mode helps analytic scans and aggregates.
+  - title: Statistics histogram
+    detail: SQL Server statistics describe distributions, especially through a histogram on the leading statistics column. Estimates drive join, grant and parallelism choices.
+  - title: Parameter sniffing
+    detail: A cached plan compiled using one parameter may be poor for a different value when the data is skewed. Query Store and representative parameters reveal the mismatch.
+  - title: Query Store
+    detail: Query Store preserves query, plan and runtime history beyond an individual cached plan. It helps diagnose regressions and can force plans or apply supported hints.
+  - title: Read committed snapshot
+    detail: READ_COMMITTED_SNAPSHOT makes read committed statements use row versions rather than ordinary shared data locks; it shifts cost to version storage and cleanup.
+  - title: Lock escalation
+    detail: SQL Server may replace many fine-grained locks with a broader lock. Investigate the workload and lock footprint before disabling escalation.
+  - title: tempdb roles
+    detail: tempdb holds temporary objects, worktables, spills and traditional row-versioning data. Allocation pressure and query-generated space usage are separate issues.
+  - title: Wait-stat deltas
+    detail: sys.dm_os_wait_stats is cumulative and reset-prone. Compare interval deltas and correlate waits with requests, plans, CPU and file latency.
+  - title: Recovery chain
+    detail: FULL recovery enables point-in-time restore only when a usable full base and uninterrupted sequence of log backups are available.
+  - title: CDC watermark
+    detail: A CDC consumer advances an LSN only after applying changes; if its saved LSN is older than the minimum retained LSN, reinitialize from a consistent snapshot.
+traps:
+  - Assuming TOP or a page's physical order makes query output deterministic without ORDER BY and a unique tie-breaker.
+  - Treating a seek as automatically better than a scan; a seek plus many key lookups can do more work.
+  - Using NOLOCK to eliminate blocking while ignoring dirty, missing or duplicated reads and schema locks.
+  - Treating every CXPACKET, CXCONSUMER or PAGEIOLATCH wait as proof of one specific hardware defect.
+  - Assuming FULL recovery truncates the log without log backups or that DBCC SHRINKFILE is a sustainable log policy.
+  - Treating availability-group replicas as protection against logical errors instead of maintaining independent backups.
+advanced:
+  - SQL Server 2022 PSP optimization can create plan variants for qualifying parameter-sensitive predicates; verify compatibility level, eligibility and actual dispatcher variants.
+  - RCSI is statement-level consistency; SNAPSHOT provides transaction-level versioned reads and can produce update conflicts.
+  - A rebuild updates that index's statistics, not necessarily all column statistics, and can consume substantial log, CPU, I/O and space.
+  - Query Store hints and plan forcing are useful mitigations but should be monitored for forcing failures and revisited after root-cause changes.
+  - CDC reads the transaction log asynchronously; monitor capture latency and retention, and reinitialize when a consumer watermark is no longer valid.
+  - TDE encrypts data files and backups at rest; Always Encrypted moves selected-value cryptographic operations to a trusted client and changes query capabilities.
+comparisons:
+  - a: Clustered index
+    b: Nonclustered index
+    difference: Clustered leaf holds table rows; nonclustered leaf holds keys, optional included payload and a row locator.
+  - a: INCLUDE column
+    b: Index key column
+    difference: INCLUDE covers output at the leaf but cannot drive seek/order navigation; key columns shape B-tree ordering and navigation.
+  - a: READ_COMMITTED_SNAPSHOT
+    b: SNAPSHOT
+    difference: RCSI gives each statement a row-versioned snapshot; SNAPSHOT gives a transaction-level view and can detect update conflicts.
+  - a: Reorganize
+    b: Rebuild
+    difference: Reorganize incrementally defragments leaf pages; rebuild recreates the index and can change fill factor/compression, at greater resource cost.
+  - a: Change Tracking
+    b: CDC
+    difference: Change Tracking signals changed keys for rereading current state; CDC stores captured change rows and operation metadata with retention/job overhead.
+  - a: TDE
+    b: Always Encrypted
+    difference: TDE protects files/backups at rest while the engine sees plaintext; Always Encrypted keeps selected values encrypted from the engine using client-side keys.
+  - a: Synchronous AG commit
+    b: Asynchronous AG commit
+    difference: Synchronous waits for secondary log hardening and can reduce failover data loss at latency cost; asynchronous avoids commit wait but forced failover may lose recent data.
+commands:
+  - label: Find current blocked requests and their SQL
+    code: SELECT session_id, blocking_session_id, wait_type, wait_resource, wait_time FROM sys.dm_exec_requests WHERE blocking_session_id <> 0;
+  - label: Inspect database recovery model and log reuse reason
+    code: SELECT name, recovery_model_desc, log_reuse_wait_desc FROM sys.databases;
+  - label: Check per-file I/O counters for interval sampling
+    code: SELECT DB_NAME(v.database_id) AS database_name, f.name, v.num_of_reads, v.io_stall_read_ms, v.num_of_writes, v.io_stall_write_ms FROM sys.dm_io_virtual_file_stats(NULL, NULL) AS v JOIN sys.master_files AS f ON v.database_id = f.database_id AND v.file_id = f.file_id;
+  - label: Check statistics update metadata
+    code: SELECT s.name, p.last_updated, p.rows, p.rows_sampled FROM sys.stats AS s OUTER APPLY sys.dm_db_stats_properties(s.object_id, s.stats_id) AS p WHERE s.object_id = OBJECT_ID(N'dbo.orders');
+  - label: Capture logical reads and elapsed/CPU time
+    code: SET STATISTICS IO, TIME ON;
+  - label: Review index usage counters
+    code: SELECT OBJECT_NAME(s.object_id) AS table_name, i.name, s.user_seeks, s.user_scans, s.user_lookups, s.user_updates FROM sys.dm_db_index_usage_stats AS s JOIN sys.indexes AS i ON s.object_id = i.object_id AND s.index_id = i.index_id WHERE s.database_id = DB_ID();
+  - label: Show current tempdb allocation categories
+    code: SELECT SUM(user_object_reserved_page_count) * 8 AS user_object_kb, SUM(internal_object_reserved_page_count) * 8 AS internal_object_kb, SUM(version_store_reserved_page_count) * 8 AS version_store_kb FROM tempdb.sys.dm_db_file_space_usage;
+  - label: Compare estimated and actual plan with runtime statistics
+    code: SET STATISTICS XML ON; -- Execute the target statement, then turn the option off.

@@ -1,0 +1,234 @@
+- id: rust-recent-001
+  topic: editions
+  difficulty: intermediate
+  period: 2024-2026
+  type: representative
+  question: What changed in the Rust 2024 edition, and how should a team upgrade?
+  answer: 'Rust 2024 is an edition, not a new compiler release or a separate language; crates from different
+    editions can interoperate. It makes several previously opt-in migration lints part of the edition
+    transition and changes some semantics, including the default lifetime capture rules for return-position
+    `impl Trait` in free functions. The migration should be deliberate: upgrade the toolchain, run `cargo
+    fix --edition`, inspect every change, format, test all workspace members and feature sets, then update
+    the manifest''s `edition`. Check public APIs whose opaque return types expose lifetimes, macro behavior,
+    unsafe code, and lint suppressions. Do not assume the automated fixer understands project intent.
+    Review the edition guide and migration diff as source changes; changing editions does not automatically
+    update dependencies or the compiler. Test public crates as downstream users do.'
+  tags:
+  - edition-2024
+  - migration
+  - compatibility
+- id: rust-recent-002
+  topic: async
+  difficulty: advanced
+  period: 2024-2026
+  type: representative
+  question: How does Rust 2024's return-position `impl Trait` lifetime capture behavior affect async APIs?
+  answer: An `async fn` returns an opaque future type that captures the inputs needed when it is polled.
+    Rust 2024 broadens precise default capture behavior for return-position `impl Trait` in free functions,
+    including lifetimes that are in scope, which can affect whether the opaque type is considered to borrow
+    from an input. This matters for callers that want to move the returned future or use it in a `'static`
+    task. The `use<...>` precise capture bound can state which generic parameters an opaque return type
+    captures. Review compiler diagnostics and API behavior during edition migration; do not add `'static`
+    bounds reflexively, because they can unnecessarily exclude borrowing implementations. Check the intended
+    spawning pattern with compiler diagnostics and API tests. A future that borrows input can still work
+    well when it is awaited within the owner’s scope.
+  tags:
+  - async
+  - lifetimes
+  - edition-2024
+- id: rust-recent-003
+  topic: unsafe
+  difficulty: advanced
+  period: 2024-2026
+  type: representative
+  question: Why does Rust 2024 require `unsafe` on an `extern` block, and what does that clarify?
+  answer: 'Foreign function declarations make assumptions the compiler cannot validate: a declared symbol
+    must exist and have the stated ABI and signature. Rust 2024 requires `unsafe extern { ... }`, making
+    that trust boundary explicit. Individual items may be marked `safe` only when calling them is sound
+    for every safe caller under the declared contract; otherwise callers need an unsafe block. This separates
+    the unsafety of asserting a foreign declaration from the safety contract of each function. Edition
+    migration tools can help add the block, but maintainers should verify ABI, pointer, ownership, and
+    thread-safety assumptions. The syntax does not itself make the foreign implementation safe. The unsafe
+    extern block records the declaration author’s responsibility; each item’s safety marking states caller
+    obligations. Audit both instead of treating syntax as verification.'
+  tags:
+  - unsafe
+  - ffi
+  - edition-2024
+- id: rust-recent-004
+  topic: cargo-and-toolchains
+  difficulty: intermediate
+  period: 2024-2026
+  type: representative
+  question: How should a team define a reproducible Rust build in CI?
+  answer: "Commit the lockfile for applications and workspaces, pin or centrally manage the Rust toolchain,\
+    \ and use locked Cargo commands so CI fails rather than silently rewriting dependency resolution.\
+    \ Record target triples and required native toolchains, and test the feature combinations that ship.\
+    \ `cargo metadata --locked` can validate manifest and lockfile consistency; `cargo build --locked`\
+    \ and `cargo test --locked` enforce the lockfile during builds. Reproducibility also requires controlled\
+    \ environment variables, build scripts, generated inputs, and external C libraries. A lockfile alone\
+    \ does not promise bit-for-bit identical artifacts. Review dependency updates and preserve the compiler\
+    \ version and target in build provenance.\n Rebuilds should fail clearly when the committed resolution\
+    \ is incomplete. Cache keys should include toolchain, target, features, and relevant environment.\
+    \ Otherwise CI may reuse artifacts built under incompatible assumptions and undermine confidence in\
+    \ results."
+  tags:
+  - cargo
+  - ci
+  - reproducibility
+- id: rust-recent-005
+  topic: dependency-security
+  difficulty: advanced
+  period: 2024-2026
+  type: representative
+  question: How do you evaluate a new crate added to a production Rust service?
+  answer: "Check whether the crate is maintained, whether its API and release history fit the system's\
+    \ needs, and what transitive dependencies and features it introduces. Review license compatibility,\
+    \ security advisories, minimum supported Rust version, platform support, and whether build scripts\
+    \ or procedural macros execute during compilation. Inspect `cargo tree -e features` and avoid enabling\
+    \ broad defaults when only a small capability is needed. Consider whether the dependency is on a critical\
+    \ path and how quickly updates can be deployed. Automated scanners provide useful signals, not a complete\
+    \ audit; a low dependency count alone does not establish security or quality.\n Record the review\
+    \ and pin versions through the normal update process. Review source and build-time behavior when risk\
+    \ warrants it. Update cadence and a documented owner are more useful signals than popularity alone."
+  tags:
+  - dependencies
+  - supply-chain
+  - security
+- id: rust-recent-006
+  topic: tls
+  difficulty: advanced
+  period: 2024-2026
+  type: representative
+  question: When might a team choose rustls over OpenSSL, and what must it verify?
+  answer: 'rustls is a Rust-native TLS implementation and can simplify some builds by avoiding a system
+    OpenSSL dependency. It may be attractive for static or cross-platform deployments where controlling
+    the TLS implementation through Cargo is useful. But it is not universally superior: system integration,
+    organizational cryptographic policy, FIPS requirements, platform certificate stores, and existing
+    operational standards may favor another backend. Verify which crypto provider and crate features are
+    active, how trust roots are loaded, and how certificates are updated in deployment. Test the exact
+    target and policy requirements. Selecting rustls by itself does not establish compliance or guarantee
+    a smaller or more portable artifact. Certificate verification and trust-store updates remain operational
+    responsibilities regardless of backend. Test renewal and failure behavior under the organization’s
+    approved configuration.'
+  tags:
+  - tls
+  - rustls
+  - production
+- id: rust-recent-007
+  topic: serialization
+  difficulty: intermediate
+  period: 2024-2026
+  type: representative
+  question: What compatibility concerns should be considered when using Serde for a public data format?
+  answer: Serde derives serialization behavior from Rust types, but the wire format is a contract independent
+    of in-memory representation. Decide how field renames, optional fields, defaults, unknown fields,
+    enum representation, and numeric boundaries behave across versions. Add compatibility tests using
+    representative old and new payloads, and validate untrusted input with size and nesting limits appropriate
+    to the format. Avoid treating a refactor of a Rust struct as harmless if serialized names or enum
+    tags change. Keep schema migrations and versioning explicit where independent services exchange data.
+    Serde is a flexible framework, not a schema-evolution policy or a guarantee that any two formats behave
+    identically. Keep fixtures for important wire versions and test round trips plus forward and backward
+    compatibility. Successful deserialization alone does not prove old consumers interpret data correctly.
+  tags:
+  - serde
+  - serialization
+  - compatibility
+- id: rust-recent-008
+  topic: async-cancellation
+  difficulty: advanced
+  period: 2024-2026
+  type: representative
+  question: What does cancellation safety mean for an async Rust operation?
+  answer: Async futures are often cancelled by dropping them—for example, when a timeout expires or another
+    branch wins a `select!`. Cancellation safety asks whether dropping an operation at a suspension point
+    leaves its state and external effects in a valid, understandable condition. A network write may have
+    reached the peer even though the local future was dropped, so a timeout does not prove the operation
+    failed. Use idempotency keys, transactional boundaries, or reconciliation for uncertain writes. Check
+    library documentation for cancellation guarantees, especially for partially completed reads and protocol
+    operations. Ensure spawned tasks have explicit shutdown ownership; dropping a Tokio join handle detaches
+    rather than cancels the task. Document which operations are safe to retry after cancellation and which
+    may have partially committed. A local timeout describes waiting, not proof of remote rollback.
+  tags:
+  - async
+  - cancellation
+  - reliability
+- id: rust-recent-009
+  topic: async-concurrency
+  difficulty: advanced
+  period: 2024-2026
+  type: representative
+  question: How would you diagnose an async Rust service whose latency rises while CPU remains low?
+  answer: 'Low CPU with rising latency suggests waiting or queueing, but does not identify the cause.
+    Measure request latency by stage, queue depth and age, connection-pool waits, timeout rates, and runtime
+    worker saturation. Look for synchronous blocking calls on async workers, exhausted database or HTTP
+    pools, lock contention, and downstream latency. Use tracing spans to connect a request to its awaited
+    operations, and compare task scheduling or runtime metrics where available. Bound concurrency and
+    queues so overload is visible rather than accumulating indefinitely. Do not add worker threads or
+    retries without evidence: retries can amplify a failing dependency, and unbounded concurrency can
+    worsen its saturation. Compare traces from healthy and degraded periods to separate runnable time
+    from dependency waits. Measure queue age as well as length because old work can remain hidden.'
+  tags:
+  - async
+  - observability
+  - latency
+- id: rust-recent-010
+  topic: performance-engineering
+  difficulty: intermediate
+  period: 2024-2026
+  type: representative
+  question: How should a team compare Rust build-time and runtime performance after a change?
+  answer: "State the question first: clean build, incremental build, startup, throughput, tail latency,\
+    \ memory, or binary size. Use the same pinned compiler, target, features, dependency cache state,\
+    \ hardware, and representative inputs for both versions. Separate compilation from execution and repeat\
+    \ measurements to understand variance. Benchmark optimized builds for runtime behavior, and use profiling\
+    \ to identify the actual hot path rather than relying only on a microbenchmark. Report methodology\
+    \ and observed results; do not claim a general speedup from a single synthetic test. Build time is\
+    \ also a real developer and CI cost, so track clean and incremental workflows separately.\n Preserve\
+    \ raw results so later comparisons can account for environmental changes. Record compiler and benchmark\
+    \ configuration, and report variance rather than only the best run. Track build performance separately\
+    \ from optimized runtime behavior."
+  tags:
+  - benchmarking
+  - profiling
+  - build-time
+- id: rust-recent-011
+  topic: cross-compilation
+  difficulty: advanced
+  period: 2024-2026
+  type: representative
+  question: What usually blocks a Rust cross-compilation pipeline even after adding the target?
+  answer: Installing a rustup target provides Rust standard-library components, not necessarily the complete
+    native toolchain. The build may still need a target linker, C compiler, sysroot, system libraries,
+    and configuration for native dependencies. Build scripts and procedural macros run on the host, while
+    compiled application artifacts target another platform, which can expose assumptions in dependencies.
+    Check target-specific features and OpenSSL or other native bindings in the dependency graph. Build
+    inside a controlled environment, record the target triple and linker, and run the result on the actual
+    target or a faithful emulator. A successful cross compile does not prove runtime compatibility with
+    the deployed libc or system services. Cross-compilation validates the build environment, not deployment
+    assumptions such as kernel interfaces, certificates, or libc compatibility. A target-device smoke
+    test remains an important gate.
+  tags:
+  - cross-compilation
+  - targets
+  - deployment
+- id: rust-recent-012
+  topic: language-adoption
+  difficulty: advanced
+  period: 2024-2026
+  type: representative
+  question: How would you decide whether to rewrite a service component in Rust?
+  answer: 'Identify a specific constraint first: memory-safety risk, resource ceiling, latency target,
+    deployment footprint, or a boundary that benefits from a native library. Measure the current component
+    and distinguish language overhead from architecture, I/O, or dependency limits. Estimate the migration
+    cost: team fluency, FFI or protocol boundary, build times, operational tooling, and the cost of maintaining
+    two implementations during rollout. A bounded high-consequence component is often a better first step
+    than a full rewrite. Define measurable success criteria and a rollback plan, then compare behavior
+    under production-like load. Rust''s safety and performance properties are valuable, but do not automatically
+    improve an architecture or eliminate logic errors. Make the decision reversible where possible: define
+    protocol compatibility, staged traffic, and rollback thresholds first. A rewrite is justified by outcomes,
+    not language preference.'
+  tags:
+  - adoption
+  - architecture
+  - trade-offs

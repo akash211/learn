@@ -1,0 +1,146 @@
+- id: rust-scn-001
+  title: Find the ownership bottleneck in an ingestion pipeline
+  technologies: [rust]
+  difficulty: advanced
+  prompt: |
+    A Rust ingestion worker parses JSON records and batches them for a database writer. A recent
+    refactor cloned each record several times to resolve borrow-checker errors. Throughput fell,
+    allocator activity increased, and the author says the clones are necessary because the parser
+    returns references into its input. Explain how you would investigate and redesign this flow.
+  approach: |
+    Start by identifying ownership and lifetime boundaries rather than deleting clones blindly.
+    Inspect the record types, parser output lifetime, and which stage needs to retain each field.
+    Measure allocations and throughput with representative payloads to find whether cloning is
+    actually material. Consider moving owned parsed records between stages, borrowing from a
+    request buffer only while processing within its scope, or converting borrowed parser output
+    once at a deliberate batch boundary. Use `into_iter()` when a stage consumes a collection and
+    `&str`/slices for read-only APIs. Avoid self-referential structs that borrow from their own
+    owned buffers. Confirm the redesign preserves validation, ordering, and error reporting, then
+    benchmark and test large and malformed inputs.
+  red_flags:
+    - Replacing every clone with unsafe pointers without a lifetime proof.
+    - Treating all clones as expensive without measuring what is cloned.
+    - Returning references that outlive the input buffer.
+    - Ignoring batch memory bounds and input-size limits.
+
+- id: rust-scn-002
+  title: Worker threads hang during graceful shutdown
+  technologies: [rust, linux]
+  difficulty: advanced
+  prompt: |
+    A Linux daemon uses `Arc<Mutex<State>>` and a standard channel to feed worker threads. During
+    deployment shutdown it sometimes hangs indefinitely. Logs stop after a worker reports a
+    downstream timeout. There is no evidence of a crash, and the channel is currently unbounded.
+    Describe a systematic diagnosis and a safer shutdown design.
+  approach: |
+    Capture thread stacks and logs to locate the wait: mutex acquisition, channel receive, join,
+    or a blocking downstream call. Inspect lock ordering and ensure the timed-out operation does
+    not retain a guard. Dropping a `JoinHandle` detaches; joining waits until the worker exits.
+    A standard receiver may remain blocked while senders exist, so define a shutdown signal and
+    ensure every worker observes it. Stop ingress first, close or signal queues, set bounded
+    deadlines for draining, then join workers and report those that exceed the deadline. Replace
+    the unbounded queue with bounded backpressure and define overload behavior. Test shutdown with
+    a stalled dependency and queued work, including panic and poisoned-lock behavior.
+  red_flags:
+    - Restarting the daemon or increasing thread count without locating the blocked operation.
+    - Holding a mutex guard while waiting for I/O or a channel message.
+    - Assuming dropping a join handle cancels its thread.
+    - Keeping an unbounded queue with no overload or shutdown policy.
+
+- id: rust-scn-003
+  title: Async endpoint latency spikes under load
+  technologies: [rust, linux]
+  difficulty: advanced
+  prompt: |
+    A Tokio service's p99 latency rises sharply during bursts, while average CPU remains moderate.
+    The new endpoint calls a vendor SDK and performs JSON validation. The endpoint is fast in
+    local tests. The team proposes increasing Tokio worker threads and retrying timed-out calls.
+    Explain how to isolate the bottleneck and choose a safe correction.
+  approach: |
+    Compare per-stage tracing spans, runtime worker utilization, queue depth, connection-pool
+    waits, and vendor latency. Determine whether the SDK call is synchronous; an async wrapper
+    does not make a blocking call nonblocking. Check for CPU-heavy validation on worker threads,
+    lock contention, and downstream limits. Reproduce with realistic concurrency and a controlled
+    slow vendor. Use an async client or bounded `spawn_blocking` for synchronous I/O; isolate
+    sustained CPU work in a bounded pool. Add request and vendor timeouts, a semaphore or bounded
+    queue, and apply retries only when the operation is idempotent and retry budget is bounded.
+    Validate with p95/p99, error rates, and overload behavior, not only a single request test.
+  red_flags:
+    - Increasing runtime threads before establishing that tasks are blocked or CPU-bound.
+    - Retrying writes blindly after timeout when their remote outcome is unknown.
+    - Adding unlimited blocking tasks or unbounded queue capacity.
+    - Claiming the endpoint is async solely because its signature uses `async fn`.
+
+- id: rust-scn-004
+  title: Cross-compiled release fails on the deployment host
+  technologies: [rust, linux]
+  difficulty: advanced
+  prompt: |
+    A CI job successfully builds a Rust binary for a Linux target on another architecture, but
+    the binary fails to start in production with a missing shared library error. The application
+    uses TLS and a crate with a native dependency. The release team says the target triple was set,
+    so the artifact should be portable. How do you investigate and improve the release process?
+  approach: |
+    Inspect the binary's dynamic dependencies and actual target ABI, then compare the production
+    host's libc and system libraries with the build sysroot. A target triple alone does not supply
+    or guarantee runtime libraries. Review the Cargo dependency tree, TLS backend/features, build
+    script output, linker configuration, and whether a dependency links a host or target library
+    incorrectly. Decide deliberately between shipping required libraries, using a compatible
+    build image, or a supported static strategy; assess certificate roots and licensing too.
+    Record toolchain, target, linker, features, and base image. Run smoke tests inside the actual
+    deployment image and architecture in CI, and inspect the final artifact before publishing.
+  red_flags:
+    - Assuming successful compilation guarantees the target host has compatible libraries.
+    - Switching TLS backend without reviewing policy and certificate behavior.
+    - Recommending static linking as universally portable without testing libc and dependencies.
+    - Testing only on the CI builder's host architecture.
+
+- id: rust-scn-005
+  title: Public Rust library breaks downstream users during release
+  technologies: [rust]
+  difficulty: advanced
+  prompt: |
+    A team adds a method to a public trait and a variant to a public enum in a library release.
+    The crate compiles and its unit tests pass, but downstream users report compilation failures.
+    Explain why these changes can be breaking and propose an API and release strategy.
+  approach: |
+    Public traits may be implemented by downstream crates; a new required method breaks those
+    implementations unless it has a valid default. Public enums are exhaustively matched by
+    consumers, so adding a variant can break their matches. Review semver policy and identify the
+    affected source-compatible contracts. For future extensibility, consider a default method,
+    a sealed trait when downstream implementations are intentionally forbidden, or a
+    non-exhaustive enum where callers must leave room for future variants. These choices affect
+    API guarantees and should be made before release. Add compile tests using a small downstream
+    fixture, document migration steps, and publish a breaking change in the appropriate semver
+    release rather than judging compatibility only from in-crate tests.
+  red_flags:
+    - Equating the library's successful build with downstream source compatibility.
+    - Adding a default implementation that cannot preserve valid semantics just to quiet errors.
+    - Treating `#[non_exhaustive]` as a substitute for versioning or migration notes.
+    - Making unreviewed public API additions in a patch release.
+
+- id: rust-scn-006
+  title: Decide whether to replace a small service with Rust
+  technologies: [rust, linux]
+  difficulty: advanced
+  prompt: |
+    A team wants to rewrite a stable internal service in Rust because it expects lower memory
+    use and fewer production defects. The current service meets its latency target, and the main
+    operational complaint is slow feature delivery. The team has limited Rust experience and
+    relies on a vendor C SDK. How would you structure the decision and evaluate whether adoption
+    is justified?
+  approach: |
+    Separate the hoped-for benefits from observed constraints. Establish baselines for memory,
+    latency, defect classes, deployment, and development lead time; identify whether memory safety
+    or resource use is a high-consequence requirement. Assess the vendor SDK boundary, ownership
+    and FFI safety, library availability, build times, on-call skills, and migration/dual-run cost.
+    Consider a bounded Rust component or new feature instead of a whole-service rewrite. Define
+    measurable acceptance criteria and a reversible pilot, including performance under realistic
+    load, defect rates, delivery time, operational visibility, and compatibility. Rust does not
+    automatically fix architecture or speed feature work; the team must account for the learning
+    curve and support model.
+  red_flags:
+    - Assuming a language rewrite guarantees lower latency or defect rates.
+    - Ignoring the C SDK's ABI, ownership, and support constraints.
+    - Comparing only runtime speed while omitting migration and ongoing delivery costs.
+    - Rewriting the whole service before a bounded, measurable pilot.

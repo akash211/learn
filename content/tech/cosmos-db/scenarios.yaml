@@ -1,0 +1,109 @@
+- id: cosmos-scn-001
+  title: A high-volume tenant is throttled while the container looks underused
+  technologies: [cosmos-db]
+  difficulty: advanced
+  prompt: |
+    A multi-tenant API partitions a NoSQL container by `tenantId`. One enterprise tenant has a burst of
+    writes and sees elevated latency and 429s, but overall RU consumption is modest and most partition
+    ranges are quiet. Design an investigation and immediate/long-term response without assuming that
+    increasing container throughput will solve the root cause.
+  approach: |
+    1. Correlate 429s, retry delays, request charge, operation type, and normalized RU by partition range for the incident window.
+    2. Use supported diagnostics and application telemetry to determine whether the tenant's logical key is driving a hot range; inspect item size, write frequency, and any hot-item contention.
+    3. Apply a bounded mitigation: protect latency with backpressure, isolate the tenant if the architecture allows, and increase overall throughput only if it is a useful short-term measure.
+    4. Evaluate a finer-grained or synthetic partition key, tenant-specific container, or workload batching; calculate how tenant-wide reads and transactions become more complex.
+    5. If repartitioning, migrate to a new container with controlled backfill/change capture, validate all query paths, and monitor key-level distribution after cutover.
+  red_flags:
+    - Reading low average utilization as proof there is no capacity problem.
+    - Assuming autoscale can divide one hot logical key across partitions.
+    - Changing the key without evaluating tenant-wide query and transaction scope.
+- id: cosmos-scn-002
+  title: A 429 spike appears after adding a query endpoint
+  technologies: [cosmos-db]
+  difficulty: intermediate
+  prompt: |
+    A newly deployed endpoint searches orders by status and date. It usually returns a few records,
+    but during a traffic peak it increases 429s and p95 latency for unrelated requests sharing the
+    container's throughput. Explain how to investigate and propose a safe fix.
+  approach: |
+    1. Capture the exact query, partition-key availability, page size, projection, frequency, and RU charge by request.
+    2. Inspect SDK query metrics and normalized RU by range; determine whether the query fans out, scans too many candidates, or concentrates on one key.
+    3. Verify indexing policy and any composite index needs; compare query shapes against realistic item volume and skew.
+    4. Add partition scope, narrow projections/results, or redesign the endpoint around a maintained projection if those changes preserve semantics.
+    5. Consider dedicated/shared throughput changes only after measuring optimized demand; deploy behind a feature flag and monitor latency, 429s, and correctness.
+  red_flags:
+    - Raising throughput without checking whether the query fans out across every partition.
+    - Assuming a low result count means low RU consumption.
+    - Changing index policy without validating writes and all query paths.
+- id: cosmos-scn-003
+  title: A timed-out create produces duplicate checkout attempts
+  technologies: [cosmos-db]
+  difficulty: advanced
+  prompt: |
+    A checkout service creates an order and then calls a payment provider. During a regional network
+    disruption, clients time out and retry; some orders are duplicated and payment status is unclear.
+    Design a failure-safe flow that separates Cosmos DB atomicity from external side effects.
+  approach: |
+    1. Treat timeouts as uncertain outcomes. Assign a stable client idempotency key and deterministic order identity, protected by a uniqueness strategy appropriate to the data model.
+    2. Atomically write the order state and an outbox/payment-intent record within one logical partition where possible.
+    3. Use change feed or a worker to call the provider with its idempotency key; record outcomes with conditional updates and retry boundedly.
+    4. Reconcile ambiguous provider responses and database timeouts by reading existing state and querying the provider; never charge blindly on every retry.
+    5. Monitor stale intents, duplicate requests, failed outbox deliveries, and compensation needs; test network interruption and failover.
+  red_flags:
+    - Calling the payment service inside a stored procedure or assuming one transaction spans both systems.
+    - Assuming an SDK timeout proves the order was not committed.
+    - Retrying a non-idempotent charge without a stable business key.
+- id: cosmos-scn-004
+  title: Two regions update the same profile concurrently
+  technologies: [cosmos-db]
+  difficulty: advanced
+  prompt: |
+    A multi-region-write application allows users to edit profile preferences on mobile and web.
+    During intermittent connectivity, both clients update the same item in different regions. A user
+    reports that one change disappears. Propose diagnosis, conflict semantics, and a design response.
+  approach: |
+    1. Confirm write regions, consistency, SDK region routing, session behavior, and conflict-resolution policy from deployment configuration and diagnostics.
+    2. Determine whether whole-item concurrent updates are being resolved by LWW and which fields were lost; inspect conflict records or supported telemetry.
+    3. Define domain semantics: split independently edited fields/items, assign a home region, use version checks, or provide an explicit merge/user conflict flow.
+    4. If considering custom resolution, verify API eligibility and creation-time constraints; test procedure failures and delete conflicts.
+    5. Route sessions consistently where possible, make retries idempotent, and run concurrency tests under regional lag before changing production policy.
+  red_flags:
+    - Treating the timestamp winner as a meaningful business merge rule.
+    - Assuming multiple write regions provide strong consistency.
+    - Changing conflict policy without testing existing data and API constraints.
+- id: cosmos-scn-005
+  title: A projection is stale after a consumer was offline
+  technologies: [cosmos-db]
+  difficulty: advanced
+  prompt: |
+    A change-feed consumer maintains a search index but was stopped for longer than the expected
+    maintenance window. It restarts with stale results, and operators are unsure whether the saved
+    checkpoint is still resumable. Describe safe recovery and changes to prevent recurrence.
+  approach: |
+    1. Identify the feed mode, checkpoint age, lease state, consumer lag, account backup configuration, and available change history.
+    2. If the checkpoint is valid, resume with idempotent projection updates and monitor catch-up load; do not checkpoint ahead of durable effects.
+    3. If history is unavailable, establish a consistent backfill strategy with a coordinated change boundary, rebuild the projection, and hand off to live changes without a gap.
+    4. Handle deletes explicitly, isolate poison items, and reconcile source and projection by sampled records and business-level counts.
+    5. Alert on lag versus the recovery horizon, protect lease state, size processing throughput, and rehearse recovery periodically.
+  red_flags:
+    - Starting at the newest changes and silently skipping the outage interval.
+    - Assuming latest-version mode is an unlimited event history with all deletes.
+    - Increasing consumer concurrency without checking shared RU impact or idempotency.
+- id: cosmos-scn-006
+  title: A PostgreSQL API decision becomes a migration risk
+  technologies: [cosmos-db]
+  difficulty: intermediate
+  prompt: |
+    A team plans a greenfield application on Azure Cosmos DB for PostgreSQL after reading an older
+    API-comparison page. The proposed design depends on distributed PostgreSQL semantics and several
+    extensions. Explain what must be checked and how to redirect the architecture evaluation.
+  approach: |
+    1. Confirm service lifecycle, retirement timeline, support status, and current Microsoft-recommended migration path from authoritative documentation.
+    2. Treat Cosmos DB for PostgreSQL as distinct from the native Cosmos NoSQL API; inventory PostgreSQL version, extensions, distribution behavior, and operational requirements.
+    3. Evaluate Azure Database for PostgreSQL Elastic Clusters and other managed PostgreSQL options against the actual extension and scaling needs.
+    4. Separately evaluate native NoSQL only if the workload can be modeled around its JSON item, partition, query, consistency, and transaction semantics.
+    5. Record lifecycle assumptions, migration cost, feature gaps, and a supported target before approving a new-project commitment.
+  red_flags:
+    - Assuming a current API index listing means a service is recommended for new workloads.
+    - Treating native NoSQL and distributed PostgreSQL as interchangeable services.
+    - Selecting a target without testing required extensions and distribution behavior.

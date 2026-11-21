@@ -1,0 +1,105 @@
+slug: cosmos-db
+title: Azure Cosmos DB
+category: databases
+summary: A globally distributed managed database platform whose API, partition key, consistency, and throughput choices shape application behavior and cost.
+level: core
+relations:
+  - to: azure-sql
+    type: alternative
+    note: Cosmos DB favors globally distributed, partitioned application workloads; Azure SQL Database is often simpler for relational constraints, joins, and transactional SQL.
+  - to: mongodb
+    type: alternative
+    note: Cosmos DB offers a MongoDB-compatible API alongside its native NoSQL API, but wire-protocol compatibility does not imply complete feature or operational equivalence.
+  - to: sql
+    type: complements
+    note: SQL remains a useful relational foundation and analytics language; Cosmos DB's native NoSQL API uses SQL-like queries over JSON items but has different semantics and partition scope.
+intro:
+  what: |
+    Azure Cosmos DB is Microsoft's managed, distributed database service for operational applications that need elastic storage and throughput, low-latency access, and optional replication across Azure regions. It exposes distinct APIs: the native NoSQL API; MongoDB-compatible, Gremlin, Table, and Cassandra APIs; and the separate Azure Cosmos DB for PostgreSQL offering. An API choice defines the wire protocol, data model, SDKs, query language, and feature surface. These are not interchangeable views of one universal schema: choose one API deliberately and validate its supported capabilities before committing a workload.
+
+    Cosmos DB's central design unit is the item addressed through a partition key. A container distributes logical partitions across physical partitions, while throughput is expressed as request units per second (RU/s). Reads, writes, and queries consume RUs according to their work. The service can distribute data globally and offers five consistency levels, but those capabilities do not remove the need to design partitioning, access patterns, retry behavior, and regional failure handling.
+
+    This module focuses on the native NoSQL API where exact semantics are available, and calls out where other APIs differ. PostgreSQL needs a particularly careful distinction: Azure Cosmos DB for PostgreSQL is on a retirement path and should not be treated as a recommended new-project API; consult current Azure Database for PostgreSQL guidance. Preview features and API compatibility evolve, so verify exact regional availability, account configuration, SDK behavior, and service status against current documentation before relying on them.
+  why: |
+    Cosmos DB is useful when an application must keep serving distributed users, scale provisioned throughput independently from application instances, or operate a large partitioned dataset without managing database servers. Its managed service model includes partition placement, replication options, SDK integrations, and multiple compatibility APIs. Global distribution and elastic capacity can simplify architectures that would otherwise require teams to design and operate replication and sharding themselves.
+
+    These benefits are workload-dependent. Provisioned throughput is a shared capacity budget, not free automatic scaling; a poor partition key can leave one partition throttled while the rest of the account is underused. Flexible JSON does not create relational constraints, and familiar MongoDB or PostgreSQL client protocols do not guarantee identical feature support. Multi-region writes require conflict semantics, not just a checkbox. Cosmos DB can therefore be an expensive or awkward fit for small, relational, join-heavy, ad hoc reporting, or highly unpredictable workloads. The right decision follows measured request patterns and explicit consistency and availability requirements.
+  problems:
+    - Serving partitioned operational data with managed throughput and optional multi-region replication.
+    - Scaling item storage and request capacity without managing database nodes directly.
+    - Providing predictable request-level consistency choices for globally distributed clients.
+    - Processing database changes asynchronously through the change feed.
+    - Reusing selected MongoDB, Gremlin, Table, Cassandra, or PostgreSQL ecosystems where the specific API supports the workload.
+  where_used:
+    - Multi-tenant web and mobile backends with tenant- or entity-scoped reads.
+    - IoT and event-adjacent operational stores with high-volume partitionable access patterns.
+    - Globally distributed catalogs, profiles, device state, and application metadata.
+    - Change-driven projections, cache refresh, and asynchronous integration pipelines.
+  ecosystem: |
+    The native NoSQL API is commonly accessed through Azure SDKs, the Azure portal, CLI, and infrastructure-as-code. SDKs manage connections, session tokens, diagnostics, retries, and bulk execution, but application owners must still bound retries and preserve idempotency. Azure Monitor and diagnostic logs expose request charges, throttling, latency, and partition-level signals. Change feed processor and Functions integrations support downstream work, usually with at-least-once processing expectations. Backups, point-in-time recovery options, analytical integrations, and regional failover plans should be evaluated separately from replication. Cosmos DB can complement Azure SQL or another relational source of truth: use it for a distinct access pattern or projection rather than forcing every workload into one database.
+  alternatives:
+    - name: Azure SQL Database
+      note: Prefer for relational data, rich joins, constraints, mature SQL analytics, and transactions that naturally span related rows.
+    - name: PostgreSQL
+      note: Prefer a managed PostgreSQL service when open-source relational semantics, extensions, SQL tooling, and broad query flexibility are central.
+    - name: MongoDB / Azure DocumentDB
+      note: Consider when MongoDB-native behavior is the main requirement; confirm whether the chosen service provides the exact protocol and features needed.
+    - name: Azure Table Storage
+      note: A simpler key-value option may fit straightforward PartitionKey/RowKey access without Cosmos DB's broader throughput and distribution needs.
+  related: [azure-sql, mongodb, sql]
+chapters:
+  - id: data-model-apis
+    title: Data Model and APIs
+    file: chapters/01-data-model-apis.md
+    minutes: 13
+    level: core
+  - id: partitioning-keys
+    title: Partitioning and Partition Keys
+    file: chapters/02-partitioning-keys.md
+    minutes: 13
+    level: core
+  - id: request-units-cost
+    title: Request Units and Cost Mechanics
+    file: chapters/03-request-units-cost.md
+    minutes: 13
+    level: core
+  - id: consistency-levels
+    title: Consistency Levels and Trade-offs
+    file: chapters/04-consistency-levels.md
+    minutes: 13
+    level: core
+  - id: indexing-query-optimisation
+    title: Indexing Policies and Query Optimisation
+    file: chapters/05-indexing-query-optimisation.md
+    minutes: 13
+    level: core
+  - id: change-feed-patterns
+    title: Change Feed and Event-driven Patterns
+    file: chapters/06-change-feed-patterns.md
+    minutes: 13
+    level: advanced
+  - id: multi-region
+    title: Multi-region Distribution and Conflict Resolution
+    file: chapters/07-multi-region.md
+    minutes: 13
+    level: advanced
+  - id: server-side-programming
+    title: Server-side Programming
+    file: chapters/08-server-side-programming.md
+    minutes: 12
+    level: advanced
+  - id: sdk-error-handling
+    title: SDK Usage and Error Handling
+    file: chapters/09-sdk-error-handling.md
+    minutes: 13
+    level: advanced
+  - id: trade-offs-migration
+    title: When Cosmos DB Is the Wrong Choice and Migration Away
+    file: chapters/10-trade-offs-migration.md
+    minutes: 13
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

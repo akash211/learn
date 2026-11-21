@@ -1,0 +1,472 @@
+- id: azsql-basic-001
+  topic: service architecture
+  difficulty: beginner
+  question: How does Azure SQL Database differ from SQL Server on an Azure VM?
+  answer: 'Azure SQL Database is a platform service: Microsoft operates the host, SQL Server engine deployment,
+    patching and much of the availability infrastructure. You configure database resources, security,
+    workload and recovery policy, but do not log in to the underlying operating system or administer a
+    conventional SQL Server instance. SQL Server on an Azure Virtual Machine is infrastructure as a service.
+    The customer owns more of the VM, operating system, SQL installation, patching, storage layout and
+    high-availability setup, though Azure supplies the virtual infrastructure. Managed Instance is another
+    distinct PaaS option with broader instance-oriented compatibility. Choose by required features and
+    operational responsibility, not by assuming all three have identical T-SQL or permissions. Migration
+    assessment should include jobs, cross-database dependencies, authentication and server-level features.
+
+
+    Document feature dependencies and test the application with its real driver, permissions and recovery
+    process; moving to a managed service changes the operational boundary, not ownership of data correctness.'
+  tags:
+  - managed-service
+  - architecture
+- id: azsql-basic-002
+  topic: deployment choices
+  difficulty: beginner
+  question: When should you consider Azure SQL Managed Instance instead of Azure SQL Database?
+  answer: 'Consider Managed Instance when a workload depends on instance-level capabilities or semantics
+    that Azure SQL Database does not provide in the same way, and you want a managed platform rather than
+    a VM. Examples to assess include SQL Agent jobs, cross-database interactions and broader SQL Server
+    compatibility, but exact support varies and must be checked against current documentation. Azure SQL
+    Database is database-scoped and is often a better fit for applications that can manage their database
+    independently. SQL Server on an Azure VM remains relevant when you need operating-system or engine
+    control. Do not decide from a feature checklist alone: include network design, migration method, latency,
+    HA/DR, permissions and operational ownership. Use a discovery assessment and a workload test to expose
+    hidden dependencies.
+
+
+    Test the exact source dependency and regional support, then compare redesign effort with the operations
+    that each target requires the team to retain.'
+  tags:
+  - managed-instance
+  - migration
+- id: azsql-basic-003
+  topic: purchasing models
+  difficulty: beginner
+  question: What is the difference between DTU and vCore purchasing models?
+  answer: 'DTU bundles compute, memory, data IO and log IO into a normalized capacity unit and presents
+    predefined service levels. It is a compact sizing model, but a DTU percentage does not tell you which
+    resource is limiting the workload. The vCore model exposes compute capacity more explicitly and separates
+    storage configuration within the tier''s constraints. It can make comparisons to an existing SQL Server
+    estate and resource diagnosis easier, but a vCore count alone does not guarantee query latency. For
+    both, measure CPU, data IO, log IO, concurrency and storage under representative load. The models
+    are not directly interchangeable by a simple conversion factor. Pick a candidate, benchmark realistic
+    traffic, and validate how the resource metrics behave before migration or resizing.
+
+
+    Capture baseline and peak resource metrics, then repeat the same representative workload after resizing
+    so that model selection is based on measured behavior.'
+  tags:
+  - dtu
+  - vcore
+  - sizing
+- id: azsql-basic-004
+  topic: purchasing models
+  difficulty: intermediate
+  question: What workloads are a good fit for serverless compute?
+  answer: 'Serverless is useful for eligible databases whose demand is intermittent or unpredictable and
+    where compute can scale within configured minimum and maximum bounds. Development/test databases,
+    infrequently used internal tools and applications with long quiet periods may benefit from auto-pause
+    if the resume delay is acceptable. A steady, latency-sensitive workload may be more predictable on
+    provisioned compute. Background activity can prevent auto-pause, and the configured minimum still
+    matters; “serverless” does not mean zero baseline cost or instantaneous unlimited capacity. Confirm
+    current tier, region and feature eligibility, then test cold-start latency and scaling response with
+    the actual driver and workload. Set a maximum that contains bursts while limiting runaway capacity,
+    and monitor whether the database pauses as intended.
+
+
+    Include idle-to-active transition and connection-pool behavior in the test; if immediate response
+    is mandatory after inactivity, auto-pause may conflict with the service objective.'
+  tags:
+  - serverless
+  - auto-pause
+- id: azsql-basic-005
+  topic: service tiers
+  difficulty: intermediate
+  question: How do General Purpose, Business Critical and Hyperscale differ conceptually?
+  answer: 'General Purpose is a general workload tier with compute separated from remote storage. Business
+    Critical uses a local SSD and replica-oriented architecture for workloads with demanding latency or
+    availability needs. Hyperscale uses distributed storage components, including page servers and a log
+    service, and separates compute from a large, elastic storage footprint. These are architectural differences,
+    not merely names for increasing database size. They affect IO behavior, read-scale options, scaling,
+    restore behavior and feature availability. A slow query should not trigger an automatic tier upgrade
+    before investigation; its cause may be a poor plan, blocking or application connection behavior. Compare
+    the current feature matrix, region support, recovery needs and representative benchmark results before
+    choosing a tier.
+
+
+    Check the current feature matrix and regional support, and revisit the choice when data size, growth
+    or availability requirements change.'
+  tags:
+  - general-purpose
+  - business-critical
+  - hyperscale
+- id: azsql-basic-006
+  topic: provisioning
+  difficulty: beginner
+  question: What is a logical server in Azure SQL Database?
+  answer: 'A logical server is an Azure management and namespace boundary for Azure SQL Database resources,
+    not a customer-managed SQL Server host or virtual machine. It organizes databases and is associated
+    with settings such as server firewall rules and an Entra administrator. Databases still have their
+    own schemas, users and database-scoped configuration. The endpoint name is used by clients, and the
+    platform can move underlying infrastructure, so applications should use the DNS name rather than a
+    fixed IP. Do not assume instance-level operations or `master` behavior match a traditional SQL Server.
+    Provision the logical server and databases through controlled infrastructure automation, then explicitly
+    configure identity, networking, diagnostics, backup policy and database permissions.
+
+
+    Treat server firewall rules as shared exposure settings and verify networking, diagnostics and authentication
+    after deployment instead of assuming defaults match policy.'
+  tags:
+  - logical-server
+  - provisioning
+- id: azsql-basic-007
+  topic: elastic pools
+  difficulty: intermediate
+  question: When are elastic pools useful, and what is their main trade-off?
+  answer: 'An elastic pool shares a provisioned resource envelope among multiple databases. It is useful
+    when those databases have variable, complementary peaks: one database can use capacity that another
+    is not using at that moment. Pool capacity is not reserved at every database''s individual maximum.
+    If several tenants peak simultaneously, they compete and can experience resource pressure. Per-database
+    minimums and maximums can shape use but do not create a guaranteed reservation. Before pooling, compare
+    time-series CPU, IO, log usage, storage and scheduled jobs across the candidate databases. Test simultaneous
+    peak load and monitor both pool-level and per-database signals. Use separate pools or standalone databases
+    when tenants require isolation or have synchronized peaks.
+
+
+    Keep a tenant peak profile and security boundary map; split workloads when service objectives or simultaneous
+    peak patterns no longer fit shared capacity.'
+  tags:
+  - elastic-pools
+  - resource-governance
+- id: azsql-basic-008
+  topic: security
+  difficulty: beginner
+  question: How does Microsoft Entra authentication work with Azure SQL Database?
+  answer: 'Microsoft Entra authentication obtains an identity token from Entra and presents it to Azure
+    SQL Database instead of relying solely on a SQL username and password. A configured Entra administrator
+    can bootstrap database principals; the database then grants permissions to users, groups or applications.
+    Workloads hosted on Azure can often use a managed identity so that no long-lived database password
+    is stored in application configuration. The identity still needs a database user and least-privilege
+    grants—authentication proves who connected, not what they may do. Azure RBAC controls Azure resource
+    management and is separate from SQL authorization. Test token acquisition from the deployed runtime
+    and verify driver support, token renewal and role membership.
+
+
+    Separate application identities from human administrators, prefer group-based access where appropriate,
+    and audit membership and permission changes over time.'
+  tags:
+  - entra-id
+  - authentication
+  - managed-identity
+- id: azsql-basic-009
+  topic: security
+  difficulty: intermediate
+  question: What does a private endpoint provide, and what does it not provide?
+  answer: 'Azure Private Link private endpoint maps the Azure SQL service to a private IP in a virtual
+    network, allowing clients on an approved network path to reach it privately. DNS must resolve the
+    service name to that private endpoint, which typically requires correct private DNS zone configuration
+    and links. A private endpoint does not grant database permissions, validate a user''s identity, or
+    automatically disable public network access. Public endpoint policy must be configured explicitly
+    to match the architecture. It also does not replace TLS certificate validation. Test connectivity
+    from allowed and disallowed subnets and operational paths, because a workstation and production application
+    may use different DNS, routes and identities. Keep network reachability and SQL authorization as separate
+    controls.
+
+
+    Test DNS and connection from both allowed and denied network locations; custom resolvers and container
+    DNS often differ from a developer workstation.'
+  tags:
+  - private-link
+  - networking
+- id: azsql-basic-010
+  topic: encryption
+  difficulty: beginner
+  question: What is the difference between TDE and Always Encrypted?
+  answer: 'Transparent Data Encryption protects database files, transaction logs and backups at rest.
+    The database engine can still process queries and return plaintext to an authorized user; TDE is not
+    column-level protection from database access. Always Encrypted encrypts selected column values in
+    a trusted client driver so the server generally stores ciphertext and cannot inspect the plaintext.
+    This changes query capabilities, schema and key management, and secure enclaves can enable additional
+    operations in supported configurations. TLS protects data in transit between client and service and
+    is distinct from both. Select controls based on the threat model: TDE addresses storage media exposure,
+    while Always Encrypted can reduce server-side plaintext exposure. Test drivers, key lifecycle and
+    needed predicates before rollout.
+
+
+    Protect key lifecycle and client configuration separately, and rehearse key rotation; an authorized
+    or compromised client may still reveal decrypted values.'
+  tags:
+  - tde
+  - always-encrypted
+  - encryption
+- id: azsql-basic-011
+  topic: security
+  difficulty: intermediate
+  question: How does row-level security support tenant isolation, and what must be tested?
+  answer: 'Row-level security (RLS) uses a security predicate, commonly an inline table-valued function
+    and a security policy, to filter or block rows according to execution context. It can centralize tenant
+    filtering, but correctness depends on a trustworthy tenant identity and complete predicate coverage.
+    If `SESSION_CONTEXT` supplies tenant information, the application must set and validate it on every
+    connection checkout; a client-supplied value is not inherently trusted. Connection pooling can reuse
+    sessions, so stale context must not leak from one tenant to another. Test reads, inserts, updates,
+    deletes, joins, background jobs, privileged principals and failure paths. RLS is defense in depth,
+    not a replacement for authorization, input validation or auditing.
+
+
+    Test privileged and background identities as well as application users, and ensure pooled sessions
+    always receive a fresh, validated tenant context.'
+  tags:
+  - row-level-security
+  - multi-tenancy
+- id: azsql-basic-012
+  topic: monitoring
+  difficulty: beginner
+  question: What problem does Query Store solve?
+  answer: 'Query Store retains query text, plans and aggregated runtime statistics over time, unlike a
+    plan cache that is transient and can be cleared or evicted. It helps identify expensive queries, plan
+    changes and regressions across workload intervals. Operators can compare query performance before
+    and after a deployment, inspect plan history and use supported plan forcing or hints as a mitigation.
+    Query Store is not a full trace: statistics are aggregated, capture settings and retention matter,
+    and it may not capture every query in every configuration. Enable and monitor it as part of database
+    provisioning. Use Query Store together with Azure Monitor metrics, live DMVs, actual execution plans
+    and application latency to establish cause rather than relying on one average.
+
+
+    Preserve query and plan identifiers with the incident time window, and verify Query Store is capturing
+    before concluding that no history exists.'
+  tags:
+  - query-store
+  - performance
+- id: azsql-basic-013
+  topic: monitoring
+  difficulty: intermediate
+  question: How do Azure Monitor metrics and database DMVs complement each other?
+  answer: 'Azure Monitor metrics provide time-series signals about a resource, such as CPU, data IO, log
+    IO and storage, which are useful for trends, alerts and correlation with deployments or traffic. Database-scoped
+    DMVs expose engine state such as active requests, waits and cached plan statistics, often with finer
+    query-level context but limited history. A DMV result is usually a snapshot or cumulative counter
+    that can reset after events. Query Store adds persisted query and plan history. Use metrics to locate
+    when and which resource is saturated, then use Query Store, DMVs and execution plans to investigate
+    workload causes. Correlate with app tracing because a database metric cannot explain connection acquisition
+    delays or client-side queueing.
+
+
+    Correlate database telemetry with application traces and restrict access to exports, since query text
+    and identity metadata can contain sensitive information.'
+  tags:
+  - azure-monitor
+  - dmvs
+  - diagnostics
+- id: azsql-basic-014
+  topic: waits
+  difficulty: intermediate
+  question: How should you interpret wait statistics when diagnosing a slow database?
+  answer: 'A wait represents time a task spent waiting for a resource or event; it is evidence about execution,
+    not a diagnosis by itself. Lock waits can point to blocking, log-write waits to transaction-log throughput,
+    and IO waits to data access patterns or storage pressure, but context is required. Wait counters are
+    cumulative and may reset, so compare deltas over a known interval and relate them to the affected
+    workload. Use Query Store wait categories, Azure Monitor metrics and current requests to find which
+    queries and resources overlap the impact. Do not respond to a wait name with a generic fix. Check
+    plans, actual row counts, blocking chains, transaction size and application latency before changing
+    capacity or isolation behavior.
+
+
+    Compare deltas with a normal interval, account for resets after service events, and verify that both
+    the hypothesized wait and user impact improve.'
+  tags:
+  - waits
+  - troubleshooting
+- id: azsql-basic-015
+  topic: indexing
+  difficulty: beginner
+  question: What is the difference between index key columns and included columns?
+  answer: 'Key columns define the B-tree ordering and can support navigation, seek predicates and ordered
+    output. Their order matters, particularly for equality predicates followed by ranges. Included columns
+    are stored at the nonclustered index leaf level to cover selected output values, but they do not guide
+    index seeks or ordering. A covering index can avoid lookups, though adding wide payload columns increases
+    storage, write amplification and maintenance. Design from actual query plans and Query Store evidence
+    rather than adding every selected column. A seek is not automatically cheaper than a scan if it causes
+    many key lookups. After creating an index, measure read performance and write cost under representative
+    concurrency.
+
+
+    Record the query benefit and owner for each index, then re-evaluate after workload changes; unused
+    indexes still consume storage and add write work.'
+  tags:
+  - indexing
+  - include-columns
+- id: azsql-basic-016
+  topic: automatic tuning
+  difficulty: intermediate
+  question: What can Azure SQL automatic tuning do, and why should actions be monitored?
+  answer: 'Azure SQL automatic tuning can, in supported configurations, recommend or apply actions such
+    as creating or dropping indexes and forcing a last known good plan. It uses observed workload behavior
+    and service capabilities; options and availability vary, so check current settings and documentation.
+    Automation can react faster than a manual review, but it may have limited evidence for rare reports,
+    new workloads or changing seasonal patterns. Indexes consume storage and add write work, while a forced
+    plan can become unsuitable after data or schema changes. Keep Query Store healthy, review tuning history
+    and recommendations, alert on regressions, and define rollback ownership. Treat automated changes
+    as monitored interventions, not as a substitute for workload design.
+
+
+    Provide an owner and rollback path for automated actions, and review behavior after major schema,
+    release or seasonal workload changes.'
+  tags:
+  - automatic-tuning
+  - query-store
+- id: azsql-basic-017
+  topic: backups
+  difficulty: beginner
+  question: What is point-in-time restore in Azure SQL Database?
+  answer: 'Point-in-time restore (PITR) uses the service-managed backup chain to create a new database
+    representing the state at a selected time within the configured short-term retention window. It is
+    valuable after accidental deletion, a faulty deployment or logical data corruption. PITR does not
+    rewind the existing database in place; it creates a separate resource that must be validated and then
+    used for cutover. Plan how to reconcile writes made after the restore point, update connection endpoints
+    and configure network, identity and diagnostics on the restored database. Retention and restore behavior
+    depend on service configuration. Practice a restore and measure total application recovery time rather
+    than assuming the control-plane operation is the whole RTO.
+
+
+    Select the restore time using application evidence, validate business-level data, and coordinate a
+    separate cutover decision with a defined rollback path.'
+  tags:
+  - pitr
+  - restore
+- id: azsql-basic-018
+  topic: backups
+  difficulty: intermediate
+  question: Why are automated backups not a complete disaster recovery plan?
+  answer: 'Automated backups provide managed recovery options, but a plan must still define retention,
+    backup redundancy, RPO and RTO, permissions and a tested recovery procedure. PITR and long-term retention
+    solve different time-horizon needs. A restore creates a target that needs data validation, security
+    configuration, network reachability and an application cutover. A geo-replica can improve regional
+    recovery but may lose unreplicated transactions during forced failover and can replicate logical mistakes.
+    Neither a green backup setting nor a secondary database proves that the application can recover. Schedule
+    restore drills, record elapsed time and issues, and ensure recovery identities remain available during
+    an incident. Keep backup and replication as complementary protections.
+
+
+    A recovery rehearsal should include approvals, endpoint setup, identity, network, validation and client
+    cutover; record the actual elapsed time against the target.'
+  tags:
+  - backup
+  - disaster-recovery
+- id: azsql-basic-019
+  topic: high availability
+  difficulty: intermediate
+  question: What is the role of an auto-failover group?
+  answer: 'An auto-failover group groups Azure SQL databases across regions and provides listener endpoints
+    for read-write and optionally read-only connectivity. It can coordinate failover of the database group
+    to a secondary region under configured policy. Planned failover can synchronize when the primary is
+    available; forced failover can involve data loss because geo-replication is asynchronous. Applications
+    need to connect through the listener, refresh pooled connections and retry transient failures safely.
+    Regional readiness also includes Entra identities, private DNS and endpoints, monitoring, secrets
+    and compute services. A failover group does not replace PITR or long-term backup retention because
+    logical deletion or corruption can propagate. Test failover, failback and application behavior in
+    an exercise.
+
+
+    Test listener DNS and connection-pool refresh during the exercise, and plan failback as a coordinated
+    event with data synchronization and client checks.'
+  tags:
+  - failover-groups
+  - geo-replication
+- id: azsql-basic-020
+  topic: connectivity
+  difficulty: beginner
+  question: Why should an application use the Azure SQL DNS endpoint instead of a fixed IP?
+  answer: 'The documented DNS endpoint represents the Azure SQL service, while the underlying service
+    infrastructure and addresses can change as the platform operates or redirects connections. Hard-coding
+    an IP can break failover, maintenance or service routing and bypass intended DNS behavior. Configure
+    a supported driver with the server name and validate TLS certificates. In private endpoint deployments,
+    DNS must resolve that service name to the expected private IP from the client network. Test name resolution
+    from the actual application environment, not just from an administrator''s workstation. Avoid solving
+    connectivity errors by disabling certificate validation or opening broad firewall access; diagnose
+    DNS, route, endpoint policy and identity separately.
+
+
+    Keep endpoint resolution in deployment checks, especially with private endpoints and failover groups
+    where DNS selects the intended path.'
+  tags:
+  - dns
+  - connectivity
+  - tls
+- id: azsql-basic-021
+  topic: connectivity
+  difficulty: intermediate
+  question: What makes a transient-fault retry policy safe?
+  answer: 'A safe retry policy is bounded, uses backoff with jitter, respects the overall request deadline
+    and retries only errors classified as transient. It should not retry indefinitely, since retries can
+    amplify a service saturation event. The hardest case is an ambiguous outcome: the connection may fail
+    after the server commits a write but before the client receives confirmation. Replaying a non-idempotent
+    operation can duplicate an effect. Use idempotency keys, uniqueness constraints or a state check for
+    business operations, and retry a complete transaction only when it is safe to execute again. Record
+    retry counts and error classes. Test connection loss, failover and timeouts, not just a retry helper''s
+    happy path.
+
+
+    Use backoff with jitter to avoid synchronized retry storms, and emit retry metrics so the policy cannot
+    silently hide a prolonged outage.'
+  tags:
+  - retry-logic
+  - idempotency
+- id: azsql-basic-022
+  topic: connectivity
+  difficulty: intermediate
+  question: What risks come with connection pooling?
+  answer: 'Connection pooling reduces connection setup overhead, but each application process may have
+    its own pool. The total possible database sessions can be the pool maximum multiplied by application
+    replicas, workers and deployment slots. Bound pool size and calculate that aggregate against the database''s
+    capacity. Dynamic connection strings may accidentally create many independent pools. Always return
+    connections promptly, and set explicit connection and command timeouts. Pooled sessions can retain
+    session state, so tenant-specific `SESSION_CONTEXT` must be established and reset on every checkout.
+    Token-based authentication also requires a driver that refreshes tokens correctly. Monitor connection
+    acquisition time and session counts separately from query duration to distinguish pool starvation
+    from a slow SQL statement.
+
+
+    Measure connection acquisition separately from command duration to distinguish pool starvation from
+    slow server execution.'
+  tags:
+  - connection-pooling
+  - capacity
+- id: azsql-basic-023
+  topic: migration
+  difficulty: beginner
+  question: What does the Data Migration Assistant do, and what does it not prove?
+  answer: 'Microsoft Data Migration Assistant (DMA) can assess SQL Server databases for compatibility
+    with Azure SQL targets and report potential blockers or partially supported features. It helps create
+    an inventory and prioritizes investigation, but it cannot prove that every dynamic SQL path, scheduled
+    job, external dependency or application workflow will behave correctly. Tooling and migration recommendations
+    evolve, so confirm current Microsoft guidance for the source and destination versions rather than
+    treating a familiar utility as universally current. Review every finding, test the real application
+    with representative users, and assess server-level dependencies separately. Combine assessment with
+    workload observation, migration rehearsal, schema/data validation and post-cutover performance tests.
+    A clean static report is not an acceptance test.
+
+
+    Turn findings into owned issues with test evidence, and rehearse migration using representative data
+    to validate cutover and rollback timing.'
+  tags:
+  - dma
+  - migration-assessment
+- id: azsql-basic-024
+  topic: migration
+  difficulty: intermediate
+  question: How does database compatibility level affect a migration?
+  answer: 'Database compatibility level controls behavior associated with a SQL Server engine generation,
+    including query optimizer behavior and supported language features. It is not the same as selecting
+    a service tier or changing the underlying Azure SQL engine. Keeping the source level during an initial
+    migration can limit behavior changes, but it can also defer optimizer improvements and newer functionality.
+    Raising it can change plans and cause regressions. Use Query Store to capture important queries and
+    plans, test at the target level with representative parameters and concurrency, and change it as a
+    deliberate, observable step. Avoid changing compatibility level, indexes and compute tier simultaneously
+    because that makes performance results difficult to attribute. Preserve a rollback plan and validate
+    application correctness too.
+
+
+    Change compatibility level as a staged release, compare Query Store history, and retain a rollback
+    plan that includes application correctness checks.'
+  tags:
+  - compatibility-level
+  - migration

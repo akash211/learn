@@ -1,0 +1,216 @@
+- id: mongo-basic-001
+  topic: document model
+  difficulty: beginner
+  question: What is a MongoDB document, and what does BSON add beyond JSON?
+  answer: |
+    A document is a nested set of fields stored as BSON in a collection. BSON is a binary encoding with typed values such as dates, ObjectIds, binary data, and Decimal128; it is not just arbitrary JSON text. A collection can contain varied document shapes, but production applications should still define and validate the shapes they depend on.
+    
+    For example, a BSON Date is stored as a date value that can be compared and sorted chronologically without parsing a formatted string on every read. ObjectIds are a BSON type with their own comparison and serialization behavior; they are not interchangeable with arbitrary strings that happen to look similar. BSON also has numeric distinctions, including 32-bit integer, 64-bit integer, double, and Decimal128, which affect precision and query matching. Applications should choose one representation consistently for fields such as money and identifiers. Mixed types in the same logical field can produce surprising sort order and complicate indexes. Define the expected shape in application models and, where suitable, collection validation; then evolve it through a controlled migration rather than assuming flexible storage means every shape is safe.
+  tags: [bson, documents, schema]
+- id: mongo-basic-002
+  topic: schema design
+  difficulty: intermediate
+  question: How do you choose between embedding a related object and storing a reference?
+  answer: |
+    Embed bounded data that is usually read and updated with its parent, especially when one-document atomicity is useful. Reference data with an independent lifecycle, shared ownership, independent queries, or unbounded cardinality. A reference does not enforce referential integrity, so the application must define missing-reference and deletion behavior.
+    
+    Evaluate access patterns in both directions, not just one parent lookup. Ask whether children are read as a complete bounded set, paginated individually, shared among parents, or updated at a rate that would make the parent a contention point. For embedded data, a single update can keep related fields atomic, but the parent document must remain below the 16 MiB hard limit and avoid excessive index fan-out. For references, index the foreign key used to find children and decide how the application handles orphans and deletion. A hybrid is common: keep authoritative child records separately while embedding a deliberately stale or historical summary. Record its refresh rule, acceptable lag, and reconciliation method. A good design makes these consistency obligations explicit before traffic depends on them.
+  tags: [embedding, referencing, modeling]
+- id: mongo-basic-003
+  topic: schema design
+  difficulty: intermediate
+  question: Why are unbounded arrays a schema-design risk?
+  answer: |
+    Arrays that grow indefinitely increase document size, transfer cost, index fan-out, and the chance that a hot parent must be rewritten for small child changes. MongoDB documents have a 16 MiB size limit. Store an unbounded child history in its own collection and keep only a bounded summary or recent subset on the parent.
+    
+    The problem is not only the hard size limit. Large arrays increase bytes transferred when the parent is fetched, can make a frequently modified document hot, and can create many index keys when array members are indexed. Updates that target one element still operate in the context of the containing document, so independent child workloads may interfere. A bounded recent-items subset can preserve a fast parent read while a separate collection stores full history. Give child documents a parent identifier and useful time or sequence field, then index the common query—for example, `{ orderId: 1, occurredAt: -1 }` for recent events. Define how the parent summary is updated and how it is rebuilt if it drifts. “Usually small” is not a bound; use measured maximum growth and retention rules.
+  tags: [arrays, document-limit, modeling]
+- id: mongo-basic-004
+  topic: schema design
+  difficulty: intermediate
+  question: What is the bucket pattern, and when is it useful?
+  answer: |
+    The bucket pattern groups a bounded batch of similar measurements into one document with metadata such as entity ID, time window, count, and a measurements array. It reduces per-record overhead and supports window reads, but bucket size must be bounded by time, count, or bytes. MongoDB time-series collections provide a specialized bucketed implementation for suitable timestamped data.
+    
+    A bucket commonly contains an entity or metadata key, a start time, a count or measurement summary, and a bounded values array. A writer should rotate a bucket when its time span, measurement count, or estimated byte size reaches a chosen limit; concurrent writers need a safe way to select or create the active bucket. Queries can then narrow by metadata and time window and inspect only relevant buckets. The approach trades fewer documents and index entries for more complex writes and possible contention on an active bucket. MongoDB time-series collections manage bucketing internally and can compress well for compatible data, but their supported updates, indexing, and retention behavior must be checked for the server version. Choose based on measurement cadence, late-arriving data, correction needs, and query patterns, not merely because records contain timestamps.
+  tags: [bucket-pattern, time-series, modeling]
+- id: mongo-basic-005
+  topic: CRUD
+  difficulty: beginner
+  question: What is the difference between updateOne() and replaceOne()?
+  answer: |
+    `updateOne()` applies update operators such as `$set`, `$inc`, and `$unset` to matched fields, preserving other fields. `replaceOne()` replaces the document body (while preserving `_id`), so fields omitted from the replacement are removed. Prefer targeted updates unless replacement is deliberate and the caller has a complete canonical document.
+    
+    With `updateOne()`, a filter selects a document and update operators describe the changes; fields not mentioned remain intact. For example, `$set` changes a status, `$inc` adjusts a counter, and `$unset` removes a field. The operation can be made conditional by including the expected current state in its filter, which is useful for concurrency control. `replaceOne()` instead supplies the new document body. The matched document retains its `_id`, but other omitted fields disappear, including fields added by a newer application version. Replacement is appropriate when the caller owns and has reconstructed the complete canonical representation. In either case, inspect the result counts: `matchedCount` indicates whether the predicate found a document, whereas `modifiedCount` can be zero when values were already identical. Upsert behavior should be specified separately and protected by a unique key.
+  tags: [crud, updates]
+- id: mongo-basic-006
+  topic: CRUD
+  difficulty: intermediate
+  question: How can a conditional update prevent a lost state transition?
+  answer: |
+    Include the expected current state in the update filter and check `matchedCount`. For example, update `{ _id: id, status: "pending" }` to set `status: "paid"`. If another writer changed the state first, the filter matches nothing, so the caller can detect a conflict instead of blindly overwriting the newer state.
+    
+    This is a compare-and-set pattern: the database tests the precondition and applies the state transition as one atomic single-document write. For example, `{ _id: id, status: "pending" }` with `$set: { status: "paid" }` cannot overwrite an order that another request already cancelled. If `matchedCount` is zero, re-read or return a conflict based on the API contract; do not assume it always means the record is missing. A revision field can provide optimistic concurrency for updates to several related fields: filter on the revision the caller read and increment it with the update. Keep a stable idempotency key for retries, because a client timeout may happen after the transition committed. Single-document atomicity does not protect a business invariant spanning multiple documents; that may require a transaction or a redesigned aggregate.
+  tags: [atomicity, compare-and-set, concurrency]
+- id: mongo-basic-007
+  topic: query operators
+  difficulty: intermediate
+  question: When should $elemMatch be used for an array query?
+  answer: |
+    Use `$elemMatch` when several predicates must be satisfied by the same array element. Without it, predicates such as `{"lines.sku":"A", "lines.qty":{"$gte":2}}` can match one element with SKU A and a different element with quantity 2. `$elemMatch` makes the same-element requirement explicit and can allow tighter multikey index bounds.
+    
+    Without `$elemMatch`, MongoDB can satisfy predicates on dotted array paths using different elements, which is correct for independent existential predicates but wrong when the application means “one line has this SKU and quantity.” Put those conditions inside one `$elemMatch` object to enforce same-element semantics. This distinction matters for arrays of embedded documents, such as order lines or measurements with multiple attributes. It can also improve index-bound compounding when the relevant fields share a multikey index, though the exact plan depends on the array shape and index. Test with a counterexample containing one element that matches the first predicate and another that matches the second; this catches a semantic bug that a happy-path fixture misses. Explain output can confirm index use, but correctness comes first.
+  tags: [arrays, elemMatch, queries]
+- id: mongo-basic-008
+  topic: query operators
+  difficulty: intermediate
+  question: How do missing fields and explicit null values behave in MongoDB filters?
+  answer: |
+    A filter `{ field: null }` matches documents where `field` is null and documents where it is missing. Use `{ field: { $exists: true, $eq: null } }` when only explicit null is intended, or `$exists: false` for missing fields. Consistent write semantics and tests for both cases prevent subtle optional-field bugs.
+    
+    The equality-to-null shorthand intentionally covers both cases, so code that uses it as “field is explicitly null” may include legacy documents where the property was never written. To select present null, combine `$exists: true` and `$eq: null`; to find absent values use `$exists: false`. Schema migration code should decide whether missing means unknown, not applicable, or a default value, rather than normalizing all three casually. Be particularly careful with optional fields in unique indexes and aggregation expressions, because missing values and null can participate differently depending on the operator and index definition. Validators and consistent writes reduce ambiguity, but old documents may require a backfill. Include missing, explicit null, and ordinary value cases in tests for important filters.
+  tags: [null, exists, queries]
+- id: mongo-basic-009
+  topic: indexes
+  difficulty: beginner
+  question: What does the leftmost-prefix rule mean for a compound index?
+  answer: |
+    An index `{ tenantId: 1, status: 1, createdAt: -1 }` is ordered first by tenant, then status within a tenant, then date within each pair. It can support queries constrained on the leading key(s), but it is not generally an efficient index for `status` alone because tenant values are not fixed. Design key order around actual filters and sort requirements.
+    
+    Compound indexes are lexicographically ordered: the first key groups entries, and each following key orders values inside the preceding prefix. Thus `{ tenantId: 1, status: 1, createdAt: -1 }` naturally serves tenant-scoped status feeds ordered by date, but a status-only query cannot jump directly to all status values efficiently. Index direction matters for sort support: MongoDB can generally use the index in its declared direction or the complete inverse, not an arbitrary reversal of only one component. Equality predicates typically precede sort and range fields, but data selectivity and query shape matter. List the important query patterns, inspect existing indexes for redundant prefixes, and run explain with representative tenants. An index that supports a query can still be costly if it is large or maintained by a high-write collection.
+  tags: [compound-index, query-planning]
+- id: mongo-basic-010
+  topic: indexes
+  difficulty: intermediate
+  question: What is a multikey index?
+  answer: |
+    An index becomes multikey when it indexes an array field; MongoDB records keys for the array's values so membership queries can use the index. Multikey indexes have restrictions, including limits on indexing multiple array fields from the same document in one compound index. Array predicates may need `$elemMatch` for both correct semantics and tighter bounds.
+    
+    For a scalar array such as `tags`, an index on `tags` records entries that can support equality or membership searches. For an embedded array, the index may include dotted fields such as `lines.sku`, but multikey behavior and compound bounds depend on whether predicates must match the same element. `$elemMatch` communicates that requirement. Compound multikey indexes have constraints: a single document cannot generally contribute independent arrays for multiple indexed fields in the same compound index. Index entries can multiply with array length, increasing disk, memory, and write cost. Check document shape, cardinality, and the actual query plan before adding a multikey index. Explain should be paired with realistic data; a tiny collection may choose a collection scan even when the index is usable.
+  tags: [multikey, indexes, arrays]
+- id: mongo-basic-011
+  topic: indexes
+  difficulty: intermediate
+  question: How does a partial index differ from a full index?
+  answer: |
+    A partial index contains only documents matching `partialFilterExpression`, reducing index size and maintenance for a targeted subset. A query can use it only when its predicates imply that filter; an index on open orders cannot answer a query that may include closed orders. Partial unique indexes can enforce conditional uniqueness for only the included documents.
+    
+    A partial index is useful when a stable subset drives a common query, such as active records or documents with a field present. The query must include predicates that guarantee the partial filter; otherwise using the smaller index could omit legitimate results. For instance, an index filtered to `status: "open"` cannot answer a request that also intends to include closed records. A partial unique index can enforce uniqueness only while documents satisfy the filter, enabling patterns like one active username reservation while retaining historical records. Before deploying it, check existing duplicates in the included set and confirm how updates entering or leaving that set affect uniqueness. Partial indexes reduce storage only for the indexed keys, and they are not a general replacement for a full index used by broader query shapes.
+  tags: [partial-index, indexes]
+- id: mongo-basic-012
+  topic: indexes
+  difficulty: beginner
+  question: What does a TTL index guarantee, and what does it not guarantee?
+  answer: |
+    A TTL index asks MongoDB to remove documents after a configured age based on a BSON Date field; `expireAfterSeconds: 0` uses the date value as the expiry time. Cleanup is asynchronous, so it is not exact-time scheduling and must not be the only authorization check for expired data. TTL indexes are single-field indexes.
+    
+    TTL cleanup is performed asynchronously by a background process and can lag according to load and scheduling, so expired records may remain for a while. Use application-level time checks for authorization or access expiry; the database cleanup is storage reclamation, not a security boundary. With `expireAfterSeconds: 0`, the BSON Date field itself gives the expiration instant; with a positive duration, the interval is added to the date. TTL indexes are single-field, and documents with missing or unsuitable date values do not expire as expected. Before adding TTL to existing data, inspect the field types and estimate how many records may become eligible at once. If deleting a large backlog would create load or replication pressure, plan the rollout and monitor it.
+  tags: [ttl, indexes, retention]
+- id: mongo-basic-013
+  topic: explain
+  difficulty: intermediate
+  question: Which explain executionStats values help evaluate query efficiency?
+  answer: |
+    Compare `nReturned` with `totalDocsExamined` and `totalKeysExamined`, and inspect whether the plan uses `COLLSCAN`, `IXSCAN`, a blocking sort, or a fetch. An index scan alone does not mean the query is efficient: examining many keys or documents to return a few results can still be expensive. Use representative parameter values and current data distributions.
+    
+    Read these figures in context. A selective indexed query returning 50 records after examining roughly 50 keys and 50 documents is generally doing bounded work; 50 results after examining tens of thousands signals poor selectivity, broad bounds, or a mismatch between index and request. A high `totalDocsExamined` can result from a fetch after index scan, while a covered plan may avoid document reads. A blocking sort can add memory or disk work even if the filter uses an index. Conversely, `COLLSCAN` may be reasonable for a tiny collection or a query returning most documents. Explain statistics are a controlled sample, not a latency guarantee. Use realistic parameters and compare against profiler or application traces, including skew, cache state, and result size.
+  tags: [explain, performance, indexes]
+- id: mongo-basic-014
+  topic: aggregation
+  difficulty: beginner
+  question: What is an aggregation pipeline?
+  answer: |
+    An aggregation pipeline is an ordered sequence of stages that transform a stream of documents. `$match` filters, `$project` or `$set` reshape and compute fields, `$group` aggregates, and `$sort` orders results. Stage order affects semantics and resource use; filter early where correct, then verify the plan and cardinality.
+    
+    For example, filter paid orders within a time window, unwind their bounded line arrays, group by SKU, calculate units and revenue, then sort and limit the result. Every stage changes either shape, count, or ordering, so verify the business meaning at each transition. `$match` near the start often benefits from collection indexes; `$unwind` can multiply the stream; `$group` and `$sort` may hold substantial intermediate state. Moving a `$limit` before a sort can change a global top-N into a top-N over an arbitrary subset. Aggregation explain output helps assess the initial scan and later work, but stage details vary by release. For repeatable reports, define whether a materialized result is acceptable and how fresh it must be. A pipeline is a program, not just a query string.
+  tags: [aggregation, pipeline]
+- id: mongo-basic-015
+  topic: aggregation
+  difficulty: intermediate
+  question: Why can $unwind cause an aggregation to become unexpectedly expensive?
+  answer: |
+    `$unwind` produces a pipeline document for each array element, multiplying the stream by the array length. Large arrays can turn a moderate collection into a huge intermediate result and inflate subsequent groups or sorts. Filter parent documents first, keep arrays bounded, and ask whether a calculation can be performed within each document instead.
+    
+    `$unwind` changes one input document into one output for each element of an array. If a parent has 100 lines, every downstream stage sees up to 100 records for that parent; large or skewed arrays can overwhelm memory and multiply a group’s work. Unwinding can also change semantics for empty or missing arrays, especially when `preserveNullAndEmptyArrays` is enabled. Filter parent documents before unwinding, and use `$filter`, `$map`, or array expressions when a calculation can stay within each document. If a report requires per-child grouping, keep arrays bounded and estimate the expanded cardinality from real data. Then inspect explain, execution time, spills, and output volume. A selective initial match does not guarantee a small pipeline if selected documents contain huge arrays.
+  tags: [unwind, aggregation, cardinality]
+- id: mongo-basic-016
+  topic: aggregation
+  difficulty: intermediate
+  question: What does $lookup do, and what should be checked before using it?
+  answer: |
+    `$lookup` performs a left outer join from the current stream to a foreign collection and adds matches as an array. Ensure the foreign join field has an appropriate index, restrict the local input when possible, and examine explain output. Repeated lookups for a hot request may indicate that a bounded snapshot or projection belongs in the document model.
+    
+    `$lookup` adds an array of matching documents to each pipeline record, so even a successful join can grow memory and network output if many foreign rows match. Index the foreign join key—`_id` is indexed by default—and restrict the local side before joining. If only a few foreign fields are needed, a pipeline lookup can project them, subject to planner and version behavior. Consider missing matches, duplicate foreign keys, and sharded-collection routing in the design. Explain the real pipeline and watch both local cardinality and foreign work; syntax alone cannot show whether a lookup is cheap. For a hot request repeatedly joining small stable data, embedding a snapshot or maintaining a projection may be worthwhile, but copies need a freshness policy. Use `$lookup` when independent lifecycle and query flexibility justify the join cost.
+  tags: [lookup, aggregation, joins]
+- id: mongo-basic-017
+  topic: atomicity
+  difficulty: beginner
+  question: What is MongoDB's default atomicity boundary for a write?
+  answer: |
+    A write affecting one document is atomic, including changes to several fields or embedded array elements. A multi-document update is not one all-or-nothing operation unless it runs in a transaction. Modeling related state within a bounded document can therefore simplify invariants, but should not create an unbounded or highly contended document.
+    
+    The single-document boundary includes changes to multiple scalar fields and embedded array elements in the same atomic write. Readers do not observe only half of that one write. This is why putting an aggregate’s invariant together—for example, order status and its bounded status metadata—can simplify correctness. It does not mean a write to several documents is automatically atomic, even if one `updateMany()` command processes them. Nor does atomicity prevent a logical race when the filter is too broad; include expected state or revision in the predicate. If the invariant truly crosses documents, use a transaction or a workflow such as reservations and compensation. Avoid enlarging a single document to include an unlimited or highly contended set just to claim atomicity.
+  tags: [atomicity, documents]
+- id: mongo-basic-018
+  topic: transactions
+  difficulty: intermediate
+  question: When is a multi-document transaction appropriate?
+  answer: |
+    Use a transaction when a business invariant genuinely requires atomic commit across multiple documents, such as debiting one account and crediting another. Transactions need a replica set or sharded cluster and add coordination, so prefer single-document atomicity when it safely models the invariant. A MongoDB transaction cannot atomically include an external payment API or message broker.
+    
+    A transaction is appropriate when partial completion would violate a business invariant and the involved MongoDB documents cannot reasonably form one atomic aggregate. For a transfer, debit and credit can commit together, with a transaction record and conditional balance check. Transactions require a replica set or sharded cluster, add coordination, and can abort under contention; keep them short and bounded. Driver transaction helpers may rerun a callback after transient errors, so the callback must not charge a card, send email, or publish a non-idempotent message. Use an outbox or saga to coordinate with external services. An uncertain commit response should be reconciled using a stable request identifier, not blindly replayed. Transactions provide atomicity within MongoDB, not global exactly-once behavior across systems.
+  tags: [transactions, consistency]
+- id: mongo-basic-019
+  topic: consistency
+  difficulty: intermediate
+  question: 'What is the practical difference between write concern w: 1 and w: "majority"?'
+  answer: |
+    `w: 1` acknowledges on the primary and may be rolled back if that primary fails before replication. `w: "majority"` waits for acknowledgment by a majority of voting data-bearing members, reducing that rollback risk but potentially increasing latency or reducing availability when quorum is unavailable. A timeout can leave the operation outcome uncertain rather than proving it did not happen.
+    
+    `w: 1` means the primary acknowledged the write; a failover before replication reaches a majority can result in rollback. `w: "majority"` waits for a majority of voting data-bearing members to acknowledge according to the deployment’s commit rules, reducing that window. It can cost latency and may be unavailable if quorum is lost. A write-concern timeout means the requested acknowledgment did not arrive in time; it is not necessarily cancellation, so the write may still commit. Reconcile with an idempotency key or stable document identity. Majority acknowledgment is not a substitute for backups or for coordinating an external payment. Understand journal and durability defaults for the MongoDB release and configuration in use, and test under the failure mode the application must survive.
+  tags: [write-concern, replication]
+- id: mongo-basic-020
+  topic: replication
+  difficulty: intermediate
+  question: Why can a read from a secondary be stale?
+  answer: |
+    Secondaries apply replicated oplog entries asynchronously, so they can lag behind the primary. Read preference `secondary` controls routing, not freshness. For read-your-writes behavior, use suitable causal sessions and read/write concerns or read from the primary, accepting the corresponding availability and latency trade-offs.
+    
+    Replication generally applies oplog entries asynchronously, leaving a period where a secondary has not yet applied a primary’s latest write. A secondary read can therefore return an older value or omit a recently inserted document; read preference chooses a destination, not a freshness guarantee. If a workflow needs read-your-writes, use a session with causal consistency and appropriate concerns, or read from the primary where suitable. Causal guarantees are scoped and do not imply that unrelated clients immediately see the same state. `maxStalenessSeconds` can exclude secondaries estimated to be too far behind, but it is not a strict global ordering guarantee. Monitor lag and decide whether stale reads are acceptable for each feature, such as dashboards versus payment confirmation.
+  tags: [replication, read-preference, consistency]
+- id: mongo-basic-021
+  topic: sharding
+  difficulty: intermediate
+  question: What makes a shard key effective?
+  answer: |
+    A good shard key balances cardinality and value distribution with the application's query targeting and write patterns. Low-cardinality or highly skewed keys can create hotspots, while monotonic range keys can concentrate new inserts at one range. Hashed keys can spread point values but may make range queries scatter across shards.
+    
+    Evaluate the key against query targeting, cardinality, frequency skew, write rate, and monotonicity. High cardinality alone is insufficient: a field with many values may still be dominated by one tenant or a narrow active range. Range sharding preserves locality for range predicates but increasing values can concentrate new inserts at one end. Hashed keys spread different values more evenly, but commonly make range queries fan out. Compound keys can combine a distribution dimension with a query dimension, though their prefix semantics determine what can be targeted. Test with realistic skew and inspect per-shard work through `mongos` explain. A shard key is an architectural commitment: unique-index rules, update targeting, data movement, and resharding all depend on it. Do not select it from a uniformly random synthetic dataset alone.
+  tags: [sharding, shard-key]
+- id: mongo-basic-022
+  topic: storage engine
+  difficulty: intermediate
+  question: What is the working set, and why does it matter with WiredTiger?
+  answer: |
+    The working set is the data and index pages repeatedly touched by the workload. When it fits in available memory, many reads avoid storage I/O; when it does not, cache evictions and disk reads can increase latency. Indexes consume working-set capacity as well as speeding selected queries, so measure the whole workload rather than adding indexes reflexively.
+    
+    Think of the working set as repeatedly accessed data and index pages, not simply total collection size. If hot pages remain in memory, reads can avoid many storage accesses; if the workload churns through more pages than cache can retain, eviction and disk reads can raise latency. Indexes help chosen queries but also occupy cache and increase write work, so an index can improve one endpoint while harming another. Diagnose with cache eviction and page-read metrics, host memory and disk latency, and query-level examined work. High cache occupancy by itself is normal and not proof of distress. WiredTiger cache is only one part of memory use; account for operating-system cache, connections, other processes, and deployment configuration. Validate improvements under representative concurrency and both warm and cold cache conditions.
+  tags: [wiredtiger, cache, performance]
+- id: mongo-basic-023
+  topic: change streams
+  difficulty: intermediate
+  question: How should a change-stream consumer handle resume tokens?
+  answer: |
+    Persist a resume token only after its downstream effect is durable, and make processing idempotent because a crash may cause the event to be replayed. A token is resumable only while the required oplog history remains available. If the consumer falls behind beyond that window, it needs a resynchronization or backfill plan.
+    
+    A change-stream token marks a position in the oplog-backed stream; it is not a promise that history is retained forever. Apply the downstream effect durably before persisting the new token, so a crash can cause a replay but not a gap. Consumers should be idempotent, often by upserting a projection keyed by source document identity or tracking an event/version key. If the token is saved before the output is durable, a crash can permanently skip the event. If the consumer is offline beyond oplog retention, it must rebuild or backfill from a consistent boundary before joining the live stream; simply taking a new token loses changes. Monitor lag relative to the oplog window and rehearse resync, including deletes and updates during the scan.
+  tags: [change-streams, resume-token, reliability]
+- id: mongo-basic-024
+  topic: schema validation
+  difficulty: beginner
+  question: Does MongoDB's flexible document model mean schema validation is unnecessary?
+  answer: |
+    No. Flexible storage allows different shapes, but applications still rely on field names, types, and invariants. Collection validation can enforce required fields and BSON types, while application validation handles broader business rules. During migrations, validators can be evolved to accept old and new versions until the backfill is complete.
+    
+    Validation helps protect the database boundary from accidental type drift and incomplete writes, especially when several application versions or scripts write to the same collection. A `$jsonSchema` validator can require fields, restrict BSON types, and enumerate allowed values, while unique indexes enforce certain identity rules. Neither replaces all business validation: cross-document conditions and external rules usually live in application logic or transactions. During rollout, use a validator that accepts both old and new shapes, deploy compatible readers and writers, backfill in bounded batches, and tighten requirements only after verifying coverage. Decide whether invalid writes should error or be recorded as warnings based on migration stage and risk. Test validators against real examples, including legacy documents and optional fields, before enforcing them in production.
+  tags: [validation, schema, migrations]

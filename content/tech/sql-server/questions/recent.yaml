@@ -1,0 +1,190 @@
+- id: mssql-recent-001
+  topic: query optimisation
+  difficulty: advanced
+  question: A parameterised query is fast for most tenants but slow for the largest tenant. How do you investigate and address it?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Start with Query Store to compare plans, runtime and waits across parameter periods; confirm
+    that the slow population has a different cardinality and that the issue is not a blocking or
+    resource event. Compare actual rows with estimates and check index/selectivity assumptions.
+    SQL Server 2022's Parameter Sensitive Plan optimization can produce dispatcher and variant
+    plans for qualifying parameter-sensitive predicates at the required compatibility level.
+    Verify eligibility and actual variants. Alternatives include `OPTION (RECOMPILE)`, separate
+    query shapes or targeted Query Store hints, with compile cost and operational risk measured.
+    
+    A useful experiment captures representative small and largest-tenant values with actual plans, `STATISTICS IO/TIME`, Query Store runtime intervals and current wait context. Check whether parameter values produce genuinely different cardinalities and whether a plan or resource contention changed around the regression. For SQL Server 2022 PSP, inspect dispatcher/variant plans and confirm the query qualifies at the database compatibility level; do not assume the feature handled it. Bound compile overhead and compare p95/p99 as well as averages after any mitigation.
+  tags: [parameter-sensitive-plan, query-store]
+- id: mssql-recent-002
+  topic: query optimisation
+  difficulty: advanced
+  question: How would you use Query Store to recover from a plan regression after a deployment?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Use Query Store to identify the query, plan transition and runtime/wait change around the
+    deployment. Confirm that the prior plan was consistently better under comparable parameters
+    and load. Plan forcing can be a short-term mitigation while the query, statistics, schema or
+    compatibility-level change is investigated. Monitor for forcing failures and regressions;
+    do not leave an unexplained forced plan as an unreviewed permanent fix. Check capture and
+    storage settings and service-specific support.
+    
+    Record the Query Store query and plan identifiers, deployment time, representative parameter population and baseline execution metrics before forcing. Plan forcing is a reversible containment step, but the optimizer can fail to force it when dependencies change, and the old plan may be poor under new data distributions. Monitor forcing failures, reads, CPU, waits and latency; keep an owner and expiry/review condition on the mitigation. Then test the schema, statistics, compatibility or query change that caused the regression.
+  tags: [query-store, plan-regression]
+- id: mssql-recent-003
+  topic: query optimisation
+  difficulty: advanced
+  question: What do memory grant feedback and a spill warning tell you, and what do they not tell you?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A spill means a sort or hash operation could not complete entirely in its grant and used
+    tempdb. Inspect the actual plan's granted and used memory, row estimates, spills and repeated
+    executions. Memory grant feedback can adjust grants for eligible cached plans in supported
+    versions and configurations, but it does not repair a bad query shape or all parameter
+    sensitivity. Confirm version, compatibility and persistence behavior; assess tempdb and
+    concurrency as well as one execution's elapsed time.
+    
+    A spill warning identifies an execution symptom, not necessarily the root cause: cardinality error, skew, wide rows, an undersized grant or unavoidable workload volume can contribute. Compare granted and used memory, spill level, estimated/actual rows, tempdb I/O and concurrency. Memory grant feedback may learn from executions for eligible plans, but behavior and persistence vary by engine version and compatibility. If feedback oscillates across skewed parameters, the underlying query still needs a parameter-sensitive strategy.
+  tags: [memory-grant, spills, tempdb]
+- id: mssql-recent-004
+  topic: platform and recovery
+  difficulty: advanced
+  question: How does Accelerated Database Recovery affect rollback and version-store operations?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    ADR changes recovery by maintaining a persistent version store and enabling fast logical
+    undo, so rollback and crash recovery can be much faster for long transactions. Its persistent
+    version store has space and cleanup implications and is distinct from the traditional tempdb
+    version store used by row-versioning isolation. Check deployment support and whether ADR is
+    enabled, monitor the relevant database storage, and test workload behavior before enabling
+    it. It does not eliminate transaction design or backup requirements.
+    
+    ADR uses a persistent version store and logical undo to make rollback time less dependent on transaction length, but PVS growth and cleanup lag can become capacity concerns. Check database-level ADR configuration and version-store DMVs for the platform and version; do not attribute every version to tempdb. Long-running transactions and cleanup throughput remain operational concerns. Measure log, PVS and recovery behavior under representative transactions, and retain the usual independent backup and integrity-check practices.
+  tags: [adr, recovery, version-store]
+- id: mssql-recent-005
+  topic: query optimisation
+  difficulty: advanced
+  question: How do compatibility level and cardinality-estimator changes affect plan stability?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Compatibility level controls important query-processing behavior and can select a newer
+    cardinality estimator even on the same engine build. Estimates influence join order, memory
+    grants and parallelism, so a compatibility upgrade may improve most queries and regress a
+    few. Use Query Store to baseline and compare before/after, test representative parameter
+    populations, and use scoped mitigations such as Query Store hints or legacy CE options only
+    when evidence supports them. Database rollback plans must include compatibility implications.
+    
+    Compatibility changes should be treated as a workload migration, not merely a database property flip. Use Query Store to identify affected query plans and runtime intervals, then replay or test representative parameters, data volume and concurrency. The newer estimator may improve cardinality for many queries and alter join, grant and parallel choices for others. Scoped Query Store hints or a legacy estimator option can contain a case, but record rationale, validate service support and remove temporary exceptions after the root issue is fixed.
+  tags: [compatibility-level, cardinality-estimator]
+- id: mssql-recent-006
+  topic: indexing
+  difficulty: intermediate
+  question: How would you evaluate a missing-index recommendation from an actual plan?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Treat it as a candidate, not a command. Check whether the predicate and ordering match an
+    existing index prefix, estimate the write and storage cost, and consider includes only for
+    demonstrated lookup work. Missing-index recommendations are local to a compilation and can
+    propose overlapping structures. Consolidate candidates, create one controlled change, and
+    compare Query Store plans, reads, writes and latency under representative load.
+    
+    Inspect the full predicate, join, grouping and ordering shape, then compare the suggestion with existing indexes, constraints and common query variants. Recommendations often omit write amplification, filtered-index opportunities and broader workload overlap; they are based on an estimated compilation. Make one measured change in a controlled environment and monitor Query Store reads/runtime plus insert/update cost and index size. Keep only the design whose measured benefit justifies its lifecycle and storage cost.
+  tags: [index-design, missing-index]
+- id: mssql-recent-007
+  topic: concurrency
+  difficulty: advanced
+  question: A team proposes enabling READ_COMMITTED_SNAPSHOT to eliminate blocking. What should be reviewed first?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Identify which waits are reader-writer blocks and whether the application expects statement-
+    level read consistency. RCSI can reduce shared-lock blocking for ordinary reads but not
+    writer-writer conflicts, and its row versions require storage and cleanup. Review long-running
+    transactions, tempdb capacity (or ADR persistent version store behavior), code relying on
+    locking semantics, deployment impact and rollback plan. Test write contention, version-store
+    growth and data correctness before changing the database option.
+    
+    RCSI changes semantics as well as locking: reads become statement-level snapshots, so repeated reads may observe different commits. Verify that no workflow depends on readers blocking writers or uses locks as a coordination mechanism. Test long transactions, tempdb capacity, ADR persistent version-store growth where applicable, schema-lock behavior and writer contention. Plan the database option change, validation and rollback with a maintenance window, and monitor version cleanup and application correctness after rollout.
+  tags: [rcsi, blocking, row-versioning]
+- id: mssql-recent-008
+  topic: high availability
+  difficulty: advanced
+  question: How do synchronous and asynchronous availability-group commit modes affect RPO and latency?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Synchronous commit waits for a synchronous secondary to harden the log before the primary
+    acknowledges commit, improving the potential no-data-loss failover point while adding network
+    and replica latency to commit. Asynchronous commit does not wait, improving distance and
+    throughput options but allowing data loss on forced failover if the secondary lags. Define
+    RPO/RTO, monitor send and redo queues, test failover conditions and verify the exact cluster,
+    edition and platform support rather than assuming mode names guarantee outcomes.
+    
+    Define whether failover is planned or forced and which replica is synchronized at that moment; asynchronous mode can have a nonzero data-loss window on forced failover. Synchronous mode still depends on quorum, health and failover configuration, and cross-region network latency can affect every commit. Track `log_send_queue_size`, `redo_queue_size` and synchronization state over time, then test listener reconnection and application retries. RPO/RTO should come from tested failure scenarios, not from the mode label alone.
+  tags: [availability-groups, rpo, failover]
+- id: mssql-recent-009
+  topic: security
+  difficulty: advanced
+  question: When does Always Encrypted provide a different protection boundary from TDE?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    TDE encrypts database files and backups at rest, while SQL Server processes plaintext and
+    privileged database operators can query it. Always Encrypted keeps selected values encrypted
+    from the Database Engine; a trusted client driver performs cryptographic operations using
+    keys managed outside the database. Deterministic encryption permits limited equality operations
+    but leaks equality patterns; randomized encryption is more restrictive. Assess driver, enclave,
+    key lifecycle, query requirements and service support.
+    
+    Always Encrypted matters when the threat model includes database operators or backup readers who should not see plaintext column values. The client driver and key custodian become trusted components, and server-side filtering, sorting and joins may be limited by encryption mode and supported features. TDE instead protects files and backups from offline exposure but not privileged queries through the running engine. Document key rotation and recovery, driver compatibility, equality leakage and operational support before selecting either control.
+  tags: [always-encrypted, tde, key-management]
+- id: mssql-recent-010
+  topic: data integration
+  difficulty: intermediate
+  question: How would you design a resilient CDC consumer that can recover after downtime?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Persist a durable LSN watermark only after applying the corresponding changes successfully.
+    Read changes in the documented LSN interval, make target application idempotent, and commit
+    the target changes and watermark atomically when possible. Monitor capture-job lag, CDC
+    retention and cleanup. If the watermark precedes the minimum available LSN, reinitialize from
+    a consistent snapshot rather than skipping forward silently. CDC is not permanent audit storage.
+    
+    Use CDC range functions with valid inclusive/exclusive LSN boundaries and persist the checkpoint only after the target transaction commits. Deduplicate or apply changes idempotently using source keys and operation metadata; handle deletes explicitly and ensure a repeat of the same range is safe. Monitor capture and cleanup jobs, max-LSN lag, minimum retained LSN and consumer duration. If the saved LSN is no longer retained, coordinate a consistent snapshot and new watermark instead of advancing past missing changes.
+  tags: [cdc, lsn, etl]
+- id: mssql-recent-011
+  topic: performance
+  difficulty: advanced
+  question: A query suddenly has high PAGEIOLATCH waits. What evidence separates storage latency from excess reads?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Capture interval deltas from `sys.dm_io_virtual_file_stats` to estimate per-file read latency,
+    and compare physical read volume with `SET STATISTICS IO`, actual plans and Query Store. High
+    latency with modest reads suggests storage or queueing; huge reads with normal latency suggest
+    inefficient access, poor estimates or cache churn. Correlate with host telemetry and workload
+    timing. `PAGEIOLATCH_*` means waiting for a page I/O, not proof that a disk is faulty.
+    
+    Take two file-stat samples over the incident interval and calculate read count and stall deltas per file, while collecting query-level physical reads and plan history. High average latency with modest read volume points toward storage or queueing; normal latency with enormous reads points toward excessive access work or cache churn. Correlate with host queue depth, file placement, cache pressure and timing. `PAGEIOLATCH` is a task waiting for a page I/O; it does not by itself identify a faulty disk or prove which query caused the reads.
+  tags: [pageiolatch, io, triage]
+- id: mssql-recent-012
+  topic: security
+  difficulty: intermediate
+  question: How should row-level security be applied to a multi-tenant database safely?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Implement a schema-bound inline table-valued predicate and security policy, then test both
+    filter and block behavior against real principals and all access paths. If tenant identity
+    comes from `SESSION_CONTEXT`, ensure untrusted callers cannot set another tenant's value;
+    the application identity and connection pool lifecycle matter. Review privileged bypass,
+    plan overhead, auditing and stored-procedure behavior. RLS supplements, rather than replaces,
+    application authorization and tenant-isolation testing.
+    
+    Use an inline table-valued predicate based on a tenant identifier that the caller cannot forge, and test filter and block predicates under the actual database principal. Shared connection pools must set and clear session context reliably; a stale tenant value can leak data between requests. Test privileged bypass, ad hoc SQL, procedures, views, bulk access and query plans. Add auditing and application authorization, then run automated cross-tenant negative tests. RLS is defense in depth, not proof that the identity source is trustworthy.
+  tags: [row-level-security, multi-tenancy]

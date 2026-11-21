@@ -1,0 +1,81 @@
+- id: rs-scn-001
+  title: Dashboard latency rises after a large customer load
+  technologies: [redshift, sql]
+  difficulty: intermediate
+  prompt: |
+    A dashboard query joining `fact_orders` to `dim_customer` used to finish in seconds. After a new customer contributed a large share of the rows, p95 latency rises sharply. WLM shows little queueing. The plan has `DS_BCAST_INNER`, and one slice appears to run much longer than the others. The analyst asks whether to resize the cluster immediately.
+  approach: |
+    1. Confirm queue versus execution time and compare the query, data volume, and concurrency to the prior baseline.
+    2. Compare estimates with actual row counts, refresh relevant statistics, and inspect filters and join cardinality.
+    3. Check distribution style and key skew using `SVV_TABLE_INFO` and execution details. The new data may create a hot distribution-key value.
+    4. Evaluate whether the broadcast input remains small after filtering. Test an alternate distribution or query shape on representative data, accounting for other joins and load costs.
+    5. Resize only if evidence points to general capacity pressure; retest latency and slice balance under realistic concurrency.
+  red_flags:
+    - Resizing first despite low queue time and a visible skew signal.
+    - Treating `DS_BCAST_INNER` as necessarily wrong without measuring the inner input.
+    - Changing distribution based on one join without checking workload regressions.
+
+- id: rs-scn-002
+  title: A COPY retry duplicated yesterday's batch
+  technologies: [redshift, s3]
+  difficulty: intermediate
+  prompt: |
+    An hourly job copies files from an S3 prefix directly into a reporting fact table. The first run times out after loading some objects. An operator retries the same `COPY`, and downstream row counts are now too high. The prefix also contains a few older files from a prior replay. The pipeline currently records only the SQL start time.
+  approach: |
+    Establish which objects and rows the failed and retried commands processed by checking load history and source manifests. Do not assume the failed run was atomic. Change the pipeline to publish immutable batch prefixes and create a manifest that lists exactly the intended S3 objects. Load into a staging table, validate counts and keys, and make the publish step idempotent using a batch identifier or source event key. Persist manifest, batch status, accepted/rejected counts, and commit outcome outside short-retention system logs. Define a safe recovery for the duplicated target rows and test replay behavior before production. Use a least-privilege IAM role and explicit completion markers so downstream jobs cannot read a partially written batch.
+  red_flags:
+    - Blindly rerunning COPY into an append-only target.
+    - Assuming a timeout proves no files were loaded.
+    - Using a wildcard prefix that includes old objects.
+
+- id: rs-scn-003
+  title: Spectrum scan reads far more S3 data than expected
+  technologies: [redshift, parquet, s3]
+  difficulty: intermediate
+  prompt: |
+    A report filters external Parquet data to one week, but the query reads a large fraction of the S3 dataset and is slower than the local-table version. The external table is partitioned by date, although catalog partitions are inconsistently registered. The query uses a cast on the date field and the prefix contains many small files.
+  approach: |
+    Verify that the report predicate matches the external partition column and remove unnecessary casts or transformations that block pruning. Check catalog registration for the selected week and compare partitions considered with files and bytes read using available Spectrum monitoring. Inspect the S3 path convention and Parquet schema to ensure partition values and types agree. Consolidate tiny files and use a manageable partition granularity based on real query filters. Confirm IAM and catalog permissions using the Redshift role. Compare external and local query costs using the same data and workload; load frequently accessed subsets into Redshift if their latency and scan frequency justify it. Add a regression check for partitions and bytes scanned.
+  red_flags:
+    - Assuming the SQL date filter guarantees partition pruning.
+    - Adding more partitions without addressing tiny-file overhead or catalog gaps.
+    - Blaming network performance without measuring bytes and partitions scanned.
+
+- id: rs-scn-004
+  title: Short queries wait behind a nightly transformation
+  technologies: [redshift, sql]
+  difficulty: intermediate
+  prompt: |
+    Interactive BI queries have acceptable execution time but poor response latency when a nightly transformation runs. WLM history shows long queue delays. The team has increased the number of concurrent slots, after which some large queries now spill to disk. Users propose enabling concurrency scaling for every queue.
+  approach: |
+    Separate queue time from execution and identify which users or query groups produce the contention. Route interactive and batch work into intentional WLM paths, considering automatic WLM, query priority, and SQA for eligible short queries. Monitor whether SQA takes the expected requests and how long they wait. Do not raise concurrency without evaluating memory and spill behavior. Enable concurrency scaling only on appropriate queues and confirm operation eligibility, actual scale status, and sustained usage. Review whether the nightly job can be scheduled, optimized, or materialized differently. Test with a representative mix and compare p95 latency, batch completion, spill rate, and throughput. Document limits and owner expectations.
+  red_flags:
+    - Assuming more slots always increase throughput.
+    - Treating concurrency scaling as a substitute for workload routing.
+    - Using execution time alone when queue delay is the complaint.
+
+- id: rs-scn-005
+  title: External-table access fails after a security change
+  technologies: [redshift, s3]
+  difficulty: advanced
+  prompt: |
+    Analysts can query some Glue-backed external tables but receive an authorization error on a new Lake Formation-governed table. The database role has `USAGE` on the external schema and `SELECT` on the table. A developer suggests attaching broad S3 permissions to the cluster role to unblock the dashboard.
+  approach: |
+    Trace the request identity and each permission boundary: database grants, Redshift role association and trust, Glue catalog permissions, Lake Formation table and data-location grants, S3 bucket policy, KMS key access if encrypted, and organization controls. Compare the governed table's catalog and location configuration with one that works. Use the actual Redshift role and a minimal test query; a developer's console identity does not prove what the service assumes. Identify the denied action in audit evidence, then grant only the specific required resources to the intended principal. Test both allowed and denied access and preserve an audit trail. Keep SQL permissions and AWS data permissions distinct in the runbook.
+  red_flags:
+    - Adding broad bucket access without identifying the denied permission.
+    - Treating database SELECT as sufficient for Spectrum.
+    - Testing only with a privileged human role rather than the workload identity.
+
+- id: rs-scn-006
+  title: Vacuum is blocked by a stale materialized view dependency
+  technologies: [redshift, sql]
+  difficulty: advanced
+  prompt: |
+    A large fact table has many deleted rows and storage pressure is rising. `VACUUM` reclaims less space than expected because a dependent materialized view has not refreshed for several days. The dashboard owner wants the latest data but cannot tolerate an unexpectedly long full refresh. Operations considers `VACUUM FORCE` immediately.
+  approach: |
+    Establish storage urgency, table state, MV freshness requirements, and whether the view can refresh incrementally. Inspect refresh history and estimate refresh duration on representative data. If possible, coordinate and complete an incremental refresh, verify it is current, then vacuum and confirm deleted rows are reclaimed. If urgency requires `FORCE`, explain that the stale view may be marked for recomputation and plan the subsequent full refresh with the dashboard owner. Avoid treating space reclamation and freshness as unrelated. Set a refresh schedule, staleness alert, and operational ownership. Test the process in a safe environment and review query load during refresh and vacuum. Record the decision and recovery path.
+  red_flags:
+    - Running `VACUUM FORCE` without a plan for the next MV refresh.
+    - Assuming stale MVs never affect base-table cleanup.
+    - Treating an MV refresh as complete without validating its freshness and status.

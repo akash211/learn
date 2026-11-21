@@ -1,0 +1,143 @@
+- id: rs-recent-001
+  topic: serverless operations
+  difficulty: intermediate
+  question: A team is deciding whether to move a variable analytics workload from provisioned Redshift to Serverless. How would you evaluate the choice?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Start with workload shape, not a slogan about serverless. Collect a representative cycle of query volume, peak concurrency, idle periods, queue and execution latency, data growth, external scans, refresh jobs, and required freshness. Include workload isolation, data sharing, security integration, observability, and who will operate the system. A variable workload with long idle windows may fit a managed capacity model, while steady predictable demand may benefit from explicit provisioned capacity; neither conclusion follows from one benchmark.
+
+    Test the same queries and data under realistic concurrency, including cold and warm behavior. Define capacity guardrails, monitor usage, and test what happens during spikes or throttling. Compare total operational requirements and account-specific usage rather than quoting generic pricing. Confirm current feature parity and limits in AWS documentation. Keep a rollback plan and explicit SLOs for latency and freshness. The strongest recommendation states the workload assumptions and the measurements that would change the decision.
+  tags: [serverless, provisioned, evaluation]
+
+- id: rs-recent-002
+  topic: monitoring views
+  difficulty: intermediate
+  question: Your monitoring queries use STL and SVL views, but the team now operates both provisioned and Serverless workloads. What should change?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Inventory which metrics and identifiers the dashboards need, then evaluate the `SYS` monitoring views as a consolidated interface for query history and details across supported environments. Avoid assuming that every provisioned-only `STL_`, `SVL_`, or `STV_` view is available or has identical coverage in Serverless. Keep specialized views where they provide information that the unified views do not expose, and test field semantics before replacing production monitoring.
+
+    Build a small cross-check: submit representative queries on each environment, compare query IDs, queue and execution timing, status, and step-level details, and document differences. `STL_` logs have bounded retention; `STV_` tables are current snapshots. Export the metrics required for longer-term trends. Treat query text as sensitive. Give dashboard users only the required permissions and avoid system-log access that exposes unrelated statements. Migration is complete only when alerts and runbooks still work for both environments.
+  tags: [sys-views, monitoring, serverless]
+
+- id: rs-recent-003
+  topic: automatic table optimization
+  difficulty: intermediate
+  question: Automatic table optimization selected distribution and sort choices, but one important join is still slow. What is your response?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Treat automatic choices as a useful starting point, not a promise that every future query is optimal. Capture the exact query and compare queue time with execution time. Read `EXPLAIN` for `DS_BCAST_INNER`, `DS_DIST_*`, and estimated rows, then correlate with actual step metrics. Check `SVV_TABLE_INFO` for the table's current distribution, sort state, and skew, and verify statistics are fresh. Determine whether the join input is truly large after filters or whether the plan's estimate is wrong.
+
+    If one query pattern is important, test candidate SQL rewrites or manual physical designs against a representative workload and data distribution. Include load, update, storage, and maintenance costs, not only that join's latency. Automatic optimization may adapt over time, but it cannot eliminate skew inherent in a dominant key or a badly shaped many-to-many join. Keep a reversible change and monitor other critical queries for regression. Validate current Redshift behavior before assuming which table settings are automatic or changeable.
+  tags: [automatic-optimization, distribution, tuning]
+
+- id: rs-recent-004
+  topic: data lake governance
+  difficulty: advanced
+  question: A Spectrum query can access some Glue tables but fails on a Lake Formation-governed table. How do you diagnose it safely?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Trace the access path with the exact Redshift identity and workgroup or cluster role. Confirm database privileges on the external schema and table, the IAM role association and trust relationship, Glue catalog access, Lake Formation grants to the relevant principal, and S3 data-location access. If the object is encrypted, verify the role can use its KMS key. Bucket, organization, and key policies can still deny access even when an identity policy appears to allow it.
+
+    Compare the failing table's catalog and governance configuration with a working one, but do not solve the problem by granting broad bucket or catalog access. Use audit logs and a minimal test query to identify the denied boundary. Confirm that the caller's role is the one assumed by Redshift, not a developer's console identity. Record the least-privilege permission change and test both allowed and denied cases. Exact integration behavior can vary by deployment and evolves, so check current AWS documentation for the supported Lake Formation and Redshift configuration.
+  tags: [lake-formation, iam, spectrum]
+
+- id: rs-recent-005
+  topic: concurrency scaling
+  difficulty: intermediate
+  question: Concurrency scaling is active, but users still report slow queries. What evidence do you collect before changing capacity?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Separate queue time from execution time for the reported queries, and verify whether each query actually ran on the main or concurrency-scaling cluster. Use WLM and query-history views appropriate to the deployment, including concurrency-scaling status where exposed. Then compare plans and step-level behavior for the slow queries: scans, redistribution, skew, spills, row estimates, and external bytes. Scaling helps eligible work waiting behind concurrency; it does not inherently fix an inefficient plan or an ineligible statement.
+
+    Check queue routing and whether the specific SQL, table design, and cluster configuration qualify. Look for repeated use of scaling as a sustained baseline signal. If execution remains slow, tune SQL, statistics, or physical layout; if queueing dominates, revisit WLM isolation and capacity. Test changes under realistic load and monitor side effects on other queues. Avoid increasing a cluster or scaling limit simply because the feature is active; its presence is not proof that the bottleneck is capacity.
+  tags: [concurrency-scaling, diagnosis, wlm]
+
+- id: rs-recent-006
+  topic: ingestion and schema evolution
+  difficulty: advanced
+  question: A producer added a column and changed a type in Parquet files. How do you evolve the Spectrum and COPY consumers safely?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Treat the file schema, Glue catalog, external-table definition, and destination table as separate contracts. First inspect representative old and new files, including nullability, physical type, decimal precision, timestamp convention, and partition metadata. Determine whether the change is additive or incompatible. A new nullable field may be backward-compatible for some consumers; changing a numeric type or timestamp interpretation can silently alter values or cause read failures.
+
+    Version the producer schema and update catalog metadata deliberately rather than relying on crawler inference to silently redefine the interface. Test Spectrum queries across old and new partitions and verify predicates and casts. For `COPY`, load a bounded sample into staging, validate counts and values, then apply explicit destination mappings or transformations before publishing. Keep rollback and replay paths. Coordinate deployment order so the producer does not emit a type that the catalog or consumer cannot read. Monitor scan and load errors after rollout, and document the compatibility window.
+  tags: [parquet, schema-evolution, copy]
+
+- id: rs-recent-007
+  topic: dynamic data masking
+  difficulty: advanced
+  question: How would you introduce dynamic data masking for sensitive columns without breaking analytics?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Begin by classifying the sensitive columns and identifying which roles need raw values, masked values, or no access. Define masking policies with explicit role conditions and priorities where policies overlap. Test representative queries as each role, including joins, predicates, aggregates, views, exports, and BI tools. Masking can preserve analytical usefulness, but it is not encryption and does not itself prevent access to the table or eliminate inference risks.
+
+    Roll out in a lower environment using realistic identities and verify expected results as well as denied cases. Audit policy attachment and role membership, and confirm privileged roles that bypass masking are tightly controlled. Review logs and query text because sensitive literals can appear outside result columns. Coordinate with downstream consumers that depend on exact values or grouping behavior. Keep the policy migration reversible and monitor application errors and query plans after deployment. Use current Redshift documentation for the available policy syntax and interactions; do not assume all data paths apply masking identically.
+  tags: [masking, privacy, roles]
+
+- id: rs-recent-008
+  topic: row-level security
+  difficulty: advanced
+  question: A multi-tenant analytics table uses row-level security. What failure modes should you test before release?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Test that each tenant role sees its own rows and cannot see another tenant's rows through direct queries, views, joins, aggregates, exports, and shared access paths. Verify the policy uses a trusted principal or securely established context. If a user can choose an arbitrary tenant identifier in a session variable or request parameter, that value is not a trustworthy security boundary. Test behavior when context is missing, malformed, or stale, and prefer deny-by-default behavior.
+
+    Check privileged roles, policy ownership, role inheritance, and any administrative bypass deliberately. Include negative tests for newly created tables and views so a forgotten policy does not expose data. Review performance because policy predicates affect plans, but do not weaken isolation just to recover speed; evaluate distribution and query shape. Audit changes to policies and role memberships. Document which paths are covered and test after schema changes. RLS controls row visibility, not S3 permissions, encryption, or masking of sensitive columns, so combine controls where the threat model requires them.
+  tags: [rls, multi-tenant, security]
+
+- id: rs-recent-009
+  topic: materialized views
+  difficulty: intermediate
+  question: A dashboard's materialized view is stale and base-table vacuum is retaining deleted rows. How do you resolve the conflict?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Determine whether the materialized view can refresh incrementally and whether the deleted base rows are needed to apply changes since its last refresh. Measure the freshness SLO, current table growth, refresh duration, and available capacity. If consumers can tolerate the refresh now, refresh the dependent view, verify it is current, and then rerun vacuum so the rows can be reclaimed without losing the incremental path.
+
+    If storage pressure requires reclaiming space immediately, `VACUUM ... FORCE` can mark stale dependent views for recomputation, but their next refresh may require a full rebuild. Estimate and schedule that work before choosing it. Do not treat vacuum as independent from MV lifecycle. After the action, verify view freshness, refresh status, and base-table state. Prevent recurrence by setting a refresh schedule and alerting on staleness. Confirm exact syntax and current behavior for the Redshift version and object type in use.
+  tags: [materialized-view, vacuum, freshness]
+
+- id: rs-recent-010
+  topic: query tuning
+  difficulty: advanced
+  question: An execution plan shows DS_BCAST_INNER and the query regressed after a data increase. How do you decide whether to change distribution?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    First establish whether the regression is in queue time or execution. For execution, compare the old and new input sizes, actual rows after filtering, and optimizer estimates. `DS_BCAST_INNER` broadcasts the inner relation; it may remain efficient if filters keep it small, but a growth in input size can make network transfer expensive. Refresh statistics, confirm join keys and filter logic, and inspect per-step bytes and row counts before modifying table DDL.
+
+    Evaluate the full set of important joins. A matching KEY distribution may allow collocation, but can create skew or make other joins worse. Replicating a dimension with `ALL` may help only when its size and update pattern justify the extra storage and load cost. Test candidate SQL and layouts on representative data and concurrency, then compare runtime, load, and maintenance. A plan label identifies movement, not the correct fix. Keep changes reversible and monitor unrelated queries after rollout.
+  tags: [ds-bcast-inner, explain, distribution]
+
+- id: rs-recent-011
+  topic: operations and observability
+  difficulty: intermediate
+  question: What should a Redshift operational dashboard retain beyond the seven-day system-log window?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Preserve workload trends that support capacity, reliability, and regression decisions: query identifiers and normalized workload labels, queue and execution duration, status, concurrency, rows or bytes processed, spill indicators, load success and errors, materialized-view refresh status, storage growth, and relevant table-maintenance state. Retain enough context to compare recurring jobs and seasonal peaks, but avoid exporting raw SQL text unless there is a clear need and suitable access control.
+
+    `STL_` views have bounded log retention and `STV_` views are transient snapshots, so neither is a durable monitoring warehouse. Use supported `SYS` views where they offer a consistent query interface, then export selected metrics into a controlled monitoring or analytics system. Protect query text and user identifiers as sensitive data. Document metric definitions, deployment coverage, and gaps between provisioned and Serverless monitoring. Test that alarms still fire after failover, resize, or a change in workload configuration. Long-term observability should include runbooks and baselines, not only a dashboard of current utilization.
+  tags: [monitoring, stl, retention]
+
+- id: rs-recent-012
+  topic: cost and performance
+  difficulty: advanced
+  question: A recurring ETL job is faster after a resize but the cluster appears underused afterward. How would you choose a lasting operating model?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Identify whether the resize reduced queueing, execution time, or both, and record how long the larger capacity was actually needed. Examine the job's schedule, concurrency with dashboards, data volume, spill behavior, and downstream freshness requirements. If the demand is predictable, an operational schedule that scales before the batch and returns to baseline may be appropriate where supported. If usage is intermittent, compare a Serverless workgroup using a representative cycle and explicit capacity guardrails.
+
+    Also look for query improvements, load parallelism, materialization, or WLM isolation that could reduce the peak requirement. A larger cluster can hide a scan or distribution problem. Compare latency, throughput, reliability, idle periods, operational effort, and account-specific usage rather than relying on a generic price assumption. Validate feature constraints and resize behavior in current AWS documentation. Preserve a rollback path and define what metric triggers a capacity change. Re-evaluate after data growth or a workload mix change.
+  tags: [resize, serverless, capacity]
