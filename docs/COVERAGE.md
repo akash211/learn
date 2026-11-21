@@ -1,13 +1,104 @@
 # Content coverage
 
-54 technologies, grouped. A module is "done" when it has `tech.yaml`, 8–10 chapters, ≥22 basic
-questions, ≥10 recent-pattern questions, ≥6 scenarios and a quick-revision pack, and passes
-`python -m backend.app.content` plus the independent validator.
+54 technologies. A module is "done" when it has `tech.yaml`, 8–10 chapters of 1,100–1,400
+words, ≥22 basic questions, ≥10 recent-pattern questions (answers 120–200 words), ≥6
+scenarios, a quick-revision pack, and passes `python -m backend.app.content` plus the
+independent validator.
 
-## Status
+Status legend: **done** · **running** (subagent authoring now) · **queued**
 
-| # | Module | Slug | Category | Status |
-|---|---|---|---|---|
+## Programming languages & fundamentals
+| Module | Slug | Status |
+|---|---|---|
+| Python | `python` | done |
+| SQL | `sql` | done |
+| Bash & Shell Scripting | `bash` | done |
+| R for Data Analysis | `r` | done |
+| Rust | `rust` | done |
+| DSA with Python (36 solutions) | `dsa-python` | done |
+
+## Python ecosystem & development
+| Module | Slug | Status |
+|---|---|---|
+| FastAPI | `fastapi` | done |
+| Pytest | `pytest` | running |
+| Streamlit | `streamlit` | running |
+| Plotly Dash | `dash` | running |
+| Gradio | `gradio` | running |
+
+## Databases & warehousing
+| Module | Slug | Status |
+|---|---|---|
+| PostgreSQL | `postgresql` | done |
+| SQL Server | `sql-server` | done |
+| Azure SQL | `azure-sql` | done |
+| Azure Cosmos DB | `cosmos-db` | done |
+| Amazon Redshift | `redshift` | done |
+| MySQL | `mysql` | done |
+| SQLite | `sqlite` | done |
+| MongoDB | `mongodb` | done |
+| TimescaleDB | `timescaledb` | done |
+| DuckDB | `duckdb` | done |
+
+## Data engineering & big data
+| Module | Slug | Status |
+|---|---|---|
+| PySpark | `pyspark` | done |
+| Apache Airflow | `airflow` | done |
+| Microsoft Fabric | `microsoft-fabric` | done |
+| Apache Parquet | `parquet` | done |
+| Delta Lake | `delta-lake` | done |
+| Apache Kafka | `kafka` | done |
+| dbt | `dbt` | done |
+| Snowflake | `snowflake` | done |
+| Databricks | `databricks` | done |
+
+## Cloud & infrastructure
+| Module | Slug | Status |
+|---|---|---|
+| Linux Server Administration | `linux` | done |
+| Docker | `docker` | done |
+| Kubernetes | `kubernetes` | done |
+| Ansible | `ansible` | done |
+| Terraform | `terraform` | done |
+| CI/CD | `cicd` | done |
+
+## Version control & APIs
+| Module | Slug | Status |
+|---|---|---|
+| Git & GitHub | `git` | done |
+| REST APIs | `rest-apis` | done |
+
+## AI, LLMs & agentic systems
+| Module | Slug | Status |
+|---|---|---|
+| LLM Agents | `llm-agents` | queued |
+| Tool Calling | `tool-calling` | queued |
+| MCP Servers | `mcp` | queued |
+| RAG | `rag` | queued |
+| LangChain | `langchain` | queued |
+| LangGraph | `langgraph` | queued |
+| PydanticAI | `pydanticai` | queued |
+| CrewAI | `crewai` | queued |
+
+## Web automation
+| Module | Slug | Status |
+|---|---|---|
+| Selenium | `selenium` | running |
+| Playwright | `playwright` | running |
+| Firecrawl | `firecrawl` | running |
+| n8n | `n8n` | running |
+
+## Analytics & BI
+| Module | Slug | Status |
+|---|---|---|
+| Tableau | `tableau` | running |
+| Power BI | `power-bi` | running |
+
+## Architecture
+| Module | Slug | Status |
+|---|---|---|
+| System Design (Python) | `system-design` | done — deepening queued |
 | 1 | Python | `python` | programming | done |
 | 2 | SQL | `sql` | programming | done |
 | 3 | Bash & Shell Scripting | `bash` | programming | batch A |
@@ -77,7 +168,7 @@ before the next starts.
 
 ## Question quality rules
 
-- Basic banks: 22–24 questions per module, answers 100–200 words with code where it helps.
+- Basic banks: 22–24 questions per module, answers 120–200 words with code where it helps.
 - Recent banks (10–14 per module): labelled `period: 2024–2026`, `type: representative`.
   They follow what current interview loops actually ask; they are never presented as verbatim
   company reports, because nobody can verify those.
@@ -87,6 +178,11 @@ before the next starts.
   of writing") rather than asserted.
 
 ## After authoring
+
+- Current run: Pytest, Streamlit, Dash, Gradio, Selenium, Playwright, Firecrawl, n8n, Tableau,
+  Power BI (10 concurrent modules).
+- Remaining AI/LLM modules: LLM Agents, Tool Calling, MCP Servers, RAG, LangChain, LangGraph,
+  PydanticAI, CrewAI; plus the System Design deepening pass.
 
 1. Prune per feedback — Akash reviews Python first and flags questions to cut or rewrite.
 2. Deepen System Design with 10 fully worked solutions and DSA with the full classic set.
