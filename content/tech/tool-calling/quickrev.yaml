@@ -1,0 +1,127 @@
+concepts:
+- title: Tool call is a request, not an execution
+  detail: The model emits a name and arguments; your dispatcher validates, authorises, and runs. All security
+    follows from that split.
+- title: Tools live in the request
+  detail: Definitions ride in every request body and are billed as input tokens; there is no persistent
+    toolbox attached to the model.
+- title: Three fields per tool
+  detail: Name, description, and a JSON Schema for arguments; the description is the interface the model
+    actually reasons from.
+- title: Arguments are a JSON string on OpenAI
+  detail: '`function.arguments` is encoded text, while Anthropic returns a parsed `input` object — parse
+    defensively either way.'
+- title: Result messages are keyed by call ID
+  detail: 'OpenAI uses `role: tool` plus `tool_call_id`; Anthropic uses `tool_result` blocks with `tool_use_id`
+    and an `is_error` flag.'
+- title: tool_choice controls autonomy
+  detail: Auto, none, required/any, or a named tool; forcing guarantees the name, never the arguments.
+- title: Parallel calls need index keying
+  detail: Multiple calls in one turn must be buffered by index, attributed by ID, and answered with one
+    result each.
+- title: Descriptions are discriminators
+  detail: State what the tool does, when to use it, and which sibling applies instead; overlapping descriptions
+    cause stable misroutes, not random ones.
+- title: Granularity is the leverage point
+  detail: One user-meaningful action per tool; too fine multiplies round trips, too coarse hides side
+    effects and blocks authorisation.
+- title: Return structure, not prose
+  detail: Stable keys, explicit types, units, and a truncation flag — the model aggregates data, it cannot
+    aggregate sentences.
+- title: Two validation layers
+  detail: Structural (schema) catches shape; semantic (handler) catches nonexistent records, policy breaches,
+    and illegal transitions.
+- title: Errors are a contract
+  detail: Stable code, field, actionable message, and a retryable flag; never a success envelope containing
+    a complaint.
+- title: Loops need four budgets
+  detail: Steps, wall clock, tokens, and side effects, enforced in code and reported truthfully when tripped.
+- title: Idempotency keys must be derived
+  detail: Hash of run or intent slot plus tool plus canonicalised args; exclude timestamps, nonces, and
+    the model's call ID.
+- title: Tool output is untrusted input
+  detail: Any fetched page, ticket, or record can carry instructions; capability separation is the only
+    strong control.
+- title: Prefer determinism where you can
+  detail: 'If the modal trajectory is fixed, the request is a workflow: code plus one extraction call
+    beats a loop on cost, latency, and testability.'
+traps:
+- 'A schema-valid call is not a correct call: the identifier can be nonexistent and the amount outside
+  policy.'
+- Strict or constrained decoding guarantees syntax, not truth, and not full JSON Schema keyword support.
+- Retrying on timeout without an idempotency key duplicates writes, because a timeout does not prove the
+  effect failed.
+- Telling the model not to repeat itself is not duplicate protection; models re-issue ambiguous writes
+  and crashed runs replay.
+- A forced tool call (`tool_choice` on one tool) removes the model's ability to ask a clarifying question
+  or refuse.
+- Prompt-level defences against injection are speed bumps; the real control is that the dangerous tool
+  does not exist in that agent's toolset.
+advanced:
+- 'Idempotency must be atomic with the reservation: a unique constraint, not a check-then-insert, is what
+  closes the concurrency window.'
+- Resume requires a step ledger of committed effects; replaying the transcript alone re-executes completed
+  writes.
+- Anthropic's `is_error` on a tool_result and OpenAI's error content are provider-level signals — use
+  them instead of encoding failure in prose.
+- Argument canonicalisation (key order, float formatting, unicode normalisation) decides whether deduplication
+  actually fires.
+- 'SQL tools need the parser and the role as independent controls: a SELECT can still call a side-effecting
+  function.'
+- Prefix caching rewards byte-stable system prompts and tool lists, which changes how you should structure
+  a long conversation.
+comparisons:
+- a: Structured output
+  b: Tool call
+  difference: A document ('here is the result', one per response) versus an invocation ('please perform
+    this', zero to many, continues the loop).
+- a: Structural validation
+  b: Semantic validation
+  difference: 'Schema conformance versus truth against the domain: existence, entitlement, policy bounds,
+    legal transitions.'
+- a: Parallel calls enabled
+  b: Serial calls
+  difference: Fewer round trips and lower latency versus ordered execution with dependencies resolved
+    between steps.
+- a: Per-call idempotency key
+  b: Per-intent idempotency key
+  difference: Catches a model repeating itself within a run; catches a user re-run or a resumed run redoing
+    an intended action.
+- a: Fixed pipeline
+  b: Model-driven loop
+  difference: Deterministic, testable, cheap, bounded versus adaptive sequencing for open-ended requests;
+    the loop costs latency, variance, and eval effort.
+- a: Read-only role
+  b: AST validation
+  difference: Database-enforced privilege boundary versus query-shape control that can also bound rows,
+    relations, and functions.
+- a: Streaming to the user
+  b: Streaming into the model's context
+  difference: Progress feedback on a separate channel versus provider-specific mid-turn injection that
+    removes your chance to sanitise the whole result.
+commands:
+- label: Inspect tool calls in a completion response
+  code: |-
+    curl -s $BASE_URL/chat/completions -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+      -d @req.json | jq '.choices[0].message.tool_calls[] | {id, name: .function.name, args: .function.arguments}'
+- label: Validate arguments and return a model-readable error
+  code: |-
+    python -c "import json,sys; from pydantic import ValidationError; from app.tools import RefundArgs; \
+    print(json.dumps(RefundArgs.model_validate_json(sys.stdin.read()).model_dump()))"
+- label: Derive a stable idempotency key
+  code: |-
+    python -c "import hashlib,json; a={'amount_minor':4599,'order_id':'ord_8812a1f0'}; \
+    print(hashlib.sha256(('run_42|issue_refund|'+json.dumps(a,sort_keys=True,separators=(',',':'))).encode()).hexdigest())"
+- label: Reject anything that is not a single SELECT
+  code: |-
+    python -c "import sqlglot,sys; from sqlglot import exp; t=sqlglot.parse(sys.stdin.read(), read='postgres'); \
+    assert len(t)==1 and isinstance(t[0], exp.Select); print(t[0].sql())"
+- label: Force a read-only session in Postgres
+  code: psql "$DATABASE_URL" -c "SET default_transaction_read_only = on; SET statement_timeout = '5s';"
+- label: Bound a query server-side
+  code: psql "$DATABASE_URL" -c "SELECT * FROM (SELECT 1) q LIMIT 500;" -v ON_ERROR_STOP=1
+- label: Replay a recorded tool stream to test assembly
+  code: pytest -q tests/test_stream_assembly.py -k fragments
+- label: Snapshot every tool schema
+  code: python -c "import json; from app.tools import all_schemas; print(json.dumps(all_schemas(), indent=2,
+    sort_keys=True))" > tests/snapshots/tool_schemas.json

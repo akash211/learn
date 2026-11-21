@@ -1,0 +1,288 @@
+- id: rag-recent-001
+  topic: agentic rag
+  difficulty: advanced
+  question: How does agentic RAG differ from a fixed retrieve-then-generate pipeline, and when is the loop worth the latency?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A fixed pipeline always retrieves once, with one rewritten query, and generates. Agentic RAG makes
+    retrieval a tool the model can call: it decides whether to search at all, reformulates after
+    reading the results, retrieves again for a missing sub-question, and stops when the evidence is
+    sufficient. Self-RAG and Corrective RAG are the research shapes of this; production versions are
+    usually a ReAct-style loop with a retrieval tool and a step budget.
+
+    It is worth the latency for genuinely multi-hop questions ("does the enterprise plan include the
+    feature that replaced SSO?"), for questions that need a different index per hop, and for
+    questions where the first search is obviously off-target. It is not worth it for single-fact
+    lookups, where a second model call doubles cost and adds a failure mode.
+
+    The engineering that matters is bounding the loop: a maximum step count, a token budget, a
+    no-progress detector, and a trace that records every query and result. Unbounded loops are the
+    most common way an agentic system turns a 400 ms answer into a 30-second one.
+  tags: [agentic-rag, self-rag, orchestration]
+
+- id: rag-recent-002
+  topic: contextual retrieval
+  difficulty: advanced
+  question: What is contextual retrieval, and why does prepending generated context to a chunk help?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Chunks lose their referents. A passage reading "This does not apply to the legacy tier" is
+    unretrievable on its own and ambiguous once retrieved. Contextual retrieval, described by
+    Anthropic in 2024, prepends a short generated situating context to each chunk before embedding:
+    the document title, the section path, and one or two sentences describing what the chunk is and
+    where it sits ("an exception to the refund policy for annual plans sold in the EU").
+
+    The mechanism is that the embedded text now contains the vocabulary a query would use, without
+    enlarging the chunk so much that its vector dilutes. Anthropic reported a substantial reduction in
+    retrieval failures when combined with reranking; the direction is credible and reproducible, the
+    exact figure is theirs.
+
+    The cost is one cheap LLM call per chunk at index time — paid once, unlike query-time tricks. The
+    practical detail: use a prompt-cached copy of the whole document when generating contexts, cap
+    the added text at 50–100 tokens, and store the original chunk text separately so the generator and
+    the citation show the source, not the synthesised header.
+  tags: [contextual-retrieval, chunking, indexing]
+
+- id: rag-recent-003
+  topic: hybrid search
+  difficulty: intermediate
+  question: Hybrid search used to be a custom build. What changed, and what is the sensible default now?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    It became a first-class feature. Elasticsearch and OpenSearch expose reciprocal rank fusion as a
+    component of the query DSL alongside BM25 and kNN; Weaviate's `alpha` blends vector and keyword
+    scores in one call; Qdrant supports sparse vectors and fusion in the same collection; pgvector
+    users combine `<=>` with `tsvector` and a GIN index in one SQL statement. The default in a new
+    build is now hybrid, not dense-only.
+
+    The sensible baseline is: retrieve 50–100 candidates from each retriever, fuse with RRF at k=60,
+    rerank the top 25–50, keep 5–8. RRF is the right default because it uses ranks, so it needs no
+    score normalisation and no labelled data to tune a weight.
+
+    The remaining decisions are where the retrievers live. One engine — PostgreSQL, OpenSearch —
+    removes a dual-write consistency problem and is the right answer for most systems under a few
+    million chunks. Two engines buy better ANN tuning at the cost of keeping two indexes in step, and
+    that synchronisation is where hybrid search projects usually go wrong.
+  tags: [hybrid-search, rrf, defaults]
+
+- id: rag-recent-004
+  topic: evaluation tooling
+  difficulty: advanced
+  question: The RAG evaluation tooling has matured. What does a credible evaluation setup look like now, and what are its limits?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    The stack has settled into three layers: metrics (Ragas, DeepEval, TruLens, promptfoo assertions),
+    tracing (LangSmith, Arize Phoenix, OpenTelemetry spans per retrieval and generation), and a golden
+    set you own. The tools are good at the plumbing; none of them solves labelling, which remains the
+    work.
+
+    A credible setup separates retrieval metrics from generation metrics, runs both in CI on every
+    change to chunking, embedder, index parameters, fusion weights, prompt or model, and gates on
+    slices rather than the mean — multilingual, numeric, table-heavy, and out-of-corpus. It pins the
+    judge model and version, checks judge agreement against 50 hand labels, and includes a
+    known-bad set of previously reported failures.
+
+    The limits are worth stating plainly: LLM-judge metrics inherit the judge's biases and drift when
+    the judge is upgraded; faithfulness measures grounding, not truth; and no offline metric predicts
+    whether a user got what they needed. That is why the mature setups pair the suite with online
+    signals — thumbs, citation clicks, rephrasing, escalation — joined back to the trace.
+  tags: [evaluation, ragas, ci, llm-judge]
+
+- id: rag-recent-005
+  topic: multi-vector retrieval
+  difficulty: advanced
+  question: What are multi-vector and late-interaction retrieval, and why are they appearing in mainstream vector databases?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Late interaction keeps one vector per token instead of one per passage. At query time each query
+    token takes its maximum similarity against the passage's tokens (ColBERT's MaxSim), which preserves
+    fine-grained matching that a single pooled vector averages away. It behaves closer to a
+    cross-encoder in quality while remaining precomputable, so it can be indexed.
+
+    The cost is storage and index size: a passage of 200 tokens produces 200 vectors rather than one,
+    so footprint multiplies accordingly. That is why it arrived in vector databases alongside
+    quantisation — Qdrant's multivector support stores them compressed and rescores, Vespa has supported
+    ColBERT-style ranking for longer, and ColPali applies the same idea to image patches of document
+    pages.
+
+    When to use it: short, identifier-heavy passages where token-level matching matters, and page-image
+    retrieval where OCR destroys layout. When not to: high-volume, cost-sensitive systems where a
+    bi-encoder plus a cross-encoder reranker gets most of the benefit for a fraction of the storage.
+  tags: [colbert, late-interaction, multivector]
+
+- id: rag-recent-006
+  topic: long context
+  difficulty: intermediate
+  question: With million-token context windows, when is RAG still necessary?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    RAG is still necessary whenever you cannot afford to send the corpus, cannot send it legally, or
+    cannot trust the model to attend to it. Three separate arguments:
+
+    Cost and latency. Prefill scales with input length, so a query that sends 500k tokens costs
+    orders of magnitude more than one that sends 6k, on every request. For a customer-facing endpoint
+    that is the whole business case.
+
+    Permissions and provenance. Sending everything means the model sees documents the user may not.
+    Filtering is a retrieval operation, and citing a passage requires knowing which passages you sent.
+
+    Attention quality. Long-context models degrade on material in the middle of very long inputs, so
+    "put it all in the prompt" converts a retrieval problem into a recall problem you cannot measure
+    per chunk.
+
+    Where long context does win: a second stage after retrieval (hand the model the full section, not
+    the chunk), small stable corpora under a few hundred thousand tokens, and synthesis across a
+    handful of documents that retrieval has already selected.
+  tags: [long-context, cost, permissions]
+
+- id: rag-recent-007
+  topic: graph rag
+  difficulty: advanced
+  question: What problem does GraphRAG solve that vector search does not, and what does it cost?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Whole-corpus questions. "What are the main themes across these 4,000 incident reports?" has no
+    single supporting passage, so top-k retrieval cannot answer it at all — it returns ten fragments
+    and the model generalises from them.
+
+    GraphRAG, published by Microsoft Research in 2024, extracts entities and relationships with an
+    LLM, builds a knowledge graph, clusters it into communities (it uses the Leiden algorithm), and
+    pre-generates summaries per community at several levels. Global questions are answered from those
+    summaries; local questions still use the graph neighbourhood or plain retrieval. The output is
+    sensemaking over a corpus rather than lookup within it.
+
+    The cost is the problem: entity extraction is an LLM pass over the entire corpus, community
+    summarisation is another, and both must be redone as documents change. For a corpus that updates
+    daily, the index build can cost more than the queries. It earns its place for relatively stable
+    analytical corpora — research literature, investigation files, regulatory text — not for a help
+    centre that changes weekly.
+  tags: [graphrag, knowledge-graph, global-questions]
+
+- id: rag-recent-008
+  topic: vector compression
+  difficulty: advanced
+  question: How are teams cutting vector storage costs without losing recall?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Three techniques, usually combined. **Lower precision**: float16 (`halfvec` in pgvector) halves
+    storage with negligible quality loss on most models; int8 scalar quantisation quarters it with a
+    small loss that per-dimension scaling mostly recovers.
+
+    **Binary quantisation**: one bit per dimension, a 32x reduction, usable only with rescoring — the
+    binary index finds candidates and full-precision vectors rerank them. Qdrant and pgvector both
+    expose this shape, and it works well on models trained with contrastive objectives where sign
+    information is informative.
+
+    **Matryoshka truncation**: models trained so their first *n* dimensions are themselves a usable
+    embedding. Truncate 1536 to 512, renormalise, and keep most of the recall for a third of the
+    storage. OpenAI's `text-embedding-3` models expose a `dimensions` parameter for exactly this;
+    several open models are trained the same way.
+
+    The pattern that holds: compress for traversal, rescore the top 50–100 exactly. That gives
+    binary-level memory with float-level ranking, which is why the technique moved from research
+    papers into default configuration options.
+  tags: [quantisation, matryoshka, storage]
+
+- id: rag-recent-009
+  topic: document parsing
+  difficulty: advanced
+  question: What is vision-based document retrieval, and when does it beat text extraction?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Instead of parsing a PDF into text and chunking it, you render each page as an image, embed the
+    page with a vision-language model, and retrieve pages directly. ColPali (2024) is the reference
+    implementation: a PaliGemma backbone produces patch embeddings, and ColBERT-style late interaction
+    scores query tokens against patches. The model sees layout, tables, charts and stamps that a text
+    extractor flattens or loses.
+
+    It wins on exactly the documents that break text pipelines: scanned forms, multi-column
+    reports with footnotes, financial tables with merged cells, slide decks where position carries
+    meaning. Retrieval quality on those is often better than any amount of chunking cleverness,
+    because nothing was destroyed on the way in.
+
+    It loses on cost and control. One page becomes hundreds of vectors, storage rises steeply, and the
+    retrieved unit is a page image — so the generator needs a vision model, and citation granularity
+    is a page rather than a sentence. The pragmatic pattern is a hybrid: text extraction where it
+    works, page images for the documents where it does not, with a routing rule per document type.
+  tags: [colpali, vision, pdf, parsing]
+
+- id: rag-recent-010
+  topic: chunking
+  difficulty: advanced
+  question: What is late chunking, and how does it differ from contextual retrieval?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Both try to give a chunk the context of its document; they do it at different layers. Contextual
+    retrieval prepends generated text to the chunk and re-embeds it. Late chunking, proposed by Jina AI
+    in 2024, embeds the whole document with a long-context model first, then mean-pools the token
+    embeddings belonging to each chunk.
+
+    Because the transformer attended over the entire document before pooling, each chunk vector already
+    carries information from its surroundings — pronouns resolved, section topic included — without
+    any generated text and without an extra LLM call. It is cheaper and deterministic.
+
+    Its constraints are real: it needs an embedder whose context window covers the whole document,
+    which excludes many 512-token models; pooling boundaries must be tracked in token space, not
+    characters; and very long documents still exceed the window, so it degrades to ordinary chunking
+    at the top end. It also does not help with vocabulary mismatch the way a generated header can.
+
+    In practice the two are complementary, and the cheaper one to try first depends on whether you are
+    already paying for a long-context embedder.
+  tags: [late-chunking, chunking, embeddings]
+
+- id: rag-recent-011
+  topic: reranking
+  difficulty: intermediate
+  question: Rerankers became a commodity. How do you choose one and where does it sit in the architecture?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    The market split into three options: hosted APIs (Cohere Rerank, Voyage rerank) that need no
+    infrastructure, small open cross-encoders (`bge-reranker-v2-m3`, `ms-marco-MiniLM` variants) that
+    run on a single GPU or acceptably on CPU, and late-interaction models that blur the boundary
+    between retrieval and reranking.
+
+    Choose on three axes, in this order: does it improve nDCG@10 on *your* labelled queries, what is
+    its p95 latency at your candidate depth, and what does it cost per thousand queries. Published
+    leaderboards are a starting point and a poor substitute for the first test — domain vocabulary
+    changes reranker rankings more than it changes embedding rankings.
+
+    Architecturally it sits after fusion and before prompt assembly, scoring 25–50 candidates down to
+    5–8. Give it a timeout and a fallback to the fused order; a p99 tail on a reranker is one of the
+    most common causes of a slow endpoint that looks like a model problem. Cache scores by
+    (query, chunk) when queries repeat, which they do more than teams expect.
+  tags: [reranking, cross-encoder, latency]
+
+- id: rag-recent-012
+  topic: citations
+  difficulty: advanced
+  question: Citation verification is now standard in production RAG. What does a credible implementation check?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Four checks, increasing in cost and value. **Existence**: every cited id was actually supplied in
+    the prompt — models invent ids in long contexts, and a dangling citation is a visible defect.
+    **Span validity**: the id maps to a passage that exists in the current index version, not a chunk
+    that was re-chunked away. **Lexical support**: the claim's numbers, dates and rare terms appear in
+    the cited passage; cheap, high precision for numeric claims. **Entailment**: an NLI model or judge
+    confirms the passage supports the claim, which is the only check that catches misattribution.
+
+    Misattribution is the failure that matters, because it looks like verification. A model that
+    correctly retrieves the German policy and cites it for the US number has produced an answer that
+    passes every structural check and is wrong.
+
+    The mature pattern is quote-then-answer generation, followed by verification, followed by one
+    regeneration on failure and then abstention. Log the violation type per request: a rising
+    unsupported rate is usually an early signal that chunking or retrieval changed, not that the model
+    got worse.
+  tags: [citations, verification, grounding, guardrails]

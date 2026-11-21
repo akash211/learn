@@ -1,0 +1,106 @@
+concepts:
+  - title: Agent loop
+    detail: "Model call, state object, tool interface, stopping rule. The model retains nothing between calls, so state must live outside it."
+  - title: Stop reasons
+    detail: "Enumerate them — answered, step_limit, budget, refused, needs_human, tool_error — and count them; the mix is the cheapest health metric."
+  - title: Agent versus pipeline
+    detail: "The model chooses the next step at runtime only in an agent. If you can draw the control flow in advance, it is a pipeline."
+  - title: ReAct
+    detail: "Interleave a short thought, a tool call, and the observation. Each thought is conditioned on evidence rather than on the model's memory."
+  - title: Plan-and-execute
+    detail: "Decompose into typed steps, execute one at a time with a small context, and re-plan only on an explicit trigger."
+  - title: Reflection
+    detail: "Worth its cost only when the critique reads an external signal — a failing test, a validator, an API error — not the model's opinion of itself."
+  - title: Compounding error
+    detail: "Roughly p^n over n required steps: 0.95 per step is about 0.60 over ten steps and 0.36 over twenty."
+  - title: Working set
+    detail: "Task pinned at the top, two or three observations verbatim, structured state for facts, compressed tail for the rest."
+  - title: Compaction
+    detail: "Summarise each span once, never re-summarise a summary, and leave a handle so a dropped observation can be re-read."
+  - title: Episodic memory
+    detail: "Store lessons with their outcome, timestamp, version, and tenant scope; promote only from verified runs and expire them."
+  - title: Tool schema as prompt
+    detail: "Descriptions are re-read every step. One verb per tool, flat arguments, enums, units in names, and an explicit when-not-to-use line."
+  - title: Idempotency key
+    detail: "Derive from intent rather than a random id, and enforce it server-side; retries and replays are normal, not exceptional."
+  - title: Error classes
+    detail: "Retryable, correctable, terminal. Say which one it is, and include the constraint that would make the retry succeed."
+  - title: Confused deputy
+    detail: "A model-supplied account id resolved with a service account's rights. Resolve tenancy from the session, never from the argument."
+  - title: Checkpoint replay
+    detail: "A checkpoint stores state, not the world. A resumed node re-executes, so side effects need idempotency and a recorded effect id."
+  - title: Payload-bound approval
+    detail: "Bind the human decision to a hash of the exact arguments; if state changes before execution, the approval is void."
+
+traps:
+  - "Calling a fixed chain of prompts an agent, then expecting agent-style flexibility from it."
+  - "Adding tools to fix a reasoning failure that is actually missing context or a bad observation format."
+  - "Letting the message history be the system of record, so state, budget, and resumption are all unenforceable."
+  - "Reflecting without a verifier and treating the model's self-critique as ground truth."
+  - "Trusting the model's final message as fact instead of asserting on the world after the run."
+  - "Believing that an instruction in the system prompt is a security control against injection."
+
+advanced:
+  - "Selection accuracy degrades as the tool menu grows, which is a reliability argument for per-node tool scoping."
+  - "Prompt caching is a prefix cache: a timestamp or regenerated preamble at the top silently bills every token at full price."
+  - "A model's self-reported confidence is weakly calibrated; use it to route toward review, never to skip a required review."
+  - "Retry the call, not the run — re-running a trajectory repeats every side effect it already performed."
+  - "In-flight runs must stay on the release that started them, or rollback becomes a correctness event rather than an operational one."
+  - "Cost per success, not cost per call, is the number that moves with product quality."
+
+comparisons:
+  - a: agent loop
+    b: state machine
+    difference: "A loop decides everything at runtime; a graph fixes the topology and checkpoints it, buying invariants, resumption, and testability at the cost of code."
+  - a: ReAct
+    b: plan-and-execute
+    difference: "ReAct adapts per step but loses coverage; plan-and-execute guarantees coverage but goes stale when an early observation breaks an assumption."
+  - a: outcome eval
+    b: trajectory eval
+    difference: "Outcome asks whether the world changed correctly; trajectory asks whether the path was acceptable. Each hides the other's failure."
+  - a: LLM judge
+    b: programmatic assertion
+    difference: "Assertions are cheap, stable, and narrow; a judge covers open-ended quality but carries position, verbosity, and self-preference bias."
+  - a: prompt engineering
+    b: context engineering
+    difference: "The first shapes the instruction; the second decides what the model sees each step, in what order, at what token cost."
+  - a: summarisation
+    b: retrieval over history
+    difference: "Summaries compress the whole trajectory lossily; retrieval keeps everything but returns what looks similar rather than what constrains the decision."
+  - a: single agent
+    b: multi-agent roles
+    difference: "Roles map to real permission or responsibility boundaries or they add cost and ambiguity; two unreliable reasoners are not one reliable one."
+
+commands:
+  - label: Bound the loop with an explicit stop reason
+    code: |
+      for step in range(max_steps):
+          ...
+      raise StepLimitExceeded(stop_reason="step_limit")
+  - label: Route on a validated enum, not on prose
+    code: |
+      decision = model.parse(schema=RouteDecision, messages=msgs)
+      route(decision.disposition)
+  - label: Derive an idempotency key from intent
+    code: |
+      key = f"refund:{order_id}:{amount_cents}:{reason_code}"
+  - label: Enforce a token budget before the call
+    code: |
+      if count_tokens(msgs) > remaining_budget:
+          return stop(stop_reason="budget_exceeded")
+  - label: Interrupt for human approval (LangGraph)
+    code: |
+      decision = interrupt({"action": "refund", "payload": action, "hash": h})
+  - label: Retry with capped backoff and jitter
+    code: |
+      for attempt in range(3):
+          try:
+              return call()
+          except Transient:
+              sleep(min(2 ** attempt + random(), 8))
+  - label: Assert world state in evaluation
+    code: |
+      assert db.refunds(order_id).count() == 1
+  - label: Replay a run against recorded tool responses
+    code: |
+      run(run_id, clock=frozen(), tools=recorder.replay(run_id))

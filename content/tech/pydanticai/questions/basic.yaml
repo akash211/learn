@@ -1,0 +1,622 @@
+- id: pai-basic-001
+  topic: agent basics
+  difficulty: beginner
+  question: What is a PydanticAI `Agent`?
+  answer: 'An `Agent` is a reusable definition of an LLM workflow: it can configure
+    a model, instructions, dependency type, tools or toolsets, and expected output
+    type. Calling `agent.run` executes a run using a prompt and runtime values. The
+    agent object is not itself a persistent user conversation, and declaring a typed
+    output does not guarantee factual correctness.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - agent-basics
+  - agent-setup-and-run-lifecycle
+- id: pai-basic-002
+  topic: agent basics
+  difficulty: beginner
+  question: What do the dependency and output generic types on `Agent` represent?
+  answer: '`Agent[DepsT, OutputT]` describes the application-provided dependency object
+    and the value the run should produce. `deps_type` declares the dependency type,
+    while `output_type` describes the result contract. A static checker can follow
+    these types through context and calls. Types improve clarity, but Python annotations
+    do not validate every arbitrary object automatically.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - agent-basics
+  - generic-dependency-and-output-types
+- id: pai-basic-003
+  topic: agent basics
+  difficulty: beginner
+  question: How do `run`, `run_sync`, and `run_stream` differ?
+  answer: '`run` is the async way to complete an agent interaction and returns a result
+    wrapper. `run_sync` provides a synchronous entry point for synchronous programs;
+    do not invoke it from an already running event loop. `run_stream` gives a streaming
+    lifecycle for consuming generated content before completion. They differ in execution
+    and result handling, not just spelling.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - agent-basics
+  - the-selected-run-API
+- id: pai-basic-004
+  topic: agent basics
+  difficulty: beginner
+  question: What is the difference between `result` and `result.output`?
+  answer: 'The run result is a wrapper that can expose the final output along with
+    usage, messages and other run metadata. `result.output` is the application value
+    described by the agent’s output type, such as a Pydantic model or string. Callers
+    should map that value to their own domain or HTTP response instead of serializing
+    internal run details blindly.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - agent-basics
+  - the-result-wrapper-and-typed-payload
+- id: pai-basic-005
+  topic: type contracts
+  difficulty: beginner
+  question: Why is a Pydantic model useful as `output_type`?
+  answer: 'A Pydantic model gives a structured result with named fields, constraints
+    and optional validators. PydanticAI can use its schema when requesting output
+    and validate the returned value before application code receives it. This catches
+    structural errors early and gives downstream code a clearer interface than prompt-only
+    JSON parsing. It does not establish that the model’s claims are true.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - type-contracts
+  - the-declared-output-schema
+- id: pai-basic-006
+  topic: type contracts
+  difficulty: beginner
+  question: Does a validated agent output prove that an answer is correct?
+  answer: 'No. Validation proves the value met the declared structural and local constraints,
+    such as required fields or a numeric range. A model can still choose the wrong
+    category, invent a source, or misunderstand the question while producing a perfectly
+    valid object. Factual grounding, authorization, business rules and answer quality
+    need separate checks and evaluations.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - type-contracts
+  - the-difference-between-structural-validity-and-truth
+- id: pai-basic-007
+  topic: type contracts
+  difficulty: beginner
+  question: What is the difference between tool arguments and an agent output?
+  answer: 'Tool arguments describe a proposed function call the model can make during
+    a run; they are validated before the function executes. The output type describes
+    the final value returned to the caller when the run completes. Tool calls may
+    repeat and return information to the model, while the final output is the application-facing
+    result. Both boundaries deserve explicit schemas.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - type-contracts
+  - intermediate-tool-arguments-versus-final-output
+- id: pai-basic-008
+  topic: tools
+  difficulty: beginner
+  question: What does `@agent.tool` do?
+  answer: '`@agent.tool` registers a callable that the model may request during an
+    agent run. The first function parameter is normally `RunContext[DepsT]`, which
+    PydanticAI supplies; remaining typed parameters describe model-provided arguments.
+    The runtime validates those arguments before calling the Python function. Registration
+    alone does not authorize a requested operation or guarantee the model will choose
+    it.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - tools
+  - the-tool-registration-and-validated-call
+- id: pai-basic-009
+  topic: tools
+  difficulty: beginner
+  question: When should `@agent.tool_plain` be used?
+  answer: 'Use `@agent.tool_plain` for a tool function that does not need run context
+    or injected dependencies. It can still receive typed model arguments and return
+    a value. Use `@agent.tool` when the operation needs trusted context such as a
+    scoped service. Choosing between them makes dependencies visible rather than relying
+    on global variables.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - tools
+  - context-dependent-versus-plain-tools
+- id: pai-basic-010
+  topic: tools
+  difficulty: beginner
+  question: How do type hints and docstrings affect a function tool?
+  answer: 'Type hints help PydanticAI describe and validate the tool’s argument schema,
+    while the function name and docstring explain its purpose to the model. These
+    descriptions guide tool choice; they are not authorization enforcement. Precise,
+    narrow parameters are usually easier to validate and understand than a generic
+    unstructured dictionary.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - tools
+  - the-tool-schema-and-model-guidance
+- id: pai-basic-011
+  topic: tools
+  difficulty: beginner
+  question: Are valid tool arguments automatically safe to execute?
+  answer: 'No. Validation checks whether arguments match a schema; it does not prove
+    the caller has permission, that an operation is sensible, or that the target resource
+    belongs to the user. The tool implementation must apply authentication-derived
+    scope, authorization, business rules, rate limits and safe side-effect handling.
+    Never trust model-generated identity or permission claims.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - tools
+  - schema-validation-versus-application-authorization
+- id: pai-basic-012
+  topic: dependencies
+  difficulty: beginner
+  question: What is `RunContext` used for?
+  answer: '`RunContext[DepsT]` gives a tool or dynamic agent function access to the
+    current run’s dependency object and relevant run context. It is commonly the first
+    parameter of a context-aware tool and is injected by the framework rather than
+    supplied by the model. Typing it with the declared dependency type helps static
+    checking.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - dependencies
+  - runtime-dependency-access-through-context
+- id: pai-basic-013
+  topic: dependencies
+  difficulty: intermediate
+  question: How should dependencies be passed to an agent run?
+  answer: 'Declare the dependency type when defining the agent, construct the appropriate
+    service or bundle in application code, then pass its instance to `agent.run(...,
+    deps=instance)`. This separates trusted services and request scope from model-controlled
+    prompt and tool arguments. The application remains responsible for creating, scoping
+    and closing resources.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - dependencies
+  - the-declared-dependency-type-and-runtime-instance
+- id: pai-basic-014
+  topic: dependencies
+  difficulty: intermediate
+  question: Should per-user state be stored on a global agent?
+  answer: 'Generally no. A global agent definition can be reused, but mutable per-user
+    data, credentials or conversation state should not be stored on it. Pass each
+    run its own authorized dependencies and history. This avoids cross-request leakage
+    and makes concurrency, testing and resource ownership easier to reason about.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - dependencies
+  - reusable-agent-configuration-versus-per-run-state
+- id: pai-basic-015
+  topic: dependencies
+  difficulty: intermediate
+  question: Are agent dependencies validated like a Pydantic request model?
+  answer: 'The `deps_type` primarily declares a type for the agent and static checking;
+    it is not generally a request-body parser or automatic validation step for any
+    Python object passed at runtime. Construct dependencies in trusted application
+    code, validate external data at its boundary and use narrow service interfaces.
+    A type annotation does not confer authority.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - dependencies
+  - type-declaration-versus-runtime-object-validation
+- id: pai-basic-016
+  topic: providers
+  difficulty: intermediate
+  question: Does changing a provider guarantee identical agent behavior?
+  answer: 'No. A common PydanticAI interface can reduce orchestration changes when
+    switching models, but providers and models differ in tool calling, structured-output
+    support, streaming, errors, rate limits and interpretation of instructions. Run
+    a compatibility suite against each intended provider and monitor quality, cost
+    and latency after a switch.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - providers
+  - shared-orchestration-versus-provider-capabilities
+- id: pai-basic-017
+  topic: providers
+  difficulty: intermediate
+  question: How are model provider and model commonly selected?
+  answer: 'PydanticAI commonly accepts a provider/model identifier such as `provider:model`,
+    though some integrations require explicit model or provider objects. Optional
+    packages and credentials may also be necessary. Keep credentials out of source
+    and prompts, and check the integration’s current installation and configuration
+    guide for the pinned library version.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - providers
+  - provider-identifiers-and-integration-setup
+- id: pai-basic-018
+  topic: providers
+  difficulty: intermediate
+  question: What should a model fallback policy consider?
+  answer: 'A fallback may improve availability for certain provider failures, but
+    switching models can change privacy, cost, latency, quality and supported features.
+    It can also repeat an agent workflow that performed side effects. Define which
+    failures are eligible, preserve idempotency, disclose data-route changes where
+    needed and test fallback behavior deliberately.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - providers
+  - fallback-eligibility-and-consequences
+- id: pai-basic-019
+  topic: streaming
+  difficulty: intermediate
+  question: What does streaming change for an agent caller?
+  answer: 'Streaming lets the caller consume output or run events before an agent
+    run has fully completed. It can lower perceived latency, but introduces resource-lifetime,
+    cancellation and error-midstream concerns. Chunks are not guaranteed to align
+    with words or semantic units. The final result and run completion still need explicit
+    handling.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - streaming
+  - partial-output-versus-completed-run
+- id: pai-basic-020
+  topic: streaming
+  difficulty: intermediate
+  question: Can partial structured output be treated as a validated final object?
+  answer: 'No. A partial structured value may omit fields simply because generation
+    is unfinished, and some invariants cannot be checked until the whole object exists.
+    It can be useful for provisional display if clearly labeled. Wait for the completed
+    result and validate domain rules before durable writes or irreversible actions.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - streaming
+  - partial-values-and-final-validation
+- id: pai-basic-021
+  topic: testing
+  difficulty: intermediate
+  question: What is `TestModel` used for?
+  answer: '`TestModel` is a deterministic test substitute that can drive an agent’s
+    basic model interactions without making a request to a live provider. It is useful
+    for exercising tools, dependencies and output plumbing. Its output is synthetic;
+    a passing test does not show that a real model will follow instructions or produce
+    high-quality answers.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - testing
+  - test-model-purpose-and-its-limits
+- id: pai-basic-022
+  topic: testing
+  difficulty: intermediate
+  question: When would `FunctionModel` be preferable?
+  answer: '`FunctionModel` allows a test to script how the model responds to requests.
+    That is helpful for precise multi-step scenarios, specific tool calls, invalid
+    output, retry paths or unexpected behavior. Tests can assert the resulting application
+    actions. It still models only the interaction you scripted and does not replace
+    real-model evaluations.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - testing
+  - custom-deterministic-model-behavior
+- id: pai-basic-023
+  topic: testing
+  difficulty: intermediate
+  question: What does `Agent.override` enable in tests?
+  answer: '`Agent.override(...)` can temporarily replace the model or dependencies
+    used by an agent, allowing application functions to run with test doubles without
+    redesigning production call signatures. Scope overrides around a test and avoid
+    concurrent mutable state leakage. Verify exact override parameters and concurrency
+    behavior against the installed version.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - testing
+  - isolated-agent-test-overrides
+- id: pai-basic-024
+  topic: testing
+  difficulty: intermediate
+  question: Why disable non-test model requests in a test suite?
+  answer: 'A setting such as `ALLOW_MODEL_REQUESTS=False` can fail fast if a test
+    accidentally attempts to use a real provider. That prevents surprise network access,
+    cost, latency and nondeterministic results in unit tests. Keep a separately controlled
+    integration or evaluation suite for real-provider behavior when appropriate.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - testing
+  - guarding-against-unintended-network-calls

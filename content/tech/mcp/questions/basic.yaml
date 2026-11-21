@@ -1,0 +1,233 @@
+- id: mcp-basic-001
+  topic: protocol purpose
+  difficulty: beginner
+  question: What problem does the Model Context Protocol solve?
+  answer: |
+    MCP provides a common protocol for an AI application to connect to external services that offer context or operations. Without a shared contract, each host tends to need a custom connector and each service may implement a different discovery and invocation format. MCP gives clients a common way to discover server capabilities and exchange requests and results. This can let one integration serve multiple compatible hosts. It does not make the agent or model portable by itself, and it does not standardize every business API. A server still needs application logic, permissions, rate limits, and secure access to downstream systems. For a single small application, a direct function call may be simpler; MCP is most useful when interoperability and reusable integrations matter.
+  tags: [integration, interoperability, protocol]
+
+- id: mcp-basic-002
+  topic: architecture
+  difficulty: beginner
+  question: What are an MCP host, client, and server?
+  answer: |
+    The host is the AI application that coordinates user interaction, models, and integrations. Within that host, an MCP client handles the protocol connection to one server. The server is the program that provides capabilities such as tools, resources, or prompts. A host can connect to multiple servers, commonly creating a separate client for each. These names describe protocol roles, not necessarily separate machines: a server may run as a local subprocess or as a remote network service. The host generally controls what context reaches the model and how user approval is presented. The server must enforce its own authorization and validate every call because it cannot safely assume the host interface is the only way to reach it.
+
+    Keeping these roles explicit makes incident response and trust-boundary reviews easier.
+  tags: [host, client, server]
+
+- id: mcp-basic-003
+  topic: protocol purpose
+  difficulty: beginner
+  question: Is MCP a model API or an agent framework?
+  answer: |
+    No. MCP is a protocol between an AI host or its client and a server that supplies context or capabilities. A model API is a separate service that receives prompts and returns generated responses. An agent framework commonly manages planning, tool selection, or multi-step execution. A host may use MCP to discover tools, present them to a model as function definitions, receive a proposed call, check policy, and invoke the server. Another host may retrieve MCP resources without using a model tool call. MCP does not decide which tool should run, guarantee human approval, or make an agent safe. Keeping these boundaries distinct helps assign responsibilities: the host owns orchestration, while the server owns implementation and access control for its functions.
+  tags: [llm, agents, boundaries]
+
+- id: mcp-basic-004
+  topic: protocol basics
+  difficulty: beginner
+  question: What role does JSON-RPC play in MCP?
+  answer: |
+    JSON-RPC provides a message pattern for calling methods and receiving results or errors. An MCP message can represent a request with a method and identifier, a matching response, or a notification that does not require an ordinary response. MCP defines its own method names, parameter structures, capability conventions, and content types on top of that foundation. JSON-RPC alone does not tell a client what tools a server offers or what an operation means; MCP's specification supplies that domain contract. Applications usually rely on an SDK to implement serialization, dispatch, and transport details. Hand-writing protocol messages can be useful for debugging, but production implementations must follow the exact supported revision, since lifecycle and schemas evolve.
+
+    This separation also lets a protocol inspector reveal whether a failure is transport, RPC, or application behavior.
+  tags: [json-rpc, messages, specification]
+
+- id: mcp-basic-005
+  topic: transports
+  difficulty: beginner
+  question: How does stdio transport work, and what is it commonly used for?
+  answer: |
+    With stdio transport, the host launches an MCP server process and exchanges framed protocol messages through the child's standard input and output. It is commonly used for local desktop or developer integrations because it avoids opening a network listener. The process boundary does not make the server harmless: it may inherit the user's filesystem privileges, environment variables, and credentials. A critical operational rule is to keep stdout exclusively for protocol data. Debug prints on stdout can corrupt framing; send logs to stderr or a supported logging facility. The host's executable path, arguments, working directory, and environment should be reviewed and constrained. Confirm startup, shutdown, and cleanup behavior with the actual host launcher.
+
+    Use a dedicated virtual environment or packaged executable so the host launches a predictable dependency set.
+  tags: [stdio, local, process]
+
+- id: mcp-basic-006
+  topic: transports
+  difficulty: beginner
+  question: What is Streamable HTTP in MCP?
+  answer: |
+    Streamable HTTP is an HTTP transport used by modern MCP revisions for remote communication. Clients send requests over HTTP, and responses can use streaming behavior specified by the relevant protocol version. It lets a separately deployed server serve multiple clients, but introduces network concerns: TLS, authentication, authorization, proxy configuration, availability, and quotas. Earlier MCP implementations may use an HTTP+SSE transport instead; support and lifecycle details differ, so the names should not be treated as interchangeable. Check the host, SDK, and pinned specification revision before deploying. A reverse proxy must preserve required headers and streaming semantics, and the server must authenticate and authorize each request rather than relying on network location alone.
+
+    Remote endpoints should also set request limits and finite downstream timeouts, not only transport-level timeouts.
+  tags: [streamable-http, sse, remote]
+
+- id: mcp-basic-007
+  topic: primitives
+  difficulty: beginner
+  question: What is an MCP tool?
+  answer: |
+    A tool is an operation a client can invoke, typically with a name, a description, and a structured input schema. A model may be shown the tool as a callable capability and propose arguments, but the host decides whether to execute it and whether user approval is needed. Tool handlers can read data or cause side effects; the protocol does not make them safe by default. Descriptions should state what the operation does and its constraints, while the implementation must validate arguments, enforce permissions, and limit resource use. Separate read and write actions when they require different scopes or confirmation. A tool's annotation or claim that it is read-only is not an enforcement mechanism.
+
+    A good design makes the action and its success condition observable and auditable.
+  tags: [tools, invocation, authorization]
+
+- id: mcp-basic-008
+  topic: primitives
+  difficulty: beginner
+  question: How do MCP resources differ from tools?
+  answer: |
+    A resource represents addressable context that a client can list or read, commonly identified by a URI. It might contain a document, record, or configuration snapshot. A tool represents an operation invoked with arguments and can perform work or change state. The distinction is conceptual, not just code style: a resource emphasizes retrieval of identified information, while a tool expresses a task or action. Resource content can still be sensitive or attacker-controlled, so listing and reading must be authorized and results minimized. A resource is not necessarily a file, and a URI must not become a path traversal or arbitrary network fetch. Hosts decide whether retrieved resource content is placed into a model context.
+
+    Apply identity-aware filtering before serialization so inaccessible content never enters the returned context.
+  tags: [resources, tools, context]
+
+- id: mcp-basic-009
+  topic: primitives
+  difficulty: beginner
+  question: What are MCP prompts used for?
+  answer: |
+    Prompts are reusable templates offered by a server for a client or user to retrieve and fill with arguments. A service might provide a template for summarizing an incident for a specified audience. The returned content can structure a model interaction, but it does not force the host to use a particular system prompt or grant permission to call tools. The host decides how to incorporate the prompt. Prompt templates should use validated arguments, avoid secrets, and be reviewed because they can influence model behavior. They are different from tools, which are executable operations, and resources, which are addressable data. Exact prompt result shapes and supported features depend on the MCP specification revision and client implementation.
+
+    Version prompt templates and test them with representative hosts because small wording changes can affect model choices.
+  tags: [prompts, templates, host]
+
+- id: mcp-basic-010
+  topic: capabilities
+  difficulty: beginner
+  question: What does capability negotiation tell an MCP client?
+  answer: |
+    Capability exchange tells the peers which optional protocol features or behaviors they support, such as particular server primitives or client features. The mechanics vary by specification revision: legacy versions commonly use an initialization handshake, while newer revisions may use per-request metadata and discovery. Clients should not assume an optional feature exists just because it is part of MCP generally. If a feature is absent, the client should use a supported fallback or explain the limitation. Capabilities do not represent user permissions. A server may support tools while a particular authenticated principal is not allowed to invoke one. Authorization must be checked separately for each caller and target resource.
+
+    Treat capability absence as normal interoperability behavior rather than an exceptional server defect.
+  tags: [capabilities, discovery, versioning]
+
+- id: mcp-basic-011
+  topic: versioning
+  difficulty: beginner
+  question: Why should a team pin MCP SDK and protocol versions?
+  answer: |
+    MCP specifications and SDKs evolve, and behavior such as lifecycle, transport, authorization, schemas, and error handling can differ across revisions. Pinning the SDK creates a reproducible build and makes it possible to know which protocol behavior has been tested. A team should document the specification revisions and transports supported by both server and target hosts, then test that compatibility matrix before upgrades. Pinning is not a reason to avoid security updates: plan upgrades, read migration notes, and run schema, authorization, and transport tests. Examples copied from an older tutorial may use an obsolete import path or HTTP transport. A successful installation does not by itself establish host interoperability.
+
+    Reproducibility also helps teams reproduce security findings and compare behavior during an incident.
+  tags: [versioning, sdk, compatibility]
+
+- id: mcp-basic-012
+  topic: design
+  difficulty: beginner
+  question: When is MCP a better choice than direct REST integration?
+  answer: |
+    MCP is attractive when multiple AI hosts should reuse the same integration, when capability discovery is useful, or when a service owner wants to separate a model-facing adapter from a backend API. REST is often more appropriate for ordinary application clients, public resource APIs, and existing contracts that already fit. The two can work together: an MCP server may wrap a REST service and expose a smaller task-oriented surface designed for agent use. MCP adds another protocol, runtime, and compatibility dimension, so it is not automatically the simplest option for one host and one function. Choose based on interoperability, host support, security boundaries, and operational ownership rather than novelty.
+
+    A useful adapter should preserve the backend authorization model instead of creating a weaker parallel policy.
+  tags: [rest, design, integration]
+
+- id: mcp-basic-013
+  topic: python sdk
+  difficulty: intermediate
+  question: How can FastMCP-style APIs reduce server implementation work?
+  answer: |
+    FastMCP-style APIs provide decorators and helpers for registering tools, resources, and prompts, while the SDK handles protocol dispatch and serialization. Python type hints and supported validation models can be used to generate an input schema, reducing duplicated hand-written JSON Schema. This does not remove the need to inspect the generated contract: unsupported types, optional values, bounds, or SDK changes can produce surprising schemas. Type hints are also not authorization. The handler must still validate domain rules, check the authenticated principal, and constrain downstream access. FastMCP imports, class names, transport flags, and method signatures have changed across SDK versions. Pin a compatible release, read its current documentation, and test the actual schema and transport with a client.
+
+    This is why schema snapshots and compatibility checks belong in CI, not only in manual inspection.
+  tags: [fastmcp, python, schemas]
+
+- id: mcp-basic-014
+  topic: python sdk
+  difficulty: intermediate
+  question: Do Python type hints guarantee safe validation of MCP tool arguments?
+  answer: |
+    No. A Python SDK may use annotations to generate an advertised input schema and may validate some values before calling the handler, but coverage depends on the SDK and supported annotation types. Type hints do not establish that an argument is allowed for the current user, belongs to the right tenant, or is safe to pass into a query. Add runtime domain validation and authorization at the service boundary. Inspect generated JSON Schema for required fields, nullability, defaults, bounds, and nested objects, and exercise invalid values through a real MCP client. Keep constraints explicit, and do not accept a raw SQL command or URL simply because it can be typed as `str`.
+
+    Keep a clear boundary between parse errors, domain errors, and authorization failures in both tests and responses.
+  tags: [python, type-hints, validation]
+
+- id: mcp-basic-015
+  topic: security
+  difficulty: intermediate
+  question: Why is a server-side permission check required even if the host asks for approval?
+  answer: |
+    The host's approval interface is a useful consent control, but the server cannot rely on it as its sole security boundary. A different host, script, or direct network caller could invoke the server without the same UI. The server must authenticate the caller and enforce authorization for every operation and target object. This includes reads, list results, resources, and tenant-scoped searches, not just writes. For high-impact actions, combine server-side enforcement with host confirmation and perhaps a separate workflow approval or transaction limit. A user click cannot turn an overbroad service credential into least privilege. Tests should call the server directly with a valid identity that lacks the relevant permission and confirm access is denied.
+
+    Verify that the denied request creates an appropriately redacted audit event for later investigation.
+  tags: [authorization, consent, server-side]
+
+- id: mcp-basic-016
+  topic: security
+  difficulty: intermediate
+  question: What is a confused-deputy risk in an MCP integration?
+  answer: |
+    A confused deputy occurs when a service with its own authority is tricked into using that authority for a caller who does not have equivalent rights. For example, an MCP server may hold a broad internal API token. If it accepts a model-provided customer ID and calls the API without checking the authenticated user's access, it can disclose another tenant's data. Mitigate this by binding each request to a verified principal, applying object- and tenant-level authorization, using narrowly scoped credentials, and passing verified identity into the domain service. Validate token audience and scopes and do not trust a tenant field simply because it appears in a schema. Host approval alone does not solve the problem because the server may be invoked through another client.
+  tags: [confused-deputy, identity, least-privilege]
+
+- id: mcp-basic-017
+  topic: databases
+  difficulty: intermediate
+  question: How should a team expose database information through an MCP server safely?
+  answer: |
+    Prefer narrow task-oriented tools over an arbitrary SQL interface. Use a read-only database principal for reporting, parameterize values, allowlist any dynamic identifiers, enforce tenant filters in the query or service, and cap rows, time range, concurrency, and execution time. Return only fields needed for the task, excluding secrets and internal columns. A description that calls an operation read-only is not a control; the database identity and implementation must enforce that property. If writes are needed, separate them into distinct capabilities with stronger authorization, idempotency, and confirmation. Test cross-tenant identifiers, large ranges, invalid filters, timeouts, and the actual advertised schema. Keep business rules in an established service layer when possible rather than duplicating them in the adapter.
+
+    Consider replica load, connection-pool budgets, and deployment concurrency when setting per-call limits.
+  tags: [database, read-only, limits]
+
+- id: mcp-basic-018
+  topic: internal apis
+  difficulty: intermediate
+  question: What risks arise from a generic HTTP-fetch tool in an MCP server?
+  answer: |
+    A generic fetch tool can become an unintended proxy. If a model or caller controls the URL, it may reach internal-only services, cloud metadata endpoints, or a different network zone, creating server-side request forgery risk. It may also forward credentials to an untrusted origin or retrieve unexpectedly large or sensitive responses. Prefer an allowlist of services, routes, methods, and content types, and derive URLs from validated identifiers rather than arbitrary strings. Re-check redirects and DNS behavior, apply response size limits and finite timeouts, and do not forward inbound authorization automatically. Authenticate and authorize the caller independently of URL validation. Tool descriptions and model behavior cannot guarantee that URLs are safe; enforce network and destination policy in code and infrastructure.
+
+    Restrict network egress as well as input values so application bugs cannot bypass destination checks.
+  tags: [ssrf, http, allowlist]
+
+- id: mcp-basic-019
+  topic: error handling
+  difficulty: intermediate
+  question: How should an MCP server distinguish protocol errors from tool execution errors?
+  answer: |
+    A protocol error means the request could not be interpreted or dispatched according to the MCP/JSON-RPC contract, such as an unknown method or invalid protocol parameters. A tool execution error means the tool was invoked but its operation failed or encountered a domain outcome. Exact result fields, error flags, and code conventions depend on the protocol revision and SDK, so follow the pinned specification. The distinction helps clients decide whether the call itself was malformed or the underlying task failed. Return safe, stable error categories and avoid stack traces, SQL, credentials, or provider internals. Log detailed diagnostics in protected telemetry with a correlation ID. Be explicit about retryability, especially for writes that might have succeeded before a connection failed.
+
+    Client-facing errors should remain stable enough for callers to act without depending on volatile exception text.
+  tags: [errors, json-rpc, tool-results]
+
+- id: mcp-basic-020
+  topic: tool design
+  difficulty: intermediate
+  question: What makes a tool description useful to both models and people?
+  answer: |
+    A useful description names the task, explains when to use it, and clarifies what it reads or changes. It should state important constraints such as required identifiers, accepted filters, maximum result count, defaults, and how missing or ambiguous data appears. Field descriptions should explain expected meaning, not just repeat the type. For side-effecting tools, make the consequence and approval expectations obvious. Keep wording concise and truthful; vague or promotional prose does not help a model choose correctly. The description is not an enforcement mechanism, and tool metadata may be untrusted to a host. The server must validate arguments, authorize the principal, and constrain resource usage even when the description is excellent.
+
+    Review metadata changes because they can alter model selection even when the handler implementation stays unchanged.
+  tags: [tool-description, schemas, model-use]
+
+- id: mcp-basic-021
+  topic: testing
+  difficulty: intermediate
+  question: What should an MCP protocol-level test verify beyond a unit test?
+  answer: |
+    A protocol-level test uses an MCP client or SDK test harness to exercise the server through message dispatch and serialization. It should verify the lifecycle or discovery flow supported by the pinned revision, list the server's tools, resources, and prompts, inspect important schema fields, and call capabilities with valid and invalid arguments. It should check result and error envelopes, content types, and authorization behavior through the boundary rather than invoking a private Python handler directly. Such a test catches framing, schema-generation, and serialization mistakes unit tests may miss. Separate transport tests should launch the stdio process or exercise the remote HTTP route. Compatibility tests with target hosts are useful because clients may differ in optional feature support.
+
+    Include negative authorization cases in the same protocol tests as successful discovery and invocation.
+  tags: [testing, protocol, clients]
+
+- id: mcp-basic-022
+  topic: testing
+  difficulty: intermediate
+  question: What does agent-in-the-loop testing add to ordinary MCP server tests?
+  answer: |
+    Agent-in-the-loop tests evaluate whether a host and model can understand tool descriptions, choose an appropriate tool, construct valid inputs, interpret results, and respond safely to failures. Scenarios can include ambiguous user requests, missing identifiers, invalid values, denied access, and side-effecting actions that should require approval. Record the model, host, server schema, and SDK versions because behavior changes. Use synthetic data and a sandbox; never let an evaluation model make uncontrolled production writes. These tests measure usability and model interaction, not enforcement. A model may behave differently on another prompt or version, so deterministic server-side authorization remains essential. Include safety criteria such as no invocation when identity is missing and truthful communication when a tool fails.
+
+    Use repeatable fixtures and review failures manually; model evaluations are probabilistic and can regress silently.
+  tags: [agent-testing, evaluation, safety]
+
+- id: mcp-basic-023
+  topic: deployment
+  difficulty: intermediate
+  question: What should be considered when packaging a local stdio MCP server?
+  answer: |
+    Package a reproducible executable with pinned dependencies and an explicit interpreter or runtime requirement. Document the exact command and configuration expected by the host. The process should reserve stdout for MCP messages and send diagnostics to stderr. Review the executable path, arguments, working directory, inherited environment variables, filesystem access, and operating-system identity because a child process may have the user's privileges. Avoid embedding credentials in command arguments or source; use an approved credential store or narrowly scoped runtime mechanism. Test launch, startup failure, shutdown, and resource cleanup through the actual host. Package provenance and dependency updates matter for local servers too: installing a plugin or package can execute code on the user's machine.
+
+    Maintain an update path and a way to disable a compromised local executable across supported hosts.
+  tags: [stdio, packaging, supply-chain]
+
+- id: mcp-basic-024
+  topic: governance
+  difficulty: intermediate
+  question: What should an organization include in an MCP server inventory?
+  answer: |
+    An inventory should identify each server's accountable owner, purpose, publisher or source, artifact and SDK version, supported protocol revisions, transport, and downstream services. It should also record data classification, read/write behavior, required scopes, identity model, and which users or systems may connect. This helps reviewers understand the combined authority of a set of integrations and makes incident response faster. Include an approval and deprecation path, a method to rotate or revoke credentials, and a kill switch for compromised servers. Keep audit retention and monitoring expectations clear, without collecting full prompts or sensitive results by default. A registry listing is not proof that a server is trustworthy; internal policy must define review, publishing permissions, and required testing.
+
+    Review tool combinations as a group, since individually acceptable servers can create unexpected data flows together.
+  tags: [governance, inventory, ownership]

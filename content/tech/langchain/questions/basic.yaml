@@ -1,0 +1,287 @@
+- id: lc-basic-001
+  topic: overview
+  difficulty: beginner
+  question: What is LangChain, and what is it not?
+  answer: |
+    LangChain is a Python library that composes LLM calls with the code around them. Its durable part is a set of interfaces — chat models, messages, prompt templates, output parsers, tools, retrievers — plus one execution protocol, the Runnable, which gives the same object `invoke`, `batch`, `stream` and async variants. Provider SDKs are adapted to those interfaces, so application code can move between vendors without rewriting the call sites.
+
+    It is not a server, not a runtime that holds state for you, and not an agent framework in the durable-execution sense. It runs inside your process; scheduling, persistence, multi-tenant isolation and retries across process boundaries are your design. It is also not a quality layer: retrieval, prompt and evaluation work still determine whether the output is any good. Most disappointments come from expecting the library to supply judgement it cannot.
+  tags: [overview, runnables, scope]
+
+- id: lc-basic-002
+  topic: packages
+  difficulty: intermediate
+  question: What is the difference between langchain-core, langchain, and langchain-community?
+  answer: |
+    `langchain-core` holds the abstractions and protocols: runnables, messages, prompt templates, parsers, tools, retrievers. It is the most stable package and the shared dependency of everything else, which is why it should be pinned explicitly.
+
+    `langchain` holds orchestration — chain helpers and, in v1, `create_agent` built on LangGraph. It moves faster than core, and in v1 the legacy chains and `AgentExecutor` moved out to `langchain-classic`, which exists for migrations rather than new code.
+
+    `langchain-community` holds third-party integrations: document loaders, vector-store adapters, tools for external services. Quality varies, and entries often lag the upstream library's API. In production, prefer a partner package (`langchain-openai`, `langchain-anthropic`, `langchain-postgres`) where one exists and treat community imports as dependencies you own and must pin.
+
+    A working rule: import abstractions from `langchain-core`, your model from a partner package, loaders and stores from community only where no dedicated package exists, and never from `langchain-classic` in new code.
+  tags: [packages, core, community]
+
+- id: lc-basic-003
+  topic: runnables
+  difficulty: beginner
+  question: What is a Runnable in LangChain?
+  answer: |
+    A Runnable is any object implementing a fixed execution protocol: `invoke`, `batch`, `stream`, `ainvoke`, `abatch`, `astream`, plus `astream_events` and `batch_as_completed`. Each takes an input, an optional `RunnableConfig`, and returns an output of the declared shape.
+
+    Because the protocol is uniform, composition is possible: `a | b` builds a `RunnableSequence`, dicts become `RunnableParallel`, plain functions become `RunnableLambda`. Models, prompts, parsers, retrievers, tools and whole chains are all Runnables, which is why a parser can sit after a model and a retriever before a prompt.
+
+    The practical value is that streaming, batching, retries, fallbacks and tracing are implemented once against the protocol rather than per integration. The practical cost is that everything looks the same at the call site, so type information and control flow become implicit — a reason to keep chains short.
+  tags: [runnables, protocol, composition]
+
+- id: lc-basic-004
+  topic: lcel
+  difficulty: beginner
+  question: What does the `|` operator actually do in LCEL?
+  answer: |
+    `a | b` calls `a.__or__(b)` and returns a `RunnableSequence` whose `invoke` passes the output of `a` as the input of `b`. It does not execute anything at definition time. Inputs are coerced: a dict becomes a `RunnableParallel` that runs each value on the same input and merges the results, and a bare callable becomes a `RunnableLambda`.
+
+    Streaming is preserved because the sequence calls `transform` on each step, feeding chunks forward rather than buffering. Batching maps over inputs with bounded concurrency. `RunnableConfig` — callbacks, tags, metadata, recursion limits — is passed down to every nested step, which is what makes tracing work.
+
+    The important consequence is that composition is sequential, not parallel, and that a callable wrapped in a lambda hides a model call from the runtime: streaming collapses, batching stops parallelising, and the trace shows one opaque step.
+  tags: [lcel, pipe, runnable-sequence]
+
+- id: lc-basic-005
+  topic: models
+  difficulty: beginner
+  question: What does a chat model return, and why is `content` not always a string?
+  answer: |
+    A chat model returns an `AIMessage`, not text. It carries `content`, `tool_calls`, `usage_metadata`, `response_metadata`, `id`, and sometimes `invalid_tool_calls`. `StrOutputParser` exists precisely because downstream code usually wants the text and the message is not it.
+
+    `content` is a string for plain text but becomes a list of content blocks when the provider returns images, reasoning traces, citations or cache markers. The blocks are typed dicts with a `type` key. Code that calls `.split()` or concatenates with `+` works on GPT-style text responses and breaks on reasoning or multimodal models, often in production after a model swap.
+
+    `response_metadata` and `usage_metadata` are useful, but provider-specific keys in `response_metadata` should never drive control flow — they change without notice, and they differ per adapter. `usage_metadata` is the portable option, and it is also frequently absent on cached or streamed responses.
+  tags: [chat-models, messages, content-blocks]
+
+- id: lc-basic-006
+  topic: prompts
+  difficulty: beginner
+  question: Why use ChatPromptTemplate instead of formatting an f-string?
+  answer: |
+    An f-string produces text; a template produces a typed list of messages with declared roles, which is what chat models actually consume. That distinction matters as soon as you need a system prompt, a history placeholder, or a multimessage structure.
+
+    Templates also validate before you spend money: variables are discovered from the template, so a missing key raises before the network call rather than being silently rendered as `{question}`. `.partial()` freezes values and returns a new template, which is how per-tenant system prompts are built without string surgery. `MessagesPlaceholder` accepts a list of messages, so history can be inserted without flattening it into text — a common quality bug.
+
+    Finally, templates are inspectable and testable: `format_messages()` gives you the exact payload for a snapshot test, and callers can compose them into chains. An f-string gives you nothing to assert against except its own source.
+  tags: [prompts, chat-prompt-template, validation]
+
+- id: lc-basic-007
+  topic: parsers
+  difficulty: beginner
+  question: What does `StrOutputParser` do, and when do you need a different parser?
+  answer: |
+    `StrOutputParser` extracts the text from an `AIMessage` and returns it as a plain string. It is the most-used parser because it is the boundary between the message-oriented world of chat models and the string-oriented world of application code, and because it streams: in a chain it yields one string per chunk, which is what makes token streaming to a UI work.
+
+    Reach for something else when you need structure. `JsonOutputParser` returns a dict and streams partial objects. `PydanticOutputParser` validates against a model but requires injecting `format_instructions` into the prompt. For anything typed, `with_structured_output(Model)` is usually better than a parser, because it uses the provider's native schema mechanism instead of asking politely in prose.
+
+    Parser failures raise `OutputParserException`. Catch that class specifically, and log the raw output before retrying — the raw text is the only evidence of what the model actually did.
+  tags: [parsers, str-output-parser, streaming]
+
+- id: lc-basic-008
+  topic: execution
+  difficulty: beginner
+  question: What is the difference between `invoke`, `batch`, and `stream`?
+  answer: |
+    `invoke` runs one input and returns one complete output. `batch` runs a list of inputs and returns a list of outputs, executing with bounded concurrency so the provider sees several requests in flight — the fast path for offline classification and extraction jobs. `stream` runs one input and yields output incrementally, either model chunks or per-step results depending on the runnable.
+
+    Each has an async twin: `ainvoke`, `abatch`, `astream`. The async versions matter inside a web server, because a synchronous `invoke` blocks the event loop for the duration of the model call.
+
+    They are not interchangeable in behaviour. `batch` returns results in input order even though execution is concurrent; `stream` cannot retry after the first chunk is delivered; and `invoke` on a streaming-capable chain simply collects the chunks. Choose by what the caller needs, and check that the intermediate steps support streaming before promising incremental output.
+  tags: [invoke, batch, stream]
+
+- id: lc-basic-009
+  topic: composition
+  difficulty: intermediate
+  question: When do you use `RunnableParallel` versus `RunnablePassthrough`?
+  answer: |
+    `RunnableParallel` fans one input out to several runnables and merges their outputs into a dict. It is how independent work runs concurrently: retrieve documents while rewriting the query, or compute three summaries at once. Written as a dict inside a chain, it runs the values on the same input.
+
+    `RunnablePassthrough` forwards its input unchanged. Its useful form is `.assign(key=...)`, which copies the input dict and adds one or more computed keys without dropping what was there — the standard way to accumulate state in a linear chain.
+
+    They combine in retrieval chains: `{"context": retriever | format_docs, "question": RunnablePassthrough()}` fans out, keeps the question, and produces exactly the keys the prompt needs. The frequent bug is passing `RunnablePassthrough()` where a string is expected, for example sending the whole dict to a retriever; the retriever then embeds a dict representation and returns nonsense rather than raising.
+  tags: [runnable-parallel, passthrough, fan-out]
+
+- id: lc-basic-010
+  topic: config
+  difficulty: intermediate
+  question: What is `RunnableConfig`, and why does propagation matter?
+  answer: |
+    `RunnableConfig` is the per-call context dict that flows through every nested runnable: `callbacks`, `tags`, `metadata`, `run_name`, `max_concurrency`, `recursion_limit`, and a `configurable` sub-dict for application values such as `session_id` or `thread_id`.
+
+    Propagation is what makes cross-cutting features work. Attach a callback handler at the top and it receives events from the model call three levels down, including token events. Set `metadata={"tenant": "acme"}` once and every span in the trace carries it, so cost and latency can be attributed per tenant without threading arguments through every function.
+
+    It is also a security-relevant channel: tools receive the config, so identity and authorisation context should come from there rather than from model-supplied arguments. Putting a user id in `metadata` and reading it inside a tool is safe; accepting `user_id` as a tool parameter lets the model choose whose data to touch.
+  tags: [runnable-config, metadata, propagation]
+
+- id: lc-basic-011
+  topic: retrieval
+  difficulty: beginner
+  question: What is a `Document`, and why does its metadata matter?
+  answer: |
+    A `Document` is the unit of retrieval: `page_content` holds text, `metadata` holds a dict of everything else — source path, page number, section heading, tenant id, ingestion timestamp, chunk index. Loaders, splitters, retrievers and prompt formatters all exchange `Document` objects, which is why the interface survives across very different backends.
+
+    Metadata does three jobs. It enables filtering, so a query can be scoped to a tenant or a document type before similarity is computed. It enables citation, so an answer can name a real source instead of asserting one. And it enables debugging, because when an answer is wrong the first question is which chunks were retrieved and where they came from.
+
+    Losing metadata is a quiet failure: `page_content`-only chunks still retrieve and still generate, but you can no longer cite, filter or re-index selectively. Carry it through splitting with `split_documents`, not `split_text`.
+  tags: [documents, metadata, retrieval]
+
+- id: lc-basic-012
+  topic: retrieval
+  difficulty: intermediate
+  question: How do you choose chunk size and overlap?
+  answer: |
+    Start from the question, not from the default. Chunks must be big enough to answer a typical question on their own and small enough that several fit in the context window alongside instructions and history. For prose documentation, 600–1000 characters with 10–15% overlap is a reasonable starting point; for dense technical text or tables, larger chunks with structure preserved work better.
+
+    Then measure. Build twenty questions with known answers, check whether the correct chunk appears in the top five, and tune. Retrieval recall, not how the chunks read to a human, is the signal.
+
+    Overlap exists so an answer spanning a boundary appears whole in at least one chunk. Too much overlap inflates the index and returns near-duplicates that crowd out diversity. Split on structure where you can — headings first, then paragraphs, then characters — and keep metadata pointing at the original section so a small chunk can be expanded to its parent at generation time.
+  tags: [chunking, splitters, recall]
+
+- id: lc-basic-013
+  topic: retrieval
+  difficulty: intermediate
+  question: What is the difference between a vector store and a retriever?
+  answer: |
+    A vector store is a storage and search system: it holds embeddings plus documents and exposes `add_documents`, `similarity_search`, `max_marginal_relevance_search`, and usually metadata filtering. It is a database concern, with an index that must be built, versioned and re-embedded when the model changes.
+
+    A retriever is a thin interface — `invoke(query) -> list[Document]` — that can be backed by a vector store, by lexical search such as BM25, by a web search API, or by a composition of several. Chains depend on the retriever interface, not on any particular store, which is why you can swap pgvector for Qdrant without touching the prompt.
+
+    The distinction matters in practice. `vectorstore.as_retriever(search_kwargs={"k": 4})` is a convenience adapter with no reranking, no filtering policy of its own and no notion of "no good match". Treating that adapter as the retrieval strategy is the most common cause of mediocre RAG.
+  tags: [vector-store, retriever, adapters]
+
+- id: lc-basic-014
+  topic: retrieval
+  difficulty: intermediate
+  question: What does `create_retrieval_chain` add over a hand-written LCEL chain?
+  answer: |
+    Very little beyond convenience. `create_retrieval_chain(retriever, combine_docs_chain)` retrieves documents for the configured input key, passes them to a document chain, and returns a dict with the answer plus the source documents under `context`. `create_stuff_documents_chain` formats all documents into one prompt string and makes a single call.
+
+    The LCEL equivalent — a `RunnableParallel` producing `context` and the question, a `format_docs` function, then prompt, model, parser — is about six lines and does the same thing. What it gives you is visibility: the exact context string sent to the model is a value you can print, log and assert on, whereas the convenience chain hides it behind a formatter you did not write.
+
+    Use the helper for a prototype. For production RAG, write the chain, because retrieval quality work always ends with someone needing to inspect and modify the context format, deduplicate chunks, add source labels, or insert reranking.
+  tags: [retrieval-chain, stuff-documents, lcel]
+
+- id: lc-basic-015
+  topic: memory
+  difficulty: intermediate
+  question: How does conversation history work in current LangChain?
+  answer: |
+    Chat models are stateless, so history is a list of messages you resend on every turn. In current versions you supply that list explicitly: either you build the message list yourself and pass it to the model, or you use `RunnableWithMessageHistory`, which loads history for a session key, injects it into a `MessagesPlaceholder`, invokes the chain, and appends the new user and assistant messages afterwards.
+
+    The loader is a function you provide: `lambda session_id: my_store[session_id]`. `InMemoryChatMessageHistory` is suitable for tests and notebooks only — it lives in one process and vanishes on restart. Production uses a database, Redis, or a LangGraph checkpointer keyed by `thread_id`.
+
+    Two rules: derive the session key from the authenticated principal, never from a client-supplied string, and treat the stored transcript as sensitive user data with retention and deletion policy. History contains whatever users typed, including things they should not have pasted.
+  tags: [memory, message-history, sessions]
+
+- id: lc-basic-016
+  topic: memory
+  difficulty: advanced
+  question: Why were the old memory classes removed, and what should replace them?
+  answer: |
+    `ConversationBufferMemory`, `ConversationSummaryMemory` and their siblings wrapped a message list plus a strategy in an object attached to a chain. They made state implicit and hard to persist, shared badly across concurrent sessions, and hid how many tokens the history was adding — problems that surface only at scale, which is exactly when they are expensive to fix. In v1 the module is gone, and the migration guidance points at message history or graph checkpointers rather than at a renamed memory class.
+
+    Replacements depend on lifetime. For a single process, `RunnableWithMessageHistory` with an explicit store. For anything that must survive restarts, multiple workers, or long-running workflows, a LangGraph checkpointer (`SqliteSaver`, `PostgresSaver`) keyed by `thread_id`, which persists the whole state, supports resumption and allows inspection or rollback.
+
+    The design lesson outlives the API: state should be an explicit, versioned, stored object with a schema, not an attribute on a chain.
+  tags: [memory, deprecation, checkpointers]
+
+- id: lc-basic-017
+  topic: tools
+  difficulty: intermediate
+  question: What makes a good tool definition?
+  answer: |
+    A tool is a schema plus a description, and both are prompt content the model reads. The name should be a verb phrase that distinguishes it from its neighbours. The description should state what the tool does, when to use it, when not to use it, and what it returns — models select tools from this text, so "Searches orders" is weaker than "Look up one order by id. Use only after the customer has supplied an id; do not use for refunds."
+
+    Arguments should be constrained rather than free-form: `Literal` for enumerations, numeric bounds, explicit units in names (`amount_cents`), and `Field(description=...)` for anything non-obvious. Constraints become JSON Schema, which the model sees and the validator enforces, so an invalid value is rejected before your business logic runs.
+
+    Finally, decide the error contract. Returning an error string lets the model adapt and continue; raising aborts the run. Recoverable validation problems should be strings, authorisation failures should not.
+  tags: [tools, schemas, descriptions]
+
+- id: lc-basic-018
+  topic: tools
+  difficulty: intermediate
+  question: What does `bind_tools` do, and what does it not do?
+  answer: |
+    `bind_tools` converts your tool schemas into the provider's native format and attaches them to the request, so the model can emit structured calls instead of prose. The result appears on the response as `AIMessage.tool_calls` — a list of dicts with `name`, `args` and `id`.
+
+    It does not execute anything. There is no loop, no dispatch, no appending of `ToolMessage`s, no stopping condition. That orchestration belongs to `create_agent`, a LangGraph graph, or your own `while` loop. Confusing the two is the most common misconception about LangChain tools: binding is a serialisation concern.
+
+    It is also not fully portable. `tool_choice` values, parallel tool calls, strict schema enforcement and nested `$ref` handling differ per provider, and some reject schemas others accept. Test binding per provider rather than assuming one test covers all, and validate the returned arguments against your Pydantic schema before executing anything the model produced.
+  tags: [bind-tools, tool-calling, orchestration]
+
+- id: lc-basic-019
+  topic: structured-output
+  difficulty: intermediate
+  question: When should you use `with_structured_output` instead of `PydanticOutputParser`?
+  answer: |
+    Use `with_structured_output` whenever the provider supports a native mechanism — JSON schema response formats or forced tool calling. It constrains generation rather than validating afterwards, so the model cannot wrap JSON in prose or add a friendly preamble, and the failure rate is materially lower. It also returns the parsed Pydantic object directly, and `include_raw=True` gives you the raw message for diagnosis.
+
+    `PydanticOutputParser` appends `format_instructions` to the prompt and parses the result. It remains useful for self-hosted models, older providers, and cases where you need custom formatting instructions or a parser shared across several prompt versions. It is also the pattern to understand for interviews, because it explains what "structured output" means when no native support exists.
+
+    Either way, validate business rules after parsing. A schema-valid object can still say a refund amount exceeds the order total, and neither mechanism checks that.
+  tags: [structured-output, parsers, reliability]
+
+- id: lc-basic-020
+  topic: observability
+  difficulty: advanced
+  question: How do callbacks work, and where should you attach them?
+  answer: |
+    Every runnable emits lifecycle events: `on_chain_start/end/error`, `on_chat_model_start`, `on_llm_new_token`, `on_llm_end`, `on_tool_start/end/error`, `on_retriever_start/end/error`. A handler subclasses `BaseCallbackHandler` and implements the methods it needs; it receives inputs, outputs, `run_id` and, for LLM events, token usage.
+
+    Attach at three scopes: per call via `config={"callbacks": [h]}`, per chain via `.with_config({"callbacks": [h]})`, or globally through environment-driven tracing. `with_config` is the right default for a service, because every caller — CLI, HTTP handler, batch job — is then instrumented identically without remembering to pass config.
+
+    Prefer callbacks over print statements in servers because they are structured and carry `run_id`, which ties a log line to a trace. Two cautions: handlers run inline, so one that performs network I/O per token event will dominate latency; and handler payloads contain full prompts and outputs, so redaction belongs in the handler, not in a policy document.
+  tags: [callbacks, tracing, instrumentation]
+
+- id: lc-basic-021
+  topic: observability
+  difficulty: advanced
+  question: What does LangSmith give you, and what does it cost?
+  answer: |
+    LangSmith stores traces: the full run tree for each request with inputs, outputs, latency, token counts and nested tool or retriever calls. On top of that it adds prompt versioning, datasets, experiments and evaluators, so evaluation sits next to the traces that motivated it, plus feedback attached to individual runs.
+
+    The cost is threefold. Data leaves your infrastructure — prompts and outputs, which routinely contain customer text — so regulated workloads need redaction, self-hosting, or use on synthetic traces only. Second, it is a vendor dependency in the observability path, where switching later means losing history. Third, trace volume costs money, so sampling and retention must be configured deliberately.
+
+    Credible alternatives exist: OpenTelemetry instrumentation into your existing backend, or a small custom handler writing structured JSON lines to your log pipeline. For many teams the latter is sufficient, and it has no lock-in.
+  tags: [langsmith, tracing, privacy]
+
+- id: lc-basic-022
+  topic: agents
+  difficulty: beginner
+  question: What is the difference between a chain and an agent?
+  answer: |
+    In a chain, your code decides the control flow: which step runs, in what order, and how many model calls happen. In an agent, the model decides: it chooses a tool, sees the result, and chooses the next action until it stops. Chains are predictable and cheap to test; agents handle open-ended tasks but have variable cost, variable latency, and a failure mode where they loop.
+
+    The consequence for engineering is different tooling. A chain can be unit-tested with a fake model and a snapshot of the rendered prompt, because the sequence is fixed. An agent needs trajectory evaluation — which tools were called, in what order, with what arguments — because a correct final answer produced by wrong intermediate steps is a latent failure.
+
+    Most "we need an agent" requirements are a router plus two chains. Reach for a loop when the number of steps genuinely depends on what the tools return, and bound it with a step limit, a token budget and a wall-clock timeout.
+  tags: [agents, chains, control-flow]
+
+- id: lc-basic-023
+  topic: lcel
+  difficulty: advanced
+  question: What is LCEL's biggest limitation in production?
+  answer: |
+    It expresses a static DAG. There are no cycles, no dynamic fan-out over an unknown number of items, no conditional retry of an individual step after partial failure, no suspension for human approval, and no persistence between calls. `RunnableBranch` gives you one-shot routing; anything that needs to loop or resume has to leave LCEL.
+
+    The second limitation is debuggability. A stack trace through a `RunnableSequence` names internal frames, not your functions, and lambdas make steps anonymous. Errors surface where a value is consumed, which may be three steps after it was produced with the wrong shape.
+
+    The practical response is to keep chains shallow — three to five steps — and to drop into plain Python or LangGraph once control flow becomes interesting. LCEL is excellent at "call these things in order, stream the result, and trace it". It is not an orchestration engine, and the ecosystem's own direction reflects that: current agents run on LangGraph.
+  tags: [lcel, limitations, langgraph]
+
+- id: lc-basic-024
+  topic: migration
+  difficulty: advanced
+  question: Why does version pinning matter more with LangChain than with most libraries?
+  answer: |
+    Because the library has been substantially re-architected roughly once a year, and the breaking changes are behavioural rather than syntactic. The 0.1 split moved code into `core`, `community` and partner packages; 0.2 made provider packages mandatory and pushed LCEL; 0.3 required Pydantic 2; 1.0 moved legacy chains and `AgentExecutor` to `langchain-classic` and deleted `langchain.memory`. Each step renamed imports, and some changed streaming and callback semantics.
+
+    Floating versions also mean a partner package and `langchain-core` can resolve to assumptions that do not match, producing errors that appear in unrelated code. Pin `langchain-core` explicitly as the floor, pin partner packages exactly in applications, and upgrade in batches behind an evaluation suite — because the failure mode is "outputs got worse", not an ImportError.
+
+    Keep a smoke test that imports every symbol you use. Renames are the cheapest class of breakage to catch and the most common.
+  tags: [versioning, packages, upgrades]

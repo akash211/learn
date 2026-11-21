@@ -1,0 +1,302 @@
+- id: sf-scn-001
+  title: A dashboard went from 3 seconds to 45 after a backfill
+  technologies: [snowflake]
+  difficulty: advanced
+  prompt: |
+    A sales dashboard that reads `analytics.fct_orders` has run in about three seconds for months.
+    Since Monday its p99 is 45 seconds for every user, and nobody changed the SQL.
+
+    On Sunday night a data engineer backfilled 18 months of history into the same table, using eight
+    parallel `COPY` sessions loading files in no particular order. The table is now 2.1 TB.
+
+    The query filters on a seven-day range of `order_date` and aggregates by region. The profile
+    shows `Partitions scanned: 21,400` of `Partitions total: 21,600`, and 12 GB spilled to remote
+    storage. The team's proposal is to move the warehouse from `MEDIUM` to `2XLARGE`.
+  approach: |
+    This is a data layout regression caused by the backfill, and the profile says so before any SQL
+    is read.
+
+    1. Confirm the query did not change. Compare `query_hash` and the text in `QUERY_HISTORY` for
+    last week and this week. If they match, the regression is in the data or the environment, not
+    the statement.
+    2. Check clustering. `SELECT SYSTEM$CLUSTERING_INFORMATION('analytics.fct_orders', '(order_date)')`
+    will typically show `average_depth` in the hundreds where it used to be in single digits. The
+    table was naturally clustered on `order_date` because it was loaded in time order; the backfill
+    wrote partitions whose ranges overlap everything, destroying that order.
+    3. Explain the spill as a symptom. Twelve gigabytes of remote spill is what scanning 99% of a
+    2.1 TB table and then sorting it looks like. Fixing the scan removes most of the spill.
+    4. Do not resize first. A `2XLARGE` reads the same 21,400 partitions at a much higher credit
+    rate. It may reduce runtime, but the bill can rise while the underlying problem remains.
+    5. Rebuild the table in key order. A clone is not enough — the point is physical order. Use
+    `CREATE OR REPLACE TABLE ... AS SELECT ... ORDER BY order_date`, or load the backfill into a
+    staging table sorted by date and `SWAP WITH` it, so production never carries overlapping
+    partitions.
+    6. Then declare a clustering key. `ALTER TABLE analytics.fct_orders CLUSTER BY (order_date)` with
+    automatic clustering enabled means the next backfill degrades gracefully instead of silently.
+    Verify with `SYSTEM$CLUSTERING_INFORMATION` that `average_depth` falls to single digits.
+    7. Fix the load pattern. Backfills should never insert unsorted into a clustered table; load to a
+    staging table, sort, swap. Parallel `COPY` sessions each produce partitions in arrival order,
+    which is exactly the overlap problem.
+    8. Re-measure before and after with `USE_CACHED_RESULT = FALSE`: partitions scanned, runtime, and
+    credits for the same dashboard refresh.
+
+    The strong answer names the mechanism — natural clustering destroyed by an out-of-order backfill
+    — predicts the `average_depth` number before looking, and treats the resize proposal as a cost
+    increase that hides the problem.
+  red_flags:
+    - Resizing to `2XLARGE` or `4XLARGE` as the first action.
+    - Suggesting an index or a distribution key, which Snowflake does not have.
+    - Restarting or resuming the warehouse as a fix.
+    - Blaming the dashboard query, which has not changed.
+    - Rebuilding the table without a sort, which reproduces the same overlap.
+    - Ignoring that the next backfill will do the same thing again.
+
+- id: sf-scn-002
+  title: Snowpipe has loaded nothing for two days
+  technologies: [snowflake]
+  difficulty: intermediate
+  prompt: |
+    A Snowpipe loads application events from `s3://acme-landing/events/` into `raw.events`. It has
+    run for three weeks at roughly 40,000 files a day. Since Tuesday it has loaded nothing.
+
+    `SYSTEM$PIPE_STATUS('raw.events_pipe')` returns `executionState: RUNNING` and
+    `pendingFileCount: 11842`. `COPY_HISTORY` shows the last successful load on Monday at 23:40 with
+    no failures after it. `LIST @raw.events_stage` returns files normally.
+
+    On Monday evening the platform team applied a Terraform change to the landing bucket's
+    notification configuration.
+  approach: |
+    The pipe is healthy and the files are there; the events that should wake it are not arriving.
+    Everything else is a consequence of that.
+
+    1. Separate the three possible failure points: the pipe (Snowflake), the notification channel
+    (SQS, Event Grid or Pub/Sub), and permissions on the bucket. `RUNNING` with a growing
+    `pendingFileCount` eliminates the pipe and permissions — if the stage could not be read, the
+    status would show errors, and `LIST` would fail.
+    2. Compare the channel ARN. `SHOW PIPES LIKE 'events_pipe'` shows `notification_channel`.
+    Compare it with the queue that the bucket's event notification actually targets. A Terraform
+    apply that recreates the queue produces a new ARN, and the pipe is now listening to a queue
+    nobody writes to.
+    3. Check the queue policy grants `s3:SendMessage` to the bucket, and that the event notification
+    filters on the right prefix and suffix. A recreated bucket policy that drops the `s3:SendMessage`
+    statement fails silently — S3 does not error on a notification it cannot deliver.
+    4. Recover the backlog with a manual refresh, not by recreating the pipe:
+    `ALTER PIPE raw.events_pipe REFRESH MODIFIED_AFTER = '<timestamp>';` Then watch `COPY_HISTORY`
+    for the load and `SYSTEM$PIPE_STATUS` for the pending count falling.
+    5. Check for duplicate risk before refreshing. Snowflake's load metadata prevents reloading files
+    already ingested within 64 days, so the refresh should not duplicate Monday's data — but verify
+    by comparing row counts per hour before and after.
+    6. Add the monitoring that would have caught it in ten minutes: alert on `pendingFileCount` above
+    a threshold for more than fifteen minutes, and on `lastIngestedTimestamp` older than the
+    expected interval by a factor of three.
+    7. Make the notification configuration part of the same reviewed change as the bucket, and keep a
+    scheduled `COPY INTO` fallback for windows when the event path is suspect.
+
+    The candidate should get to "the notification channel and the queue ARN" quickly and should not
+    touch the pipe definition, the file format, or the warehouse.
+  red_flags:
+    - Dropping and recreating the pipe as the first step, which loses load history and the offset.
+    - Using `FORCE = TRUE` to make it load, which duplicates everything already ingested.
+    - Blaming the file format or a bad file.
+    - Resuming a warehouse — Snowpipe does not use one.
+    - Not checking whether the backlog can be loaded safely before loading it.
+
+- id: sf-scn-003
+  title: Credits quadrupled after a BI rollout
+  technologies: [snowflake]
+  difficulty: advanced
+  prompt: |
+    Monthly compute was steady at around 900 credits. Two months after rolling out a BI tool to 40
+    analysts it is about 5,800 and climbing, with no new pipelines and no change in data volume.
+
+    The tool serves 25 dashboards with a five-minute auto-refresh, connecting as one service user to
+    warehouse `WH_BI`, which is `LARGE` with `AUTO_SUSPEND` unset. `QUERY_HISTORY` shows 60,000
+    queries a day averaging 1.2 seconds of execution, and their text includes a generated comment
+    such as `/* dashboard 12 refresh 2026-03-15T10:05:12 */`.
+  approach: |
+    Quantify first, then change structure. The number that matters is not query duration but
+    warehouse-hours.
+
+    1. Split the bill. `WAREHOUSE_METERING_HISTORY` by warehouse for the last 60 days shows whether
+    the growth is `WH_BI` or somewhere unexpected — check for serverless consumption too, which does
+    not appear there.
+    2. Compare running-hours to query-hours. `WH_BI` at `LARGE` is eight credits an hour, and with
+    `AUTO_SUSPEND` unset it runs 24 hours a day: about 192 credits a day before a single dashboard is
+    opened. That alone accounts for roughly 5,800 credits a month.
+    3. Explain the cache miss. The comment changes on every refresh, so no two statements match
+    textually and the result cache never hits. Every refresh executes on the warehouse, which is also
+    why it never becomes idle enough to suspend — assuming suspension were configured at all.
+    4. Fix the obvious three things. Set `AUTO_SUSPEND = 300` and `AUTO_RESUME = TRUE`; remove the
+    volatile comment or make it static; reduce the refresh interval to something a human reads, such
+    as 15 minutes for operational dashboards and hourly for strategic ones.
+    5. Split the warehouses by workload. A small warehouse for dashboards, a separate one for ad-hoc
+    analysis, a separate one for loads. Cost becomes attributable, and one team's runaway query stops
+    hurting another's.
+    6. Materialise the expensive aggregates. Point the dashboards at a summary table refreshed by a
+    task every 15 minutes. Twenty-five dashboards re-computing the same daily aggregate is the actual
+    design flaw; the cache was masking it.
+    7. Add a resource monitor at 90% notify and 100% suspend on the BI warehouse, so the next cadence
+    change is caught in days rather than at the invoice.
+    8. Verify over a full week, comparing credits per warehouse and, where available,
+    `QUERY_ATTRIBUTION_HISTORY` by dashboard.
+
+    A strong answer separates idle spend from query spend from cache-defeating query text, and fixes
+    all three; a weak one picks the resize lever.
+  red_flags:
+    - Buying more credits, or treating the increase as the cost of BI.
+    - Resizing down without checking whether queries now spill.
+    - Disabling the BI tool rather than fixing the cadence.
+    - Relying on the result cache while leaving the volatile comment in place.
+    - Ignoring the warehouse that is running with no queries on it.
+
+- id: sf-scn-004
+  title: The CDC pipeline has been dead since Thursday
+  technologies: [snowflake]
+  difficulty: advanced
+  prompt: |
+    A streams-and-tasks pipeline merges `raw.events` into `analytics.events` every five minutes. An
+    analyst notices that funnel numbers have been flat since Thursday.
+
+    `TASK_HISTORY` shows `FAILED` from Thursday 02:10, then `SKIPPED` after 03:00. The merge task is
+    now suspended. Querying the stream returns `STALE_STREAM`. The source table has
+    `DATA_RETENTION_TIME_IN_DAYS = 1`.
+
+    The first error message is `Numeric value 'n/a' is not recognized`.
+  approach: |
+    Establish the recovery point before touching anything, because the answer determines whether
+    data is recoverable from the stream or has to be replayed from the raw layer.
+
+    1. Find the last good state from the data, not from task history: `SELECT max(loaded_at) FROM
+    analytics.events`. Task history tells you when it stopped succeeding; the table tells you what
+    the consumer actually saw.
+    2. Read the first failure. `Numeric value 'n/a'` means an upstream change put a non-numeric
+    string in a column the merge casts with `::number`. The cast aborted the transaction repeatedly.
+    3. Explain the cascade. Consecutive failures triggered `SUSPEND_TASK_AFTER_NUM_FAILURES`; nothing
+    ran after that. Because retention is one day, the stream went stale around Friday 02:10 and the
+    delta for the whole window is gone — a stale stream cannot be repaired or rewound.
+    4. Recover the gap from raw, not from the stream. The raw landing table is immutable and still
+    holds every file. Recreate the stream (it starts at the current offset), fix the cast to
+    `TRY_CAST`, and backfill Thursday 02:10 onward with a `MERGE` from `raw.events` filtered on
+    `received_at`, discarding update-delete halves and deduplicating inserts by `event_id` using
+    `source_updated_at`.
+    5. Make the merge defensive. `TRY_CAST` for anything from outside, dedupe with
+    `ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY source_updated_at DESC)`, discard the
+    update-delete half (`METADATA$ISUPDATE = TRUE` on a delete), and handle true
+    `METADATA$ACTION = 'DELETE'` rows explicitly so deletes are not silently dropped.
+    6. Raise retention on the source to at least the longest plausible outage plus detection time —
+    seven days is a reasonable floor for a pipeline with a five-minute cadence.
+    7. Alert on staleness, not only on failure. A monitor on "no successful run in 30 minutes" and on
+    stream staleness in hours catches the suspended state, which produces no failures to alert on.
+    8. Reconcile after recovery: compare source and target counts per hour across the gap, and keep
+    that reconciliation as a scheduled test rather than a one-off.
+
+    The strong answer refuses to skip the gap, explains why the stream cannot be rewound, and uses
+    the raw layer as the replay log it was designed to be.
+  red_flags:
+    - Running `ALTER TASK ... RESUME` and declaring it fixed.
+    - Recreating the stream and assuming the missing days will arrive.
+    - Using time travel on the target as the only recovery, which restores the target but does not
+      supply the changes that never landed.
+    - Widening the cast or removing it without a quarantine path for bad rows.
+    - Leaving retention at one day and adding no staleness alert.
+
+- id: sf-scn-005
+  title: A DELETE with no WHERE removed 40 million rows
+  technologies: [snowflake]
+  difficulty: intermediate
+  prompt: |
+    At 09:15 an engineer ran `DELETE FROM analytics.events;` in a worksheet, intending to clear a
+    scratch copy. The table is the production fact table, 40 million rows, permanent, with the
+    default one-day retention.
+
+    By 11:00 the nightly load had run and inserted six hours of fresh events. Downstream dashboards
+    are showing almost nothing. There is no external backup of this table.
+  approach: |
+    This is recoverable, and the recovery must not destroy the evidence or the six hours of new data.
+
+    1. Stop the bleeding without dropping anything. Suspend the tasks that write to the table so the
+    state stops changing, and revoke the engineer's write access for the duration. Do not truncate,
+    do not recreate, do not run the load again.
+    2. Find the statement. `QUERY_HISTORY` gives the query id and end time for the `DELETE`;
+    `ACCESS_HISTORY` confirms what it touched. This timestamp is the recovery target.
+    3. Check the retention clock. Default is one day, so the deleted rows' partitions are available
+    until roughly 09:15 tomorrow. Fail-safe extends to seven days but only through Snowflake
+    Support, so it is the escalation path, not the plan.
+    4. Clone at the point before the delete:
+    `CREATE TABLE analytics.events_fix CLONE analytics.events BEFORE (STATEMENT => '<query_id>');`
+    Verify the row count and a few known keys. This is metadata-only, so it takes seconds even at 40
+    million rows.
+    5. Merge back rather than swap. A `SWAP WITH` would discard the six hours loaded since 09:15.
+    Instead `MERGE` the clone into the live table on `event_id`, inserting only missing rows. If the
+    load produced duplicates of rows that also exist in the clone, deduplicate by key and keep the
+    later `loaded_at`.
+    6. Verify by reconciliation: counts per hour across the affected window, plus a checksum on a
+    sample of keys, before dropping the clone.
+    7. Prevent the recurrence structurally. Raise retention on the fact table to seven days; remove
+    `DELETE` and `TRUNCATE` privileges from the analyst role and route deletions through a reviewed
+    procedure; add `STATEMENT_TIMEOUT_IN_SECONDS` on the ad-hoc warehouse so a runaway statement
+    cannot run for two hours unnoticed.
+    8. Rehearse the recovery on a non-production table, because this procedure is needed at the worst
+    possible moment.
+
+    The candidate should distinguish "restore" from "merge back", and should notice that a naive
+    `UNDROP` or swap loses the data loaded after the incident.
+  red_flags:
+    - Running `UNDROP TABLE` — nothing was dropped.
+    - Using `SWAP WITH` on the clone, discarding the six hours of new data.
+    - Waiting for fail-safe, or opening a support case as the primary plan.
+    - Re-running the nightly load with `FORCE = TRUE` to repopulate.
+    - Not suspending the tasks, so the target keeps changing under the repair.
+    - Leaving the table at one-day retention afterwards.
+
+- id: sf-scn-006
+  title: A query migrated from PostgreSQL takes 25 minutes and spills 400 GB
+  technologies: [snowflake, postgresql]
+  difficulty: advanced
+  prompt: |
+    A reporting query was migrated from PostgreSQL unchanged. It joins four tables, selects 38
+    columns (`SELECT *` across the fact and two dimensions), and filters with
+    `WHERE date_trunc('day', o.created_at) BETWEEN '2026-01-01' AND '2026-03-31'`.
+
+    On a `2XLARGE` warehouse it runs for 25 minutes, scans every partition of a 900 GB fact table,
+    spills 400 GB to remote storage, and returns 1.8 million rows. The team wants a `6XLARGE` and a
+    materialized view. In PostgreSQL the same query ran in four minutes against 90 GB of data.
+  approach: |
+    Three separate problems are stacked: no pruning, too many columns, and a plan sized for the wrong
+    row counts. Resizing addresses none of them.
+
+    1. Read the profile before proposing anything. `Partitions scanned` equal to `Partitions total`
+    with a three-month filter is the first finding. `date_trunc('day', created_at)` hides the column
+    from partition metadata, so nothing is pruned.
+    2. Rewrite the predicate as a range on the bare column:
+    `o.created_at >= '2026-01-01' AND o.created_at < '2026-04-01'`. If the table is clustered — or
+    naturally ordered by load time — this alone can reduce the scan by an order of magnitude. Verify
+    in the profile, do not assume.
+    3. Project the columns actually used. 38 columns through a hash join and a sort is where the
+    400 GB of spill comes from. Selecting nine columns reduces shuffle volume and memory pressure
+    proportionally more than it reduces bytes scanned, because the intermediate results shrink.
+    4. Check the join for fan-out. Compare rows out against rows in at each `Join` node. A dimension
+    with duplicate keys multiplies the fact table, which inflates both the spill and the 1.8 million
+    returned rows. Deduplicate the dimension with `QUALIFY ROW_NUMBER() ... = 1` or fix the join key.
+    5. Re-measure on the existing `2XLARGE`. With pruning and projection, the query may finish in a
+    couple of minutes. If it still spills with sane row counts, test `LARGE` and `XLARGE` with
+    `USE_CACHED_RESULT = FALSE` and pick the size where credits × runtime is lowest — which is often
+    smaller, not larger.
+    6. Then decide about a materialized view or a summary table. A materialized view helps repeated
+    identical aggregates and costs serverless credits to maintain; a scheduled summary table is often
+    simpler and cheaper for a dashboard. Either is a second step, not a substitute for a prunable
+    predicate.
+    7. Add guardrails: a query tag for this report so its cost is attributable, and
+    `STATEMENT_TIMEOUT_IN_SECONDS` on the ad-hoc warehouse so the next 25-minute query cannot occupy
+    the queue.
+
+    The strong answer is ordered by evidence: pruning, then columns, then join cardinality, then
+    sizing — and it says explicitly that `6XLARGE` would make the same mistake four times faster and
+    eight times more expensive.
+  red_flags:
+    - Approving the `6XLARGE` before reading `partitions_scanned`.
+    - Asking for an index, a distribution key, or a sort key.
+    - Suggesting table partitioning as a Snowflake feature.
+    - Claiming the cache will make it fast after the first run.
+    - Creating a materialized view over an unprunable query, which just moves the cost.
+    - Ignoring the fan-out that produced 1.8 million rows.

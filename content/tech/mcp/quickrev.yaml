@@ -1,0 +1,90 @@
+concepts:
+  - title: Integration contract
+    detail: MCP standardizes the host/client-to-server boundary; it does not standardize models, agent policy, or downstream business APIs.
+  - title: Host, client, server
+    detail: The host coordinates the application; it creates an MCP client per server; the server offers context or capabilities.
+  - title: JSON-RPC semantics
+    detail: Requests, results, errors, and notifications follow JSON-RPC-style message patterns with MCP-defined methods and schemas.
+  - title: Protocol versus transport
+    detail: The data protocol is separate from the delivery transport; transport choice changes lifecycle, security, and operational concerns.
+  - title: stdio boundary
+    detail: A host launches a local process and exchanges framed messages over stdin/stdout; keep stdout free of logs.
+  - title: Streamable HTTP
+    detail: A modern remote HTTP transport with version-specific request and streaming behavior; confirm host and proxy support.
+  - title: Legacy HTTP+SSE
+    detail: Earlier deployments may use the distinct HTTP+SSE transport; do not assume it is interchangeable with Streamable HTTP.
+  - title: Tool
+    detail: A callable operation with name, description, and input schema; the host mediates execution, while the server validates and authorizes.
+  - title: Resource
+    detail: Addressable context, often represented by a URI; resource content may be sensitive or attacker-controlled and must be scoped.
+  - title: Prompt
+    detail: A reusable, parameterized interaction template returned to a client; it is content, not an executable permission grant.
+  - title: Capability exchange
+    detail: Capabilities describe supported protocol features, not a user's rights; lifecycle and discovery are version-dependent.
+  - title: Type hints and schema
+    detail: Python SDKs can derive JSON Schema from annotations, but generated schema needs inspection and runtime authorization remains separate.
+  - title: Server-side authorization
+    detail: Enforce principal, tenant, and object permissions for every call, including reads and discovery; never trust only the host UI.
+  - title: Least privilege
+    detail: Scope downstream credentials and expose narrow task-oriented tools rather than broad SQL, shell, or arbitrary HTTP operations.
+  - title: Idempotency
+    detail: A lost response does not prove a write failed; use scoped idempotency keys or durable operation handles for retried actions.
+  - title: Version matrix
+    detail: Record host, client/server SDK, specification revision, transport, auth mode, and tested capabilities for each release.
+
+traps:
+  - Assuming MCP chooses a model, runs an agent loop, or supplies user consent.
+  - Sending debug output to stdout in a stdio server and corrupting the protocol stream.
+  - Treating advertised read-only metadata, tool descriptions, or generated schemas as security enforcement.
+  - Using a broad service credential without mapping each authenticated caller to object-level permissions.
+  - Assuming read-only database access prevents expensive queries, sensitive reads, or cross-tenant disclosure.
+  - Copying a transport, lifecycle, or SDK example without checking its specification version.
+
+advanced:
+  - Token signature validity is insufficient; verify trusted issuer, audience/resource, expiry, and required scope.
+  - A model-readable resource can contain prompt injection; preserve provenance, minimize content, and enforce tool policy independently.
+  - An outbound call's timeout may occur after a side effect committed; retry handling needs idempotency or operation status.
+  - A service identity can become a confused deputy if the server does not enforce caller-specific policy.
+  - Capability discovery is not authorization; filtering listings improves usability but direct calls still need enforcement.
+  - Review the composition of tools: a reader plus an outbound sender can create an exfiltration path.
+
+comparisons:
+  - a: MCP
+    b: REST API
+    difference: MCP is an AI-oriented context/capability integration contract; REST is a general resource-oriented web API and often remains the backend.
+  - a: MCP host
+    b: MCP client
+    difference: The host coordinates model and user policy; a client is the host-side protocol connector for one server.
+  - a: tool
+    b: resource
+    difference: A tool is an invoked operation; a resource is addressable context retrieved by URI or template.
+  - a: tool
+    b: prompt
+    difference: A tool executes server-side behavior; a prompt returns a reusable interaction template for the host to use.
+  - a: stdio
+    b: Streamable HTTP
+    difference: stdio uses a local process stream and OS boundary; Streamable HTTP uses network transport, authentication, proxies, and remote operations.
+  - a: authentication
+    b: authorization
+    difference: Authentication identifies a principal; authorization decides what that principal can do with a particular capability or object.
+  - a: schema validation
+    b: permission enforcement
+    difference: Schema checks request shape and types; authorization checks principal and target access, and must be enforced server-side.
+
+commands:
+  - label: Install the Python SDK with CLI helpers (version pinned in project lockfile)
+    code: uv add "mcp[cli]"
+  - label: Run a pinned Python server module over stdio (example entry point)
+    code: uv run python -m my_mcp_server
+  - label: Start a FastMCP-style server with SDK CLI (command varies by SDK release)
+    code: uv run mcp dev server.py
+  - label: Inspect tool schemas and call handlers with an MCP Inspector (install/use version matching SDK)
+    code: npx @modelcontextprotocol/inspector
+  - label: Run server unit and protocol-client tests
+    code: pytest -q
+  - label: Check Python SDK version in the active environment
+    code: python -c "from importlib.metadata import version; print(version('mcp'))"
+  - label: Check a built container's entry point and image metadata
+    code: docker inspect mcp-server:local
+  - label: View the package dependency graph for SDK upgrade review
+    code: uv tree

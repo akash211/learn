@@ -1,0 +1,336 @@
+- id: pai-recent-001
+  topic: current APIs
+  difficulty: advanced
+  question: How should a team handle PydanticAI API changes across releases?
+  answer: 'Treat current documentation as authoritative for a pinned version, and
+    avoid copying a snippet from an old example without checking imports, parameter
+    names and lifecycle details. PydanticAI evolves quickly, so lock compatible dependencies,
+    read migration notes and keep a small suite around critical agent paths.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - current-APIs
+  - version-pinning-and-API-drift
+  period: 2024-2026
+  type: representative
+- id: pai-recent-002
+  topic: structured output
+  difficulty: advanced
+  question: What should be checked when relying on provider-native structured output?
+  answer: 'Verify that the selected provider and model actually support the output
+    mode and schema features the application uses. A shared agent API does not make
+    vendor behavior identical. Test unions, constraints, refusals and malformed responses
+    using the exact integration configuration, and provide a controlled error path
+    if capability is unavailable.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - structured-output
+  - provider-feature-compatibility
+  period: 2024-2026
+  type: representative
+- id: pai-recent-003
+  topic: MCP
+  difficulty: advanced
+  question: How does an `MCPToolset` connect an agent to MCP tools?
+  answer: 'An `MCPToolset` can expose tools from an MCP server to a PydanticAI agent
+    as a toolset. It can use supported local or remote transports depending on configuration.
+    The connected server is an external authority boundary: review tools, credentials,
+    transport security and lifecycle, and do not expose every remote capability indiscriminately.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - MCP
+  - MCP-toolset-integration-and-trust
+  period: 2024-2026
+  type: representative
+- id: pai-recent-004
+  topic: MCP security
+  difficulty: advanced
+  question: What security review is needed before connecting a remote MCP server?
+  answer: 'Treat server identity, transport, tool descriptions, schemas and returned
+    content as untrusted until reviewed. Authenticate remote connections, restrict
+    available tools, authorize every action in application code, limit returned data
+    and use timeouts. A tool schema documents a call shape; it does not prove the
+    server or operation is safe.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - MCP-security
+  - remote-tool-trust-boundaries
+  period: 2024-2026
+  type: representative
+- id: pai-recent-005
+  topic: testing
+  difficulty: advanced
+  question: How should `TestModel` tests be complemented?
+  answer: 'Use deterministic model doubles for the application’s mechanics, then separately
+    evaluate real-model behavior with representative and adversarial cases. The two
+    answer different questions: unit tests check your code under known interactions;
+    evaluations measure whether an actual model handles task examples acceptably.
+    Record model and prompt versions to interpret changes.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - testing
+  - unit-tests-versus-model-evaluations
+  period: 2024-2026
+  type: representative
+- id: pai-recent-006
+  topic: streaming
+  difficulty: advanced
+  question: What should a service do when a streamed agent run fails after output
+    begins?
+  answer: 'Once HTTP response headers or body chunks are sent, the server usually
+    cannot replace the response with a new status and ordinary error body. Define
+    a stream-level error/completion event or buffer until the necessary checks finish.
+    Propagate disconnects, close upstream resources and make truncation distinguishable
+    from successful completion.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - streaming
+  - partial-HTTP-response-failure-semantics
+  period: 2024-2026
+  type: representative
+- id: pai-recent-007
+  topic: FastAPI
+  difficulty: advanced
+  question: How should FastAPI dependencies and PydanticAI run dependencies fit together?
+  answer: 'FastAPI should authenticate the request and construct appropriately scoped
+    services; the endpoint passes those services to the agent run as its dependency
+    object. Keep the HTTP dependency graph and agent `RunContext` distinct but composable.
+    Test tenant isolation and resource closure rather than assuming either framework
+    supplies the other’s lifecycle.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - FastAPI
+  - two-layers-of-dependency-injection
+  period: 2024-2026
+  type: representative
+- id: pai-recent-008
+  topic: FastAPI
+  difficulty: advanced
+  question: Why avoid holding a database transaction open while an agent waits for
+    a model?
+  answer: 'Model requests can be slow or retry, and an open transaction may hold locks
+    or consume scarce connections throughout that wait. Fetch and authorize the necessary
+    data, commit or close the unit of work, then call the model with the minimum needed
+    context when the business flow permits. Recheck mutable state before a later write.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - FastAPI
+  - transaction-scope-around-model-calls
+  period: 2024-2026
+  type: representative
+- id: pai-recent-009
+  topic: retries
+  difficulty: advanced
+  question: How should retries be bounded for validation failures and provider failures?
+  answer: 'Decide which failures are recoverable, set explicit attempt and time limits,
+    and distinguish malformed model output from provider outage or a rejected business
+    action. Retrying costs time and tokens and may repeat side effects. Surface an
+    explicit failure state when the budget is exhausted; do not weaken authorization
+    to force success.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - retries
+  - bounded-retry-policy
+  period: 2024-2026
+  type: representative
+- id: pai-recent-010
+  topic: observability
+  difficulty: advanced
+  question: What should be instrumented for an agent in production?
+  answer: 'Track run outcome, model and tool latency, retry counts, usage, cancellations
+    and validation failures with request correlation. Redact prompts, credentials
+    and personal data by default. Observability should let operators distinguish provider
+    latency, tool failure and application validation without turning sensitive conversation
+    history into ordinary logs.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - observability
+  - privacy-aware-run-telemetry
+  period: 2024-2026
+  type: representative
+- id: pai-recent-011
+  topic: provider portability
+  difficulty: advanced
+  question: How should a provider migration be validated?
+  answer: 'Keep the application contract stable, then exercise representative prompts,
+    tool calls, structured output, streaming and failure paths against the destination
+    provider. Compare quality and operational signals rather than only checking that
+    a happy path parses. Stage rollout and retain a rollback route; fallback can change
+    both data handling and behavior.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.'
+  tags:
+  - provider-portability
+  - cross-provider-compatibility-testing
+  period: 2024-2026
+  type: representative
+- id: pai-recent-012
+  topic: framework choice
+  difficulty: advanced
+  question: When is a type-first PydanticAI workflow a better fit than a graph-oriented
+    framework?
+  answer: 'A bounded agent interaction with typed dependencies, function tools and
+    a well-defined result can align naturally with PydanticAI, especially in a Pydantic-based
+    Python service. If persistence, checkpointing, resumability or human approval
+    across a complex graph is central, evaluate graph-oriented orchestration too.
+    Choose from lifecycle needs, not a feature checklist alone.
+
+
+    At the boundary, keep the distinction between model-controlled values and application-owned
+    state visible. Validate external data before use, derive identity and permissions
+    from trusted application context, and make failures explicit rather than silently
+    substituting an empty or plausible value. Types improve communication between
+    components; they do not replace runtime checks or business policy.
+
+
+    A useful test covers both the expected path and a rejection or failure path. Replace
+    the model with `TestModel` or `FunctionModel` for deterministic orchestration
+    checks, and use fake dependencies to inspect actual calls. Then evaluate real
+    model behavior separately. This makes it easier to tell a schema defect from a
+    prompt, provider, authorization, or transport problem.'
+  tags:
+  - framework-choice
+  - bounded-typed-workflow-versus-durable-graph
+  period: 2024-2026
+  type: representative

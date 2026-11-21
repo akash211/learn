@@ -1,0 +1,167 @@
+- id: lc-recent-001
+  topic: agents
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: LangChain v1 replaced `AgentExecutor` with `create_agent`. What actually changes for a team maintaining an agent?
+  answer: |
+    The control flow moves out of `AgentExecutor` and into a LangGraph graph. `create_agent(model, tools, system_prompt=...)` returns a compiled graph you invoke with `{"messages": [...]}`; the message list is the state, and a checkpointer can persist it across calls. `max_iterations` is replaced by `recursion_limit` in config plus, ideally, your own token and time budgets.
+
+    What breaks: code that introspected `AgentExecutor` internals, custom `early_stopping_method` logic, and callbacks that assumed the old event shapes. What improves: you can inspect the graph, add middleware for guardrails, attach persistence, and interrupt before a tool call for human approval.
+
+    The migration is not a rename. Read traces from both versions on the same inputs before trusting equivalence, because the prompt scaffolding and therefore tool-selection behaviour differ. Teams that ported mechanically and shipped without evaluation found different tools being called on day one.
+  tags: [create-agent, agentexecutor, langgraph, migration]
+
+- id: lc-recent-002
+  topic: packages
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What is `langchain-classic` for, and when should new code use it?
+  answer: |
+    `langchain-classic` holds the APIs that were removed from `langchain` in v1: the legacy `LLMChain`-style chains, `load_qa_chain` and the other index chains, `AgentExecutor` with `create_react_agent`, and the old retrieval convenience wrappers. It exists so that existing applications can be upgraded to current `langchain-core` without rewriting everything in the same commit.
+
+    New code should not use it. The package is effectively frozen, receives fixes rather than features, and its abstractions are the ones the ecosystem moved away from: implicit memory, opaque chain composition, agents whose loops you cannot inspect.
+
+    The practical use is as a staging tool. Upgrade the runtime and provider packages first, with `langchain-classic` satisfying old imports, then migrate module by module — memory to message history or checkpointers, `AgentExecutor` to `create_agent` or a graph, index chains to explicit LCEL or retriever code — and remove the dependency when the last import is gone.
+  tags: [langchain-classic, deprecation, migration]
+
+- id: lc-recent-003
+  topic: memory
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: A service still stores conversations with `ConversationBufferMemory`. What is the migration path now that the module is gone?
+  answer: |
+    Replace the object with explicit state, choosing by lifetime. For a single-process service, `RunnableWithMessageHistory` with a store-backed history factory keyed by `session_id` is the minimal change: the chain keeps its `MessagesPlaceholder`, and the wrapper loads and appends messages.
+
+    For anything that must survive restarts, run on multiple workers, or resume after a crash, use a LangGraph checkpointer — `PostgresSaver` for production — keyed by `thread_id`. That persists the whole state, not just messages, and enables rollback and human-in-the-loop interrupts.
+
+    Two migration hazards. First, the old buffer had no trimming; production transcripts have grown unbounded, and replaying them will blow the context window, so add `trim_messages` at the same time. Second, history keys were often global or client-supplied; audit them, because a migration is the natural moment to discover that one user could read another's transcript.
+  tags: [memory-migration, checkpointer, trimming]
+
+- id: lc-recent-004
+  topic: packages
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: Why do teams still depend on `langchain-community`, and what is the risk?
+  answer: |
+    Because it is the only place with an adapter for a long tail of systems: an older vector store, a niche document format, an internal search API, a SaaS connector. Partner packages cover the major model providers; community covers everything else.
+
+    The risk is maintenance asymmetry. Community integrations are contributed, often by the vendor or a volunteer, and they wrap libraries that change independently. When the upstream client renames a method or changes an auth flow, the adapter lags — sometimes for months — and the failure appears as a confusing error inside your chain rather than as a version conflict. Some adapters also pin old transitive dependencies, which conflicts with the rest of your stack.
+
+    Mitigations: pin community packages exactly, wrap each integration behind your own small interface so it can be replaced, prefer calling the vendor's own client for anything critical, and check the package's release history before adopting it. A loader you can rewrite in forty lines is better than one that breaks your lockfile.
+  tags: [community, integrations, supply-chain]
+
+- id: lc-recent-005
+  topic: structured-output
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How do you make structured output reliable across several providers?
+  answer: |
+    Do not rely on the automatic strategy. `with_structured_output(Model)` chooses a mechanism per provider — JSON schema response format, strict tool calling, or prompt-and-parse — and those have different failure characteristics. Pin `method=` explicitly per provider and test each one, rather than assuming a passing test on OpenAI predicts Anthropic or a local model.
+
+    Then design the schema for the weakest provider you support: flat rather than deeply nested, `Literal` rather than free strings, explicit units in field names, few fields, and descriptions that state format constraints. Optional fields with defaults are dangerous in extraction, because an omitted field silently becomes a plausible-looking value.
+
+    Finally, treat validation as part of the pipeline. Catch `ValidationError`, retry once with the error text appended, count the failures as a metric, and use `include_raw=True` so a failure is diagnosable. A parse-failure rate that jumps after a provider update is the signal that a floating model alias changed under you.
+  tags: [structured-output, providers, validation]
+
+- id: lc-recent-006
+  topic: streaming
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What is the current way to stream a chain to a browser, and what replaced `astream_log`?
+  answer: |
+    `astream_events(..., version="v2")` is the current mechanism. It emits typed events for every runnable in the tree — `on_chat_model_stream` for tokens, `on_tool_start` for tool activity, `on_retriever_start` for retrieval — so a UI can show progress before the first token arrives. `astream_log`, which exposed JSON-patch diffs of intermediate state, is legacy; its event shape is not compatible and new code should not use it.
+
+    In a web handler, translate selected events into SSE frames: `data: ` prefix, JSON payload, blank line terminator, and a terminal `[DONE]`. Set `Cache-Control: no-cache` and disable proxy buffering, or the stream will arrive in one block despite working locally.
+
+    Two constraints to design around: errors after the first byte cannot change the HTTP status, so report failure as an in-stream event; and cancellation mid-stream still bills for generated tokens, so stop consuming the model stream when the client disconnects.
+  tags: [astream-events, sse, streaming]
+
+- id: lc-recent-007
+  topic: evaluation
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How should an agent be evaluated, as opposed to a chain?
+  answer: |
+    Both the trajectory and the outcome. A chain's output is a function of fixed steps, so scoring the final answer is enough. An agent chooses its steps, so a correct answer reached through six wrong tool calls is a latent failure — it will break on the next input, and it is expensive in the meantime.
+
+    Score at least four things per case: final-answer correctness against a reference or rubric, tool-selection accuracy (did it call the expected tools, and avoid forbidden ones), argument validity, and step or cost against a budget. Some suites also check whether approval was requested before a destructive action.
+
+    Build the dataset from real traffic, including the failures, because synthetic cases miss the tool combinations users actually produce. Keep a small canary set that must pass on every deploy and a larger set for experiments. Judge models can score prose quality, but validate the judge against human labels first, and prefer programmatic checks wherever the property is checkable.
+  tags: [agents, evaluation, trajectory]
+
+- id: lc-recent-008
+  topic: tools
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How do you stop a tool-calling loop from running away on cost?
+  answer: |
+    Four independent bounds, because each catches a different runaway. A step limit (`recursion_limit` or your own counter) stops infinite loops. A token budget per request stops a loop that is technically progressing while re-reading a huge context. A wall-clock timeout stops a loop waiting on slow tools. A per-tool call cap stops the model retrying a failing tool forever.
+
+    Then fix the causes rather than only the symptoms. Loops usually come from ambiguous tool descriptions, from tools that return errors the model cannot act on, or from a prompt that gives no stopping condition. Return structured, actionable errors ("order not found; try lookup_order first") and state in the system prompt when the task is complete.
+
+    Finally, make writes idempotent. A retried `issue_refund` with no idempotency key is a duplicate refund, and no loop bound prevents that — only the tool's own contract does.
+  tags: [tool-loop, cost-control, budgets]
+
+- id: lc-recent-009
+  topic: observability
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: LangSmith or OpenTelemetry — how do teams choose for LangChain tracing?
+  answer: |
+    By what already exists. If the organisation has a tracing backend — Tempo, Jaeger, Datadog, Honeycomb — OpenTelemetry instrumentation avoids a second observability stack and keeps traces joinable with the rest of the request path. Span attributes carry model name, token counts and tool calls, though the fidelity of prompt-level detail depends on the instrumentor.
+
+    LangSmith is stronger when the team needs LLM-specific workflow: prompt versioning, datasets, experiments, per-run feedback, and a UI built around the run tree rather than around services. It is also a second vendor and a second place prompts and outputs are stored.
+
+    The decision is usually about data governance, not features. If prompts contain regulated data and there is no self-hosted option, either redact at the handler, trace only synthetic traffic, or choose the backend you already control. Whatever the choice, put redaction in code with a test — not in a policy document.
+  tags: [langsmith, opentelemetry, tracing]
+
+- id: lc-recent-010
+  topic: cost
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What is the difference between provider prompt caching and LangChain's own LLM cache?
+  answer: |
+    They solve different problems and are configured in different places. Provider prompt caching — Anthropic cache breakpoints, OpenAI automatic prefix caching, Gemini context caching — reduces the cost and latency of a repeated *prefix*: the same long system prompt or document sent on every call. It is enabled through provider-specific request structure, typically content blocks marked with `cache_control` or an explicit cached-content handle, so it is not portable across adapters.
+
+    LangChain's cache (`set_llm_cache`, `InMemoryCache`, `SQLiteCache`) is an exact-match response cache: same model, same messages, same parameters, same answer returned without a call. It helps repeated identical requests, such as re-running a test suite, and does nothing for a prompt whose only difference is the user's question.
+
+    Both are useful and neither substitutes for the other. Prompt caching addresses the structural cost of long instructions; response caching addresses idempotent repetition. Confusing them leads teams to cache responses when they needed to reorder the prompt so the stable part comes first.
+  tags: [caching, cost, providers]
+
+- id: lc-recent-011
+  topic: architecture
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: When does an LCEL chain outgrow itself and need LangGraph?
+  answer: |
+    Watch for four signals. Control flow becomes conditional on intermediate results in more than one place, so the chain turns into nested `RunnableBranch` calls that nobody can read. A step needs its own retry or fallback policy that differs from its neighbours, which `with_retry` placement makes awkward. The workflow must pause — for human approval, an async callback, or a long-running job — and resume later, which requires durable state. Or the same conversation must be inspectable and resumable after a crash.
+
+    Any one of these is a reasonable trigger. LCEL expresses a static DAG; LangGraph expresses a state machine with cycles, checkpoints and interrupts. The migration cost is modest if the chain was already thin, which is the argument for keeping it thin.
+
+    The anti-pattern is building the graph pre-emptively. A linear pipeline implemented as a six-node graph with a state schema is harder to read than four lines of LCEL and buys nothing until one of the four conditions appears.
+  tags: [lcel, langgraph, architecture]
+
+- id: lc-recent-012
+  topic: testing
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How do you gate a model or LangChain upgrade in CI when outputs are non-deterministic?
+  answer: |
+    Separate the deterministic layer from the quality layer and gate on both, differently. Deterministic tests use fake models and snapshot the rendered prompt, so a template change that drops a constraint fails immediately without any network call. Those block merges.
+
+    Quality gating needs a fixed dataset and a baseline. Run the suite on the current version, record per-case results, upgrade, run again, and compare pass rates plus the specific cases that flipped. Gate on a threshold and on no-regression-in-critical-cases, not on identical text. Use a dated model snapshot where the provider offers one, so a floating alias cannot silently change the baseline.
+
+    Practical details that keep it affordable: ten canary cases on every PR, the full suite nightly; cached reference responses; programmatic scorers wherever the property is checkable; an LLM judge validated against human labels for the rest. Store history so a score can be read as a trend rather than a single number.
+  tags: [ci, evaluation, upgrades]

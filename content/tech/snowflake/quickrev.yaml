@@ -1,0 +1,88 @@
+concepts:
+  - title: Three separated layers
+    detail: Storage (micro-partitions in object storage), compute (virtual warehouses) and cloud services (auth, metadata, parser, optimiser, transactions, result cache). Only compute is yours to size.
+  - title: A warehouse owns no data
+    detail: It is an MPP cluster with local SSD. Dropping or suspending one loses nothing but its cache, and resizing is a metadata operation with no data movement.
+  - title: Micro-partition
+    detail: Immutable, columnar, compressed unit of 50–500 MB uncompressed, written in arrival order, with per-column min/max, distinct and null counts in metadata.
+  - title: Pruning
+    detail: The optimiser compares predicate constants to partition min/max and skips non-matching partitions. It is the only optimisation that lowers latency and cost at the same time.
+  - title: Natural clustering
+    detail: A table loaded in time order is clustered on the load timestamp for free. Parallel or out-of-order backfills destroy it by producing partitions whose ranges all overlap.
+  - title: Clustering depth
+    detail: Returns `average_depth`, the number of partitions read to find one key value. 1 is perfect; tens mean the key is doing little.
+  - title: Clustering key choice
+    detail: Low-cardinality, heavily filtered columns first, two or three at most. Never a unique id (maximum overlap) or a boolean (two partitions hold everything).
+  - title: Result cache
+    detail: 24 hours, account-level, in cloud services, keyed on identical query text and unchanged data; reuse resets the window up to 31 days total. Authorization and settings must still match; no warehouse is needed to serve it.
+  - title: Local disk cache
+    detail: Per-warehouse SSD cache of the columns read. Dropped on suspend or resize, not shared between warehouses — the reason a query is fast the second time and slow the next morning.
+  - title: Load metadata
+    detail: Snowflake remembers file name and checksum for 64 days and skips matches; `FORCE = TRUE` overrides at the cost of duplicates, so unique object names are the durable fix.
+  - title: Streams store offsets
+    detail: A stream holds an offset into the source table's change tracking, not rows. The offset advances when a DML statement reading the stream commits.
+  - title: Tasks start suspended
+    detail: A task does not run until `ALTER TASK ... RESUME`. Every `CREATE OR REPLACE TASK` resets that state.
+  - title: Time travel is per object
+    detail: Retention is set by `DATA_RETENTION_TIME_IN_DAYS` — 1 by default, 0–90 on Enterprise, 0–1 for transient and temporary tables — per table, schema or database.
+  - title: Fail-safe
+    detail: Seven days past time travel, permanent objects only, recoverable only by Snowflake Support. Transient and temporary tables get none.
+  - title: Zero-copy clone
+    detail: A new metadata pointer to the same micro-partitions. Storage grows only as the clone diverges, per changed partition, and grants and streams are not carried over.
+  - title: Credit rate doubles per size
+    detail: Sizes run from `XSMALL` at 1 credit per hour to `6XLARGE` at 512, billed per second with a 60-second minimum on every start.
+traps:
+  - Assuming a bigger warehouse fixes a slow query. It reads the same partitions faster and at a higher rate; pruning, spill and skew are unaffected.
+  - Believing a suspended warehouse loses data. It loses only the local disk cache, which is why the first query afterwards is cold.
+  - Treating the result cache as per warehouse. It lives in the account's cloud services layer and is invalidated by table changes, not by suspension.
+  - Hoping a stale stream can be repaired. Once the source's retention window passes, the delta is gone; the stream must be recreated and the gap replayed from raw.
+  - Expecting a clone to double storage immediately, or to inherit grants. Neither is true — it shares partitions until written to, and it is owned by the creating role.
+  - Clustering on a unique column such as `id` because it is selective. Uniqueness produces maximum partition overlap and no pruning.
+  - Running `PUT` in a worksheet. It is a client-side command, available in SnowSQL and the drivers only.
+advanced:
+  - A row access policy is a per-row predicate and can defeat partition pruning, turning a narrow scan into a full one — measure the policy's cost, not just its correctness.
+  - Result-cache invalidation is per table, not per row. One inserted row clears every cached query over that table, so frequent loads make the cache worthless for dashboards over it.
+  - Remote spill means rows crossed the network twice. Doubling the warehouse can remove it entirely, which is the one case where a bigger size is also cheaper.
+  - Multi-cluster warehouses add clusters for queued queries; they do not make an individual query faster, and each cluster bills as a full warehouse.
+  - An update appears in a stream as two rows — a delete and an insert — with `METADATA$ISUPDATE` true on both; discard the update-delete half and merge the insert, while keeping true deletes.
+  - Serverless consumption (Snowpipe, automatic clustering, search optimisation, materialized view maintenance) never appears in `WAREHOUSE_METERING_HISTORY`; a cost model built on that view alone is incomplete.
+  - A clone inherits the source's time-travel retention, so a diverging clone carries both active and historical storage for as long as the retention window.
+comparisons:
+  - a: Time travel
+    b: Fail-safe
+    difference: Time travel is queryable by you with `AT`/`BEFORE`, edition-limited to 90 days; fail-safe is a fixed 7 days recoverable only through Support, and absent on transient tables.
+  - a: Result cache
+    b: Local disk cache
+    difference: The result cache returns a finished result with no warehouse and survives suspension; the disk cache stores scanned columns per warehouse and dies with the warehouse.
+  - a: Micro-partition pruning
+    b: B-tree index
+    difference: Pruning is one metadata decision per 50–500 MB with no maintenance cost; an index is per-row, must be maintained on write, and can serve point lookups that pruning cannot.
+  - a: Snowpipe
+    b: Scheduled COPY INTO
+    difference: Snowpipe is event-driven and serverless with per-file overhead; scheduled COPY runs on your warehouse, is simpler to reason about, and suits large files at low frequency.
+  - a: Stream and task
+    b: Dynamic table
+    difference: Streams and tasks give explicit control of the merge and its timing; a dynamic table declares the result and a `TARGET_LAG`, and Snowflake decides when and how to refresh.
+  - a: Masking policy
+    b: Row access policy
+    difference: Masking rewrites a column's value per role and is cheap; a row access policy filters rows and can prevent pruning, changing query cost as well as output.
+  - a: SUSPEND
+    b: SUSPEND_IMMEDIATE
+    difference: Both are resource-monitor actions at the credit threshold; `SUSPEND` lets running queries finish, `SUSPEND_IMMEDIATE` cancels them.
+commands:
+  - label: Create a warehouse with sane defaults
+    code: CREATE WAREHOUSE wh_bi WAREHOUSE_SIZE = 'SMALL' AUTO_SUSPEND = 300 AUTO_RESUME = TRUE INITIALLY_SUSPENDED = TRUE;
+  - label: Inspect clustering depth
+    code: SELECT SYSTEM$CLUSTERING_INFORMATION('analytics.fct_orders', '(order_date)');
+  - label: Rank slow queries from the last day
+    code: SELECT query_id, partitions_scanned, partitions_total, total_elapsed_time/1000 AS sec FROM snowflake.account_usage.query_history WHERE start_time > DATEADD(day, -1, CURRENT_TIMESTAMP()) ORDER BY total_elapsed_time DESC LIMIT 20;
+  - label: Validate a load without committing it
+    code: COPY INTO raw.events FROM @raw.events_stage FILE_FORMAT = (FORMAT_NAME = 'raw.csv_fmt') VALIDATION_MODE = RETURN_ERRORS;
+  - label: Check the audit trail for a table's loads
+    code: SELECT file_name, status, row_count, error_count, first_error_message FROM TABLE(information_schema.copy_history(TABLE_NAME => 'RAW.EVENTS', START_TIME => DATEADD(hours, -24, CURRENT_TIMESTAMP())));
+  - label: Clone a table as of before a bad statement
+    code: CREATE TABLE analytics.events_fix CLONE analytics.events BEFORE (STATEMENT => '<query_id>');
+  - label: Grant read access including future tables
+    code: GRANT SELECT ON FUTURE TABLES IN SCHEMA finance.marts TO ROLE access_finance_read;
+  - label: Find warehouse spend for the last week
+    code: SELECT warehouse_name, SUM(credits_used_compute) AS credits FROM snowflake.account_usage.warehouse_metering_history WHERE start_time > DATEADD(day, -7, CURRENT_TIMESTAMP()) GROUP BY 1 ORDER BY 2 DESC;

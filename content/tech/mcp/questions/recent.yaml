@@ -1,0 +1,135 @@
+- id: mcp-recent-001
+  topic: transports
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: When migrating a remote MCP server from legacy HTTP+SSE examples, what should a team verify about Streamable HTTP?
+  answer: |
+    Treat Streamable HTTP as a distinct transport, not a rename for the earlier HTTP+SSE design. The supported endpoints, HTTP methods, framing, streaming responses, lifecycle, version headers or metadata, and authentication requirements depend on the protocol revision and SDK. First check which transports the target host supports and pin compatible client and server SDKs. Then test through the actual proxy and gateway: headers must survive, streaming should not be unexpectedly buffered, timeouts must be adequate, and TLS and authorization must be enforced. Confirm the server cannot be reached through an untrusted bypass path. Legacy clients may still require an older transport, so plan compatibility rather than assuming a global cutover. Document the tested matrix and migration behavior.
+
+    Include at least one test through the oldest supported host before removing its existing transport path.
+  tags: [streamable-http, migration, compatibility]
+
+- id: mcp-recent-002
+  topic: specification changes
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: Why did Streamable HTTP replace the earlier HTTP+SSE transport in many modern MCP deployments?
+  answer: |
+    The modern HTTP transport was designed to provide a more integrated request/response path with optional streaming, while reducing the complexity and limitations of maintaining a separate SSE connection pattern. The exact normative changes should be read in the relevant version's changelog; transports are not wire-compatible merely because both use HTTP and server-sent events may appear in the response. Existing hosts and servers can lag, and some may still depend on legacy HTTP+SSE. A migration should therefore be driven by support in the client ecosystem and verified with end-to-end transport tests. Test authentication, reconnects, proxy buffering, request correlation, and failure handling rather than assuming that a successful ordinary POST proves the streaming behavior is correct.
+
+    A staged rollout can reveal client incompatibilities before the old endpoint is withdrawn.
+  tags: [http-sse, streamable-http, spec]
+
+- id: mcp-recent-003
+  topic: versioning
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How should an MCP client handle protocol-version differences between older handshake-based revisions and newer revisions?
+  answer: |
+    The client should implement version detection and compatibility behavior documented for the protocol revisions it supports, rather than sending one lifecycle sequence to every server. Older revisions commonly use an initialization handshake and may establish connection state. Newer revisions may change version metadata, discovery, or session assumptions. A dual-era implementation may need transport-specific probing or fallback, while a client supporting only one era should fail with a clear diagnostic. Do not infer an unsupported version from a timeout alone if that could hide a network outage. Pin the SDK, test both eras against representative servers, and record the selected revision. Version negotiation details are an evolving part of MCP; consult the corresponding versioned specification and SDK guide.
+
+    Keep network errors distinguishable from protocol incompatibility so fallbacks do not mask outages.
+  tags: [version-negotiation, lifecycle, legacy]
+
+- id: mcp-recent-004
+  topic: structured output
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What are the benefits and limits of structured tool output in MCP?
+  answer: |
+    Structured tool output gives a client a machine-readable result shape, which can make downstream handling and validation more reliable than parsing prose. It can also make the server contract clearer and support typed SDK consumers. Its exact support, result fields, and validation rules vary by protocol revision and client. A server should check that its SDK actually enforces the declared output schema, and it should test what older clients see. Structured output does not make data safe, authorized, or truthful: the server must still filter sensitive fields, verify access, and label user-generated content appropriately. Keep result schemas stable and bounded. Where compatibility matters, provide a suitable text representation or documented fallback rather than assuming every host understands newer structured-content fields.
+  tags: [structured-content, output-schema, clients]
+
+- id: mcp-recent-005
+  topic: remote authorization
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: Why is binding an OAuth token to the intended MCP resource important?
+  answer: |
+    A token should be accepted only by the resource for which it was issued. Without resource or audience binding, a client can be tricked into presenting a token to a different server, or a confused server may forward a credential to an unintended destination. Modern MCP authorization guidance has incorporated OAuth resource-server concepts and protections such as resource indicators, but exact requirements depend on the selected specification revision. Validate issuer, audience or resource, expiry, and scopes using a maintained implementation. Do not accept an arbitrary bearer token in a tool argument and forward it to a URL. Test wrong-resource tokens and redirect behavior. A token's successful cryptographic signature proves only that it was signed by some issuer, not that this server or operation is its intended recipient.
+  tags: [oauth, resource-indicators, audience]
+
+- id: mcp-recent-006
+  topic: sdk evolution
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What should a Python team check before upgrading between major MCP SDK versions?
+  answer: |
+    Review the migration guide and release policy for changes to public imports, server classes, client APIs, transport configuration, lifecycle, middleware or context handling, schema generation, and supported protocol revisions. A major SDK update may change Python ergonomics even when the wire protocol remains familiar. Regenerate and inspect tool schemas, then run unit, protocol-client, stdio or HTTP transport, authorization, and host compatibility tests. Verify minimum Python version and dependency changes, update lockfiles, and scan for security advisories. Avoid assuming an older FastMCP decorator example still uses the current class name or launch command. Upgrade in a branch or canary, document the tested host/client matrix, and retain a rollback plan for the server and its public tool contract.
+
+    Verify the package's Python support range and transitive dependencies as part of the same upgrade.
+  tags: [python-sdk, migration, versioning]
+
+- id: mcp-recent-007
+  topic: server tool design
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: Why are tool annotations and descriptions not enough to make a tool safe?
+  answer: |
+    Descriptions and annotations help a client or model understand intended use, side effects, or risk, but they are metadata and may be ignored or misrepresented. A client can call a tool directly, and a model can produce incorrect arguments. The server must enforce authorization, validate domain constraints, limit cost, and use least-privileged downstream credentials. Read-only claims must be backed by read-only service permissions; destructive-operation warnings should be paired with host approval and server-side checks. Third-party server metadata should be treated as untrusted until reviewed. Keep descriptions accurate and useful, but consider them part of usability and informed consent, not a technical access-control boundary. Test denied calls even when the host is configured to hide the capability.
+
+    Host confirmations should be understandable to users and tied to the actual operation and target.
+  tags: [tool-annotations, authorization, safety]
+
+- id: mcp-recent-008
+  topic: prompt injection
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How can resource content create prompt-injection risk in an MCP application?
+  answer: |
+    A resource may contain attacker-controlled text from tickets, documents, code, or web pages. If the host places that text into a model context, it can include instructions that attempt to override system policy, reveal secrets, or trigger other tools. MCP transports the content but does not classify it as trusted instruction or guarantee how a host will present it. Minimize returned content, preserve provenance and trust labels, and avoid including credentials or unrelated sensitive fields. Hosts should isolate untrusted data from privileged instructions and require approval for consequential actions. The server must assume the model may be influenced and enforce permissions independently. Prompt filtering can be one mitigation, but is not a proof of safety; design for the possibility that hostile content is read.
+  tags: [prompt-injection, resources, trust-boundaries]
+
+- id: mcp-recent-009
+  topic: error handling
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: Why should tool failures distinguish expected domain outcomes from protocol failures?
+  answer: |
+    A protocol failure indicates the request was invalid or unsupported at the message or method level. An execution failure means the tool was invoked but a downstream or business operation could not complete. Clear distinction helps clients decide whether to correct arguments, ask for access, retry, or report an outage. MCP SDKs and specification versions may represent execution errors differently, so follow the exact supported envelope. A missing record, permission denial, validation problem, and upstream timeout should not all become identical successful text. Do not leak stack traces or raw provider errors. Include safe error categories and correlation identifiers, and document retryability. For writes, an ambiguous timeout needs special care because the action may have completed even if the response was lost.
+  tags: [errors, retry, tool-call]
+
+- id: mcp-recent-010
+  topic: remote operations
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How should a server design retries and idempotency for side-effecting tool calls?
+  answer: |
+    A network failure can happen after the server commits a change but before the host receives its result. Retrying the same tool call may then create a duplicate payment, ticket, or deployment. For side-effecting operations, define idempotency semantics: accept a caller- or server-generated key scoped to the principal and operation, persist the outcome, and return the original result for a valid duplicate. Alternatively expose an operation identifier and a status lookup. Validate that keys cannot be reused across users or unrelated actions. A host's retry policy and transport behavior vary, so the server must own correctness. Use timeouts and bounded retries for transient failures, but do not blindly retry non-idempotent writes. Audit both initial execution and duplicate replay safely.
+
+    Persist the key and result long enough to cover realistic retry windows and concurrent duplicate requests.
+  tags: [idempotency, retries, side-effects]
+
+- id: mcp-recent-011
+  topic: observability
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What should an MCP server log for useful auditing without collecting excessive data?
+  answer: |
+    Record a timestamp, authenticated principal or workload, server and tool identity, relevant target or tenant, authorization decision, outcome category, latency, and correlation ID. For a write, capture enough metadata to establish what action occurred, subject to privacy rules. Avoid logging access tokens, secrets, full prompts, or entire tool results by default; logs can become a high-value secondary data store. Redact arguments based on data classification and restrict log access and retention. A server-side audit trail and host-side model interaction telemetry may need correlation, but neither should assume the other is complete. Define alerting for unusual call volume, repeated denials, and backend failures. Verify log behavior with secret test values to catch accidental capture.
+
+    Periodically verify that redaction and retention controls still work after logging or tracing changes.
+  tags: [audit, observability, privacy]
+
+- id: mcp-recent-012
+  topic: interoperability
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What belongs in an MCP compatibility matrix for a production server?
+  answer: |
+    Record the host application and version, client SDK or implementation, server SDK version, supported MCP specification revision, transport, authentication mode, and the primitives or optional features exercised. Include observed limitations and the test date or release. This gives “MCP-compatible” a concrete meaning and helps isolate whether an issue is in the server, client, gateway, or version negotiation. Test discovery or lifecycle, schema listing, tool calls, errors, streaming, resource reads, and auth where relevant. A matrix should not claim that every MCP host works because one client succeeded. Update it for SDK and host upgrades, and use representative clients that reflect actual deployment. Keep version-sensitive behavior documented rather than embedding assumptions in untested code.
+
+    Treat the matrix as a release artifact and update it whenever a protocol or SDK dependency changes.
+  tags: [compatibility, interoperability, testing]

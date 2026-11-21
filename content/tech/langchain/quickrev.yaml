@@ -1,0 +1,95 @@
+concepts:
+  - title: Runnable protocol
+    detail: "One interface — invoke, batch, stream plus async and event variants — that every prompt, model, parser and retriever implements, which is what makes `|` composition possible."
+  - title: LCEL sequence
+    detail: "`a | b` calls `__or__` and builds a `RunnableSequence`; dicts become `RunnableParallel`, callables become `RunnableLambda`, and `RunnableConfig` propagates to every nested step."
+  - title: Chat model adapter
+    detail: "`ChatOpenAI` and peers wrap provider HTTP APIs behind `BaseChatModel`; they return `AIMessage` objects, not strings."
+  - title: Content blocks
+    detail: "`AIMessage.content` is a string for plain text and a list of typed blocks for images, reasoning, citations and cache markers."
+  - title: Prompt template
+    detail: "`ChatPromptTemplate` produces validated messages, supports `MessagesPlaceholder` for history and `.partial()` for fixed values."
+  - title: Output parser
+    detail: "`StrOutputParser` extracts text and streams; `JsonOutputParser` returns dicts; `PydanticOutputParser` validates but needs injected `format_instructions`."
+  - title: Structured output
+    detail: "`with_structured_output(Model)` uses native JSON schema or forced tool calling; it is more reliable than prompt-and-parse and does not stream validated objects."
+  - title: Tool definition
+    detail: "Name, description and `args_schema` are prompt content: descriptions determine selection, constraints such as `Literal` and bounds become JSON Schema."
+  - title: bind_tools
+    detail: "Translates schemas into the provider's tool format and lets the model emit `tool_calls`; it never executes anything or loops."
+  - title: Document and metadata
+    detail: "`Document` pairs `page_content` with metadata that enables filtering, citation and debugging; `split_documents` preserves it, `split_text` does not."
+  - title: Retriever interface
+    detail: "`invoke(query)` returns documents; a vector-store retriever is one implementation among lexical, ensemble, multi-query and compression retrievers."
+  - title: Message history
+    detail: "Chat models are stateless; `RunnableWithMessageHistory` loads and appends messages per session key, and `InMemoryChatMessageHistory` is development-only."
+  - title: Checkpointer
+    detail: "A LangGraph checkpointer persists graph state per `thread_id`, giving resumption, rollback and human-in-the-loop interrupts that message lists cannot."
+  - title: Callback handler
+    detail: "Subclasses `BaseCallbackHandler` to receive start, end, error and token events per `run_id`; attach with `.with_config()` so every caller is instrumented."
+  - title: astream_events
+    detail: "Version v2 emits typed events for the whole run tree; `on_chat_model_stream` carries token deltas and `on_tool_start` carries tool activity."
+  - title: Package split
+    detail: "`langchain-core` holds abstractions, `langchain` orchestration, `langchain-classic` legacy chains in v1, `langchain-community` third-party adapters, partner packages the model adapters."
+
+traps:
+  - "Assuming `AIMessage.content` is always a string; it is a list of blocks for reasoning, image and citation payloads."
+  - "Wrapping `model.invoke` in a `RunnableLambda`, which silently collapses streaming and breaks batch concurrency."
+  - "Believing `bind_tools` runs the tool loop; it only makes the model emit calls."
+  - "Using `AgentExecutor` or `ConversationBufferMemory` from a 2023 tutorial; both are gone from current `langchain`."
+  - "Assuming a prompt saying 'do not hallucinate' prevents unsupported answers without a refusal path the code checks."
+  - "Taking `session_id` from the request body, which turns conversation history into a cross-tenant read."
+
+advanced:
+  - "`with_fallbacks` passes the same input to the fallback, so a fallback expecting a different shape fails too and masks the original error unless `exception_key` is set."
+  - "`with_retry` placement changes scope: `(a | b | c).with_retry()` retries all three steps, while `a | b.with_retry() | c` retries only `b`."
+  - "A retry cannot rescue a partially delivered stream; after the first chunk the client has already seen output."
+  - "Provider prompt caching (cache breakpoints, prefix caching) and LangChain's `set_llm_cache` are different mechanisms: prefix cost reduction versus exact-match response reuse."
+  - "Tool-call arguments arrive as partial JSON across chunks; parsing `tool_calls` mid-stream yields fragments, not arguments."
+  - "Trimming message history must operate on turns, never splitting an `AIMessage` with `tool_calls` from its `ToolMessage`s, or the provider rejects the transcript."
+
+comparisons:
+  - a: Chain
+    b: Agent
+    difference: "Chains fix the steps in code; agents let the model choose steps until it stops, trading predictability for flexibility."
+  - a: LCEL
+    b: LangGraph
+    difference: "LCEL is a static DAG with streaming and batching; LangGraph is a state machine with cycles, checkpoints and interrupts."
+  - a: with_structured_output
+    b: PydanticOutputParser
+    difference: "Native constrained decoding or forced tool calls versus prompt-injected format instructions validated afterwards."
+  - a: langchain-core
+    b: langchain-community
+    difference: "Stable abstractions and protocols versus contributed third-party adapters with uneven maintenance."
+  - a: RunnableParallel
+    b: RunnablePassthrough
+    difference: "Fan one input out and merge results into a dict versus forward input unchanged; `.assign()` adds keys without dropping any."
+  - a: LangSmith
+    b: OpenTelemetry
+    difference: "LLM-specific traces, datasets and evaluators as a hosted product versus spans in the observability backend you already run."
+  - a: invoke
+    b: batch
+    difference: "One input, one output versus many inputs with bounded concurrency, which is the right shape for offline extraction jobs."
+
+commands:
+  - label: Install core, orchestrator and a provider adapter
+    code: pip install langchain-core langchain langchain-openai
+  - label: Turn on per-step verbose output while debugging
+    code: |
+      python -c "from langchain_core.globals import set_verbose; set_verbose(True)"
+  - label: Enable tracing with the current environment variable names
+    code: |
+      export LANGSMITH_TRACING=true LANGSMITH_API_KEY=... LANGSMITH_PROJECT=my-app
+  - label: Check resolved package versions
+    code: |
+      python -c "import importlib.metadata as m; print(m.version('langchain-core'), m.version('langchain'), m.version('langchain-openai'))"
+  - label: Freeze the working set of versions
+    code: |
+      pip freeze | grep -Ei "^(langchain|langsmith|langgraph)" > constraints.txt
+  - label: Find imports that need migration
+    code: |
+      grep -rn "from langchain.chains\|from langchain.memory\|AgentExecutor" --include=*.py .
+  - label: Validate the content folder
+    code: python -m backend.app.content
+  - label: Run the app's evaluation suite after an upgrade
+    code: pytest tests/evals -q

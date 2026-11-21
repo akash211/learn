@@ -1,0 +1,120 @@
+slug: mcp
+title: MCP Servers
+category: ai-llm
+summary: The Model Context Protocol standardizes how AI applications discover and use tools, resources, and prompts supplied by independent servers.
+level: advanced
+relations:
+  - to: tool-calling
+    type: uses
+    note: MCP standardizes the server-side discovery and invocation surface that an agent host can connect to its model tool-calling loop.
+  - to: llm-agents
+    type: uses
+    note: Agent hosts use MCP clients to discover context and capabilities while retaining orchestration, policy, and model choice.
+  - to: rest-apis
+    type: alternative
+    note: MCP is an AI-oriented context and capability protocol, while REST remains a broad resource-oriented interface; an MCP server may wrap a REST API.
+intro:
+  what: |
+    The Model Context Protocol (MCP) is an open protocol for connecting AI applications to
+    external context and capabilities through a common interface. It defines messages and
+    conventions for a host application, its MCP clients, and MCP servers to exchange information.
+    Servers can expose tools (callable operations), resources (addressable context), and prompts
+    (reusable interaction templates). The protocol is built around JSON-RPC semantics and a
+    transport layer; local process communication and remote HTTP deployments have different
+    operational and security requirements.
+
+    MCP standardizes the integration boundary, not the agent itself. It does not prescribe a
+    model, decide when a tool should be called, guarantee that a host asks for consent, or make a
+    connected service safe by default. Specification versions and SDK APIs evolve, so deployments
+    should pin compatible implementations and explicitly test the version and transport they use.
+  why: |
+    Without a shared protocol, every assistant integration tends to grow its own connector format,
+    discovery rules, authentication assumptions, and error handling. MCP gives hosts and service
+    owners a common vocabulary and wire contract, making integrations more reusable and separating
+    capability implementation from model orchestration. This reduces duplicated adapter code, but
+    does not remove the need to design authorization, user consent, auditing, and operational limits.
+    The value is greatest when a team wants multiple AI clients to use the same carefully bounded
+    integration rather than embed vendor-specific tool schemas in every application.
+  problems:
+    - Connect AI hosts to independently developed tools and data sources through a common contract.
+    - Discover available capabilities and their input schemas instead of hard-coding each connector.
+    - Separate the server's integration logic from a particular model provider or agent framework.
+    - Represent reusable context and prompt templates alongside executable operations.
+    - Make local and remote integrations interoperable while retaining transport-specific controls.
+  where_used:
+    - IDEs and developer agents that need repository, issue, observability, or build-system context.
+    - Enterprise assistants that access internal services through policy-controlled adapters.
+    - Local desktop AI applications that launch one or more MCP servers as subprocesses.
+    - Agent platforms that use remote MCP servers to share integrations across users or teams.
+  ecosystem: |
+    MCP sits between an AI host and a service integration. A host creates one MCP client per
+    server, discovers capabilities, then decides how those capabilities enter a model interaction.
+    The server may call a REST API, database, filesystem, or another service. A tool-calling model
+    and an agent loop are adjacent pieces, not requirements of MCP. Python's official SDK and
+    FastMCP-style APIs reduce protocol boilerplate, but exact class names, transport options, and
+    supported specification revisions vary by SDK release. REST APIs remain useful beneath MCP;
+    MCP can be a purpose-designed adapter over them rather than a replacement for all API clients.
+  alternatives:
+    - name: Direct REST or GraphQL integration
+      note: Better when conventional application clients need broad resource APIs or existing API contracts already fit.
+    - name: Framework-specific function calling
+      note: Simpler for one model provider and application, but less portable across hosts and server implementations.
+    - name: Custom plugin or connector API
+      note: Appropriate where a platform needs bespoke policy or workflow features, at the cost of another integration contract.
+  related: [tool-calling, llm-agents, rest-apis]
+chapters:
+  - id: protocol-purpose
+    title: What MCP Standardizes and Why It Exists
+    file: chapters/01-protocol-purpose.md
+    minutes: 13
+    level: advanced
+  - id: architecture-transports
+    title: Architecture, Participants, and Transports
+    file: chapters/02-architecture-transports.md
+    minutes: 14
+    level: advanced
+  - id: primitives-capabilities
+    title: Tools, Resources, Prompts, and Capabilities
+    file: chapters/03-primitives-capabilities.md
+    minutes: 14
+    level: advanced
+  - id: python-server
+    title: Building a Python Server with FastMCP
+    file: chapters/04-python-server.md
+    minutes: 14
+    level: advanced
+  - id: remote-auth
+    title: Authentication and Permissions for Remote Servers
+    file: chapters/05-remote-auth.md
+    minutes: 14
+    level: advanced
+  - id: safe-integrations
+    title: Safely Exposing Databases and Internal APIs
+    file: chapters/06-safe-integrations.md
+    minutes: 14
+    level: advanced
+  - id: descriptions-errors
+    title: Tool Descriptions, Validation, and Error Envelopes
+    file: chapters/07-descriptions-errors.md
+    minutes: 13
+    level: advanced
+  - id: testing
+    title: Testing an MCP Server
+    file: chapters/08-testing.md
+    minutes: 13
+    level: advanced
+  - id: packaging-deployment
+    title: Packaging, Deployment, Registries, and Versioning
+    file: chapters/09-packaging-deployment.md
+    minutes: 13
+    level: advanced
+  - id: security-governance
+    title: Security Risks and Team Governance
+    file: chapters/10-security-governance.md
+    minutes: 15
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

@@ -1,0 +1,105 @@
+slug: langgraph
+title: LangGraph
+category: ai-llm
+summary: Build stateful LLM applications as explicit graphs with typed state, controlled routing, durable checkpoints, and human approval.
+level: advanced
+relations:
+  - to: llm-agents
+    type: uses
+    note: "LangGraph supplies explicit workflow control and persistence for agents whose reasoning and tools are model-driven."
+  - to: langchain
+    type: uses
+    note: "LangChain models, messages, and tools commonly appear inside LangGraph nodes, while LangGraph owns orchestration and state transitions."
+  - to: crewai
+    type: alternative
+    note: "Both can coordinate multi-agent work; LangGraph emphasizes explicit state and control flow, while CrewAI offers role/task-oriented abstractions."
+intro:
+  what: |
+    LangGraph is a Python and JavaScript framework for constructing stateful applications from nodes, edges, and shared state. A node is a step—ordinary code, a model call, a tool, or a subgraph—and an edge determines what runs next. `StateGraph` is the central builder: define a state schema, register nodes and transitions, then `compile()` to obtain a runnable graph. The result can be invoked or streamed and, when compiled with a checkpointer, can persist a thread across runs.
+
+    The graph abstraction is especially useful when an LLM application must do more than a single prompt-response exchange. It can branch according to model output, loop through bounded critique or tool-use cycles, pause for a person, resume from saved state, and expose an inspectable execution trajectory. Nodes return partial state updates; per-key reducers decide whether those updates replace, append, or otherwise combine values. This makes state semantics part of the design rather than hidden glue code.
+
+    LangGraph does not make a model reliable or decide whether a workflow is safe. It provides mechanisms to express application control flow and persistence. You still need to validate outputs, bound loops, handle external side effects idempotently, secure tool access, and define what happens when a checkpoint or deployment changes.
+  why: |
+    LLM workflows increasingly combine probabilistic decisions with deterministic obligations: call the right tool, enforce a budget, retain an audit trail, request approval before a consequential action, and recover after a process exits. A chain is often enough for a fixed sequence, but becomes awkward when each branch needs explicit state or when a run must pause and later continue. LangGraph addresses that gap with a graph runtime and checkpoint model.
+
+    The key design gain is not simply “more agentic” behavior. It is the ability to make transitions and resumability visible. A reviewer can inspect which node ran, what state was carried forward, which branch was selected, and where a person approved an action. This is useful for debugging and governance, provided the state is designed carefully and traces are treated as sensitive data.
+  problems:
+    - Expressing conditional workflows, tool cycles, and bounded retries without burying control flow in nested application code.
+    - Persisting thread-scoped graph state so a run can resume after an interrupt or process failure.
+    - Defining merge semantics for concurrent or incremental state updates with reducers.
+    - Pausing for a human decision and resuming the same execution with a validated response.
+    - Reusing agent workflows as subgraphs while keeping explicit interfaces between teams or roles.
+    - Inspecting and evaluating multi-step trajectories rather than judging only the final text.
+  where_used:
+    - LLM agents with tool calling, routing, reflection, or explicit stop conditions.
+    - Customer support, research, and document workflows that require durable state or human approval.
+    - Multi-agent systems where a supervisor delegates to specialist subgraphs and collects results.
+    - Long-running or interruptible applications that must preserve execution context across requests.
+    - Prototypes and production services that need traceable control flow alongside model flexibility.
+  ecosystem: |
+    LangGraph is part of the LangChain ecosystem, but its graph API can orchestrate ordinary Python functions and need not make every node a LangChain abstraction. LangChain provides integrations such as chat models and tools; LangGraph coordinates state and execution. LangSmith can trace LangGraph runs, inspect node-level execution, support debugging, and organize evaluation datasets and experiments. Production checkpointers may use a database-backed implementation; in-memory savers are useful for local examples but do not survive process restarts. LangGraph and CrewAI overlap in multi-agent orchestration but expose different design styles: explicit graph topology versus role/task-first abstractions.
+  alternatives:
+    - name: Plain Python orchestration
+      note: "Appropriate for a short fixed sequence or a small workflow; add a graph runtime only when branching, persistence, or inspection justifies it."
+    - name: LangChain chains and agents
+      note: "Useful for composing model and tool integrations; LangGraph is often chosen when control flow, state transitions, and resumability need first-class representation."
+    - name: CrewAI
+      note: "A role- and task-oriented multi-agent framework that may suit teams who prefer declarative crew abstractions over a hand-designed graph."
+  related: [llm-agents, langchain, crewai]
+chapters:
+  - id: graph-mental-model
+    title: "The Graph Mental Model: Nodes, Edges, and State"
+    file: chapters/01-graph-mental-model.md
+    minutes: 12
+    level: core
+  - id: state-schemas-reducers
+    title: State Schemas and Reducers
+    file: chapters/02-state-schemas-reducers.md
+    minutes: 13
+    level: advanced
+  - id: conditional-routing
+    title: Conditional Edges and Routing
+    file: chapters/03-conditional-routing.md
+    minutes: 12
+    level: advanced
+  - id: cycles-retries-bounds
+    title: Cycles, Retries, and Bounded Loops
+    file: chapters/04-cycles-retries-bounds.md
+    minutes: 13
+    level: advanced
+  - id: checkpointing-resume
+    title: Checkpointing, Persistence, and Resuming
+    file: chapters/05-checkpointing-resume.md
+    minutes: 14
+    level: advanced
+  - id: interrupts-approvals
+    title: Human-in-the-Loop Interrupts and Approvals
+    file: chapters/06-interrupts-approvals.md
+    minutes: 12
+    level: advanced
+  - id: multi-agent-patterns
+    title: Multi-Agent Patterns and Their Costs
+    file: chapters/07-multi-agent-patterns.md
+    minutes: 14
+    level: advanced
+  - id: tool-nodes-errors
+    title: Tool Nodes and Error Handling
+    file: chapters/08-tool-nodes-errors.md
+    minutes: 13
+    level: advanced
+  - id: observability-evaluation
+    title: Observability and Evaluation of Trajectories
+    file: chapters/09-observability-evaluation.md
+    minutes: 13
+    level: advanced
+  - id: production-concerns
+    title: "Production: Deployment, Concurrency, and Versioning"
+    file: chapters/10-production-concerns.md
+    minutes: 15
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

@@ -1,0 +1,550 @@
+- id: sf-basic-001
+  topic: architecture
+  difficulty: beginner
+  question: What are the three layers of Snowflake's architecture, and what does separating them buy you?
+  answer: |
+    Storage holds table data as micro-partitions in cloud object storage. Compute is a set of
+    virtual warehouses — MPP clusters you start, resize and stop. Cloud services is the always-on
+    control plane that handles authentication, RBAC, metadata, parsing, optimisation, transactions
+    and the result cache.
+
+    The separation means a warehouse owns no data, so resizing is a metadata operation with no
+    data movement, several warehouses can read the same tables without copies, and suspending
+    compute cannot lose data. Workload isolation becomes a matter of starting another warehouse
+    rather than provisioning another cluster and copying into it.
+
+    The costs are equally real: every scan crosses the network from object storage, so small
+    point lookups are far slower than a local OLTP database; warehouses take seconds to resume;
+    and there are no user-managed indexes, so performance depends on pruning micro-partitions
+    rather than on an index the optimiser can trust. Only compute is yours to size.
+  tags: [architecture, storage, compute, cloud-services]
+
+- id: sf-basic-002
+  topic: warehouses
+  difficulty: beginner
+  question: What actually changes when you resize a virtual warehouse from SMALL to LARGE?
+  answer: |
+    Each size doubles the number of compute nodes, and therefore doubles the credits consumed per
+    hour: `SMALL` is two credits per hour, `MEDIUM` four, `LARGE` eight, up to `6XLARGE`. More
+    nodes mean more memory for joins, sorts and aggregates, more parallelism for a scan over many
+    micro-partitions, and a larger local disk cache.
+
+    What does not change is how much data the query reads. Resizing does not improve pruning, fix
+    a function-wrapped predicate, or make a skewed join distribute evenly. A query that scans
+    every partition still scans every partition; it just does it faster, at double the rate.
+
+    The resize itself is a metadata operation, so it takes seconds and moves no data — the sharp
+    difference from Redshift, where changing cluster size requires a data redistribution. The
+    side effect is that the new nodes start with a cold local disk cache, which is why the first
+    query after a resize can look worse than the last query before it.
+  tags: [warehouses, sizing, credits]
+
+- id: sf-basic-003
+  topic: micro-partitions
+  difficulty: beginner
+  question: What is a micro-partition, and why does Snowflake not need indexes?
+  answer: |
+    A micro-partition is an immutable, columnar, compressed unit of table storage, holding roughly
+    50–500 MB of uncompressed data. Rows inside it are stored in arrival order. Every insert or
+    load writes new partitions; an `UPDATE` marks rows in the old partitions and writes new ones
+    containing the new versions.
+
+    Snowflake records metadata per partition per column: minimum value, maximum value, distinct
+    count and null count. When a query filters on a column, the optimiser compares the predicate
+    constant against those ranges and skips partitions that cannot contain a match. That is
+    pruning, and it replaces the index.
+
+    Indexes exist to avoid reading rows you do not need. Partition metadata achieves the same
+    outcome at a coarser granularity — one decision per 50–500 MB instead of per row — with no
+    maintenance, no bloat and no write amplification. The trade is precision: pruning works well
+    for range and equality filters on a column that correlates with physical order, and not at all
+    for a predicate the optimiser cannot compare against min/max.
+  tags: [micro-partitions, pruning, storage]
+
+- id: sf-basic-004
+  topic: pruning
+  difficulty: intermediate
+  question: Why does WHERE date_trunc('day', event_ts) = '2026-03-15' scan the whole table when WHERE event_ts >= ... prunes?
+  answer: |
+    Pruning compares a constant against each partition's recorded minimum and maximum for the
+    filtered column. With `event_ts >= '2026-03-15'`, the optimiser has a constant and a column
+    range, so it can discard every partition whose maximum is before the 15th.
+
+    With `date_trunc('day', event_ts) = '2026-03-15'`, the thing being compared is a function of
+    the column, not the column. Partition metadata stores ranges of `event_ts`, not ranges of
+    `date_trunc('day', event_ts)`, so there is nothing to compare against and the scan is
+    unconditional. The optimiser will not invert an arbitrary expression back into a range.
+
+    The fix is to express the predicate as a half-open range on the bare column:
+    `event_ts >= '2026-03-15' AND event_ts < '2026-03-16'`. The same failure appears with implicit
+    casts on the column side, arithmetic like `customer_id + 0 = 42`, and predicates on `VARIANT`
+    paths. Filter on the column, cast the literal.
+  tags: [pruning, sargable, predicates]
+
+- id: sf-basic-005
+  topic: clustering
+  difficulty: intermediate
+  question: How do you choose a clustering key, and how do you tell whether it is working?
+  answer: |
+    Cluster on the columns that appear in selective `WHERE` clauses of your most expensive
+    queries, lowest cardinality first, and only on tables large enough for pruning to matter.
+    `(customer_id, event_date)` suits a table queried per tenant over a date range; `(event_date)`
+    suits time-series reporting. Do not cluster on a unique key such as `id` — every partition then
+    has a narrow range that overlaps every other, which is the worst case. Do not cluster on a
+    boolean or a two-value status: half the table lands in each partition.
+
+    The measurement is clustering depth:
+
+    ```sql
+    SELECT SYSTEM$CLUSTERING_INFORMATION('analytics.events', '(customer_id, event_date)');
+    ```
+
+    `average_depth` is the average number of partitions that must be read to find one key value. A
+    depth of 1 is perfect; single digits are usually healthy; depth in the tens or hundreds means
+    the key is doing little. Compare it before and after enabling automatic clustering — if depth
+    does not improve, the key is wrong, not the maintenance.
+  tags: [clustering, clustering-depth, layout]
+
+- id: sf-basic-006
+  topic: query profile
+  difficulty: intermediate
+  question: Walk through how you read a Snowflake query profile to find why a query is slow.
+  answer: |
+    Start at the `TableScan` nodes and read `Partitions scanned` against `Partitions total`. If a
+    query filtering to one day reads every partition, the problem is layout and no other change
+    matters. If it reads a small percentage, the scan is efficient and the cost is elsewhere.
+
+    Then look at `Percentage scanned from cache` and bytes scanned. High cache percentage with slow
+    execution means CPU-bound work — expensive expressions, a large join, a wide shuffle. Low
+    cache percentage on a repeated query means the warehouse was suspended between runs.
+
+    Next, spilled bytes on `Sort`, `Join` and `Aggregate` nodes. Local spill is a slowdown; remote
+    spill means every row crossed the network twice, and it usually indicates a fan-out join, a
+    high-cardinality `GROUP BY`, or a warehouse too small for the plan. Finally, check bytes sent
+    over the network for one exchange far larger than its siblings — that is skew, and resizing
+    will not fix it.
+
+    Queue time is not in the profile. Check `QUEUED_OVERLOAD_TIME` in `QUERY_HISTORY` separately.
+  tags: [query-profile, diagnostics, spill]
+
+- id: sf-basic-007
+  topic: performance
+  difficulty: intermediate
+  question: What is the difference between local and remote spilling, and what do you do about each?
+  answer: |
+    When a sort, hash join or aggregate exceeds its memory budget, it writes intermediate rows to
+    local SSD on the warehouse node — local spill. If that is exhausted too, it writes to object
+    storage — remote spill. Local spill costs time; remote spill costs time and network, because
+    every spilled row is written out and read back across the storage layer.
+
+    Before resizing, find the cause in the profile. A `Join` whose output exceeds both inputs is a
+    fan-out, usually a duplicated dimension or a missing join condition. A `Sort` carrying forty
+    columns is `SELECT *`. An `Aggregate` with hundreds of millions of output groups is a
+    `GROUP BY` on a near-unique key. One exchange with most of the bytes is skew.
+
+    Fix the query shape first. If the row counts are sane and the plan is still spilling, the
+    warehouse is undersized for that plan, and doubling memory may eliminate the spill entirely —
+    the one case where a bigger warehouse is also the cheaper answer, because remote spill is
+    slow enough that halving runtime more than pays for double the rate.
+  tags: [spill, memory, performance]
+
+- id: sf-basic-008
+  topic: warehouses
+  difficulty: advanced
+  question: When does doubling warehouse size reduce total cost rather than increase it?
+  answer: |
+    Cost is approximately credit rate × runtime, and the rate doubles with each size. Doubling is
+    cost-neutral if runtime halves, cheaper if it more than halves, and wasteful otherwise.
+
+    It more than halves in two situations. A scan-bound query over many pruned partitions
+    parallelises across twice the nodes, and the fixed overhead of planning and dispatch is
+    amortised over a shorter run. A query that spills remotely on the smaller warehouse may stop
+    spilling on the larger one, and the removal of spill I/O can cut runtime by more than the
+    factor of two that pays for the resize.
+
+    It barely improves — so doubles cost — when the plan has a serial bottleneck, when a join is
+    skewed so one node does most of the work, when pruning is already poor so the scan is huge
+    regardless, or when the query is short enough that warehouse startup dominates.
+
+    The only honest test is empirical: disable the result cache, run at two sizes, and compare
+    `EXECUTION_TIME` against the doubling in rate. Guessing from intuition is how teams end up
+    permanently running `XLARGE` for queries that a `SMALL` would finish in the same time.
+  tags: [sizing, cost, credits]
+
+- id: sf-basic-009
+  topic: caching
+  difficulty: beginner
+  question: What is the result cache, and when is it invalidated?
+  answer: |
+    The result cache stores query results for 24 hours in the cloud services layer. If an identical
+    statement runs again and the underlying data has not changed, Snowflake returns the stored
+    result without starting a warehouse, so the query costs no warehouse credits and finishes in
+    milliseconds. Each reuse resets the 24-hour window, up to 31 days from the original execution.
+
+    Matching is literal: query text must be identical, and session settings affecting the result
+    must match. The executing role must have the required privileges; for `SHOW` queries it must
+    match the role that generated the cached result. A BI tool that appends a timestamp comment or
+    changes SQL case therefore misses the cache.
+
+    Invalidation is blunt: any DML or DDL on any table the query referenced clears the entry, even
+    if the change would not have altered the result. A table loaded every five minutes therefore
+    has effectively no result cache for queries over it.
+
+    Because the cache lives in the services layer rather than on a warehouse, a suspended warehouse
+    still answers cached queries instantly. `ALTER SESSION SET USE_CACHED_RESULT = FALSE` disables
+    it, which is necessary when benchmarking.
+  tags: [result-cache, caching, invalidation]
+
+- id: sf-basic-010
+  topic: caching
+  difficulty: intermediate
+  question: A query is fast the second time on the same warehouse but slow again the next morning. Why?
+  answer: |
+    The second run is reading micro-partitions from the warehouse's local SSD cache, which is
+    populated as the first run scans. Overnight the warehouse auto-suspends, and suspension
+    discards that cache — it lives on the nodes, and the nodes are gone. The morning run scans the
+    same partitions from object storage, which is much slower, and the query profile shows
+    `Percentage scanned from cache` at or near zero instead of 90%+.
+
+    Two other explanations are worth ruling out. If the query text changed — a different filter
+    literal, a new comment from the BI tool — the result cache also missed. If the warehouse was
+    resized, the new nodes start cold for the same reason a resume does.
+
+    This is expected behaviour, not a regression, and it is the main argument against very
+    aggressive `AUTO_SUSPEND` on interactive warehouses: a 60-second timeout buys cold starts all
+    day. It is also why caching a dashboard's aggregate in a table often beats relying on either
+    cache.
+  tags: [warehouse-cache, suspend, ssd]
+
+- id: sf-basic-011
+  topic: loading
+  difficulty: beginner
+  question: What is the difference between a user stage, a table stage, a named stage and an external stage?
+  answer: |
+    All four are landing areas for files, and `COPY INTO` reads from any of them.
+
+    A user stage (`@~`) belongs to one user, cannot be altered or dropped, and is convenient for
+    ad-hoc `PUT` from SnowSQL. A table stage (`@%orders`) belongs to a table, is created with it,
+    and suits a single-loader pipeline where nobody needs to share files. Neither can be granted
+    to another role, which is why production pipelines rarely use them.
+
+    A named stage (`@raw.landing`) is a schema object: it can be granted, described, and used by
+    several loaders, and its file format and directory settings are explicit. This is the normal
+    choice for internal staging.
+
+    An external stage points at an S3, Azure Blob or GCS location, normally authenticated with a
+    storage integration rather than inline keys, so credentials are managed in one place. It is
+    the production path for anything that lands in a data lake. `PUT` and `GET` work only for
+    internal stages, since there is nothing to upload to an external bucket.
+  tags: [stages, loading, copy]
+
+- id: sf-basic-012
+  topic: loading
+  difficulty: intermediate
+  question: How do you handle bad rows in a COPY INTO load without failing the whole batch?
+  answer: |
+    The default `ON_ERROR = 'ABORT_STATEMENT'` fails the load on the first malformed row, which is
+    right for an interactive load and wrong for a scheduled one. The alternatives are
+    `CONTINUE` (skip the offending rows, load the rest, report counts), `SKIP_FILE` (skip any file
+    containing an error) and `SKIP_FILE_<n>` (skip files with more than *n* errors).
+
+    Validate before committing, since `VALIDATION_MODE` parses without loading:
+
+    ```sql
+    COPY INTO raw.events FROM @raw.events_stage
+      FILE_FORMAT = (FORMAT_NAME = 'raw.csv_fmt')
+      VALIDATION_MODE = RETURN_ERRORS;
+    ```
+
+    Then audit after the fact in `COPY_HISTORY`, which reports `status`, `row_count`,
+    `error_count` and `first_error_message` per file. A `PARTIALLY_LOADED` row means `CONTINUE`
+    silently dropped rows — that is the query to schedule daily, because nobody notices missing
+    rows until a reconciliation fails.
+
+    The robust pattern is to land raw text or `VARIANT` into a staging table with permissive
+    types, then transform into typed tables, so a bad value becomes a quarantined row rather than
+    an aborted batch.
+  tags: [copy, on-error, validation]
+
+- id: sf-basic-013
+  topic: loading
+  difficulty: beginner
+  question: How does Snowpipe differ from running COPY INTO on a schedule?
+  answer: |
+    `COPY INTO` is a statement you or a scheduler issues; it runs on a warehouse you name, and it
+    ends when the statement ends. Snowpipe is a persistent pipe object that Snowflake triggers when
+    new files appear, loading them with serverless compute that is not tied to your warehouse.
+
+    ```sql
+    CREATE PIPE raw.events_pipe AUTO_INGEST = TRUE
+      AS COPY INTO raw.events FROM @raw.events_stage
+         FILE_FORMAT = (FORMAT_NAME = 'raw.parquet_fmt');
+    ```
+
+    `AUTO_INGEST` relies on object-creation events — an SQS queue on S3, Event Grid on Azure,
+    Pub/Sub on GCS — so a broken notification channel looks like a healthy pipe with
+    `pendingFileCount` climbing in `SYSTEM$PIPE_STATUS`. That is the single most common Snowpipe
+    incident.
+
+    The cost model differs too: Snowpipe bills per file processed plus compute, with meaningful
+    per-file overhead, so it suits hundreds of 100 MB files and is a poor fit for thousands of
+    tiny ones. For continuous row-level ingestion, Snowpipe Streaming bypasses files entirely.
+  tags: [snowpipe, auto-ingest, serverless]
+
+- id: sf-basic-014
+  topic: loading
+  difficulty: advanced
+  question: Why did a file that clearly exists not get loaded by COPY INTO, and what does FORCE = TRUE actually do?
+  answer: |
+    Snowflake keeps load metadata per table for 64 days, identifying files by name and checksum.
+    `COPY INTO` skips any file it believes it has already loaded, so a pipeline that rewrites
+    `events.csv` in place every hour loads it once and then silently does nothing. The same happens
+    when a retry re-uploades a file under a name already recorded as loaded.
+
+    `FORCE = TRUE` disables that check and loads every matching file again. It is a debugging tool,
+    not a fix: on a directory containing previously loaded files it duplicates everything, and the
+    duplicates are indistinguishable from real rows unless the table has a natural key.
+
+    The durable fix is immutable, unique object names — a run timestamp, a sequence, or a content
+    hash in the path — so that each load is a new file. The other edge of the same feature is that
+    after 64 days the history expires, so a very old file reappearing at the same path will load
+    again; the metadata is a duplicate guard with a horizon, not a permanent ledger.
+  tags: [load-metadata, force, idempotency]
+
+- id: sf-basic-015
+  topic: streams
+  difficulty: beginner
+  question: What does a Snowflake stream actually store, and what are METADATA$ACTION and METADATA$ISUPDATE?
+  answer: |
+    A stream stores an offset into the source table's change tracking, not a copy of the changed
+    rows. Querying it returns the delta between that offset and the current table state, which is
+    why querying a stream is cheap and why a plain `SELECT` does not consume anything.
+
+    The metadata columns describe each change. `METADATA$ACTION` is `INSERT` or `DELETE`.
+    `METADATA$ISUPDATE` is true for both rows produced by a single update, because an update is
+    represented as a delete of the old row plus an insert of the new one. `METADATA$ROW_ID`
+    identifies the row across changes. To choose the latest change when a key appears several times
+    in one batch — an insert followed by an update, for example — order by a source timestamp or
+    sequence column; row ID identifies rows but is not a chronological ordering.
+
+    The offset advances when a DML statement that reads the stream commits. If that transaction rolls
+    back, the offset stays put and the changes remain available, which is what makes stream-driven
+    `MERGE` safely retryable. For updates, ignore the delete half where
+    `METADATA$ISUPDATE = TRUE`; reserve the delete branch for a true row deletion.
+  tags: [streams, cdc, metadata-columns]
+
+- id: sf-basic-016
+  topic: streams
+  difficulty: advanced
+  question: What makes a stream go stale, and why can it not be repaired?
+  answer: |
+    A stream reconstructs changes from the source table's historical versions, so it can only reach
+    back as far as the table's `DATA_RETENTION_TIME_IN_DAYS`. If the stream is not consumed within
+    that window, the versions it needs are gone, and querying it fails with `STALE_STREAM`.
+
+    It cannot be repaired because the information no longer exists. The only action is to recreate
+    the stream, which starts from the current table state and permanently loses the delta for the
+    stale window — so the downstream table is now silently missing a period of changes unless
+    someone backfills from the raw landing layer.
+
+    This turns a retention setting into a pipeline parameter. A task running hourly with one day of
+    retention tolerates roughly a day of failure; a pipeline that has been quietly broken for three
+    days has already lost data. For tables feeding streams, raise retention to at least the
+    longest plausible outage plus the time it takes someone to notice, and alert on staleness
+    rather than only on task failures — a suspended task produces no failures to alert on.
+  tags: [streams, staleness, retention]
+
+- id: sf-basic-017
+  topic: tasks
+  difficulty: intermediate
+  question: What are the two task settings that most often make a stream-and-task pipeline do nothing?
+  answer: |
+    The first is that a task is created **suspended**. `CREATE TASK` does not start it; you must run
+    `ALTER TASK ... RESUME`. A task that was never resumed is the most common reason a pipeline
+    appears to be configured correctly and produces no rows. The same applies after any
+    `CREATE OR REPLACE TASK`.
+
+    The second is the `WHEN` clause. Without `WHEN SYSTEM$STREAM_HAS_DATA('raw.events_stream')`, the
+    task runs on every schedule tick and wakes the warehouse even when the stream is empty — so you
+    pay a resume every five minutes for nothing. With it, the task is skipped when there is no
+    data, which is both cheaper and quieter. Note that a skipped run still appears in
+    `TASK_HISTORY` as `SKIPPED`, so a `WHEN` that is always false looks like a healthy pipeline
+    that never runs.
+
+    Also relevant: tasks do not retry automatically, and `SUSPEND_TASK_AFTER_NUM_FAILURES` will
+    suspend a repeatedly failing task, returning you to problem one.
+  tags: [tasks, resume, when-clause]
+
+- id: sf-basic-018
+  topic: time travel
+  difficulty: beginner
+  question: How does time travel work, and what is the default retention?
+  answer: |
+    Because table data is immutable micro-partitions and a table is a pointer to a set of them,
+    Snowflake can keep the previous pointers. Time travel lets you query a table as of a past
+    timestamp, an offset, or immediately before a specific statement:
+
+    ```sql
+    SELECT * FROM analytics.events AT (OFFSET => -3600);
+    SELECT * FROM analytics.events BEFORE (STATEMENT => '<query_id>');
+    ```
+
+    Default retention is one day. On Enterprise edition it can be set per table, schema or database
+    up to 90 days; on Standard it is 0 or 1. Transient and temporary tables are capped at one day
+    regardless. `UNDROP TABLE` restores a dropped table from the same mechanism, provided no new
+    object has taken the name.
+
+    Retention is a storage cost: the old partitions stay billed until they age out. Setting 90 days
+    on a table that is rewritten nightly keeps many obsolete copies, while one day is generous for
+    an append-only fact table that is never corrected.
+  tags: [time-travel, retention, undrop]
+
+- id: sf-basic-019
+  topic: time travel
+  difficulty: intermediate
+  question: What is fail-safe, and how does it differ from time travel?
+  answer: |
+    Fail-safe is a further seven days of retained data after a table's time travel window expires,
+    during which only Snowflake Support can recover the data. It is not configurable, not queryable
+    with `AT` or `BEFORE`, and not something you can invoke — it exists for disaster recovery after
+    a drop or truncate, not for routine recovery.
+
+    Time travel is yours: you can query historical states yourself, clone at an offset, and
+    `UNDROP` objects without opening a case. Fail-safe is the backstop when time travel has already
+    expired and the situation is bad enough to justify a support ticket.
+
+    The distinction that matters operationally is object type. Permanent tables get both. Transient
+    and temporary tables get time travel of at most one day and **no fail-safe at all**, which is
+    exactly why they are cheaper to store. Creating production fact tables as transient "to save
+    storage" means the only recovery window is the retention setting, and beyond it the data is
+    gone with no escalation path.
+  tags: [fail-safe, recovery, transient]
+
+- id: sf-basic-020
+  topic: cloning
+  difficulty: intermediate
+  question: What does CREATE TABLE ... CLONE actually copy, and where does the storage cost appear?
+  answer: |
+    It copies metadata. The clone is a new table object whose partitions point at the same
+    micro-partitions as the source, so creating a clone of a multi-terabyte table takes seconds and
+    adds no storage at that moment. `CREATE DATABASE ... CLONE` does the same for every table in
+    the database.
+
+    Cost appears on divergence, copy-on-write. When either side modifies a partition, it writes a
+    new partition and repoints, leaving the other side untouched. Growth is per partition, not per
+    row: changing one row in a 200 MB partition adds 200 MB to the divergence. A clone that
+    receives a full nightly reload is, within a day, a complete second copy.
+
+    Two things do not come across. Grants are not inherited — the clone is owned by the creating
+    role, so a clone handed to a team needs its own grants. And streams are not cloned; a clone is
+    a copy of structure and table data, not of pipeline state. Clones taken with `AT`/`BEFORE` also
+    inherit the source's retention, so they are snapshots that continue to age.
+  tags: [clones, zero-copy, storage]
+
+- id: sf-basic-021
+  topic: semi-structured
+  difficulty: beginner
+  question: How do you query a field inside a VARIANT column, and what happens if the field is missing?
+  answer: |
+    Use a path with a colon and cast the result:
+
+    ```sql
+    SELECT payload:event_type::string        AS event_type,
+           payload:customer.id::number       AS customer_id,
+           payload:items[0].sku::string      AS first_sku
+    FROM raw.events;
+    ```
+
+    Paths are case-sensitive, and an unquoted key is matched exactly rather than folded to upper
+    case, so `payload:EventType` and `payload:event_type` are different fields.
+
+    A missing key returns SQL `NULL` rather than an error, which is convenient and dangerous: a
+    typo like `payload:cutomer_id` also returns `NULL`, and a filter on it returns zero rows
+    silently. Casting is the other edge. `payload:total::number` raises an error if the value holds
+    a non-numeric string, aborting the query, so use `TRY_CAST(payload:total AS number)` for
+    anything arriving from an external system and handle the resulting `NULL` explicitly.
+
+    `VARIANT` holds a parsed value up to 16 MB. It is stored columnar with frequent keys extracted
+    internally, but pruning still operates on the column as a whole, not on paths.
+  tags: [variant, paths, casting]
+
+- id: sf-basic-022
+  topic: semi-structured
+  difficulty: intermediate
+  question: What does LATERAL FLATTEN do, and why does it make queries more expensive?
+  answer: |
+    `FLATTEN` is a table function that turns an array or object inside a `VARIANT` into rows, one
+    per element:
+
+    ```sql
+    SELECT e.event_id, f.index, f.value:sku::string AS sku
+    FROM raw.events e,
+    LATERAL FLATTEN(input => e.payload:items) f;
+    ```
+
+    It exposes `SEQ`, `KEY`, `PATH`, `INDEX`, `VALUE` and `THIS`. `KEY` is populated for objects,
+    `INDEX` for arrays. For unknown nesting depth, `RECURSIVE => TRUE` with `MODE => 'BOTH'` walks
+    the whole document.
+
+    It is expensive for two reasons. It multiplies rows — an event with forty line items becomes
+    forty rows before any aggregation, and every column of the parent is carried into each. And a
+    filter applied outside the flatten is evaluated after that multiplication. Filtering the parent
+    first, in a subquery or CTE, cuts the work dramatically.
+
+    Nested arrays compound the effect: one flatten per level, or a recursive flatten on deeply
+    nested documents, can turn a scan into something close to a cross join.
+  tags: [flatten, lateral, arrays]
+
+- id: sf-basic-023
+  topic: security
+  difficulty: intermediate
+  question: How does Snowflake RBAC work, and why is GRANT SELECT ON FUTURE TABLES necessary?
+  answer: |
+    Privileges are granted to roles, roles are granted to other roles and to users, and a session
+    runs as one active role. Access follows the containment hierarchy: `SELECT` on a table requires
+    `USAGE` on its schema and on its database as well, which is why a missing grant at schema level
+    produces the deliberately ambiguous "does not exist or not authorized".
+
+    `FUTURE TABLES` solves a specific and extremely common problem. A grant on `ALL TABLES` applies
+    only to objects that exist when the grant runs. A dbt or orchestration job that creates a new
+    table tomorrow produces an object nobody else can read, and someone re-grants by hand every
+    week.
+
+    ```sql
+    GRANT SELECT ON FUTURE TABLES IN SCHEMA finance.marts TO ROLE access_finance_read;
+    ```
+
+    Note that it applies to objects created afterwards by any role, so it is a standing grant on a
+    schema, not on a pipeline. Managed access schemas add a further constraint: only the schema
+    owner can grant on objects inside, so object owners cannot widen access themselves.
+  tags: [rbac, grants, future-grants]
+
+- id: sf-basic-024
+  topic: security
+  difficulty: intermediate
+  question: What is the difference between a masking policy and a row access policy?
+  answer: |
+    A masking policy rewrites values in a column at query time; a row access policy decides which
+    rows a query can see. Both attach to the object rather than to a view, so every consumer —
+    ad-hoc SQL, a BI tool, a share — is subject to them.
+
+    ```sql
+    CREATE MASKING POLICY pii_email AS (val STRING) RETURNS STRING ->
+      CASE WHEN IS_ROLE_IN_SESSION('access_pii_full') THEN val
+           ELSE REGEXP_REPLACE(val, '.+@', '***@') END;
+
+    ALTER TABLE raw.customers MODIFY COLUMN email SET MASKING POLICY pii_email;
+    ```
+
+    A row access policy takes a column and returns a boolean, usually by joining an entitlement
+    table, then filters rows:
+
+    ```sql
+    ALTER TABLE finance.orders ADD ROW ACCESS POLICY rap_region ON (region);
+    ```
+
+    The performance profiles differ. Masking is per value and cheap. A row access policy is a
+    predicate evaluated per row and can defeat partition pruning, turning a narrow scan into a wide
+    one, because the policy's allowed values are not known when the plan is built. Both require
+    Enterprise edition.
+  tags: [masking, row-access-policy, governance]

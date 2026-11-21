@@ -1,0 +1,170 @@
+- id: crew-scn-001
+  title: A research crew ships a confident report with broken citations
+  technologies: [crewai, llm-agents, tool-calling]
+  difficulty: advanced
+  prompt: |
+    A three-agent crew researches a market, analyses findings and writes a brief. The output reads
+    well, but reviewers find that roughly a third of the cited URLs are dead or do not support the
+    claim, and two competitors are confused. The crew's `expected_output` asks for sources. How do
+    you diagnose and fix it?
+  approach: |
+    Start at the task boundary, not the prompt. Ask for `output_pydantic` with a `Finding` model
+    whose `source_url` is required, so the weakest link is visible per item rather than averaged into
+    prose. Then add a deterministic guardrail that resolves each URL and rejects the task when the
+    failure rate exceeds a threshold, returning the specific failures as the rejection reason so the
+    retry has something to act on. Handle entity confusion separately: give the researcher an
+    explicit entity list with canonical names and IDs, and require that field in the schema.
+
+    Check what the tools actually return — if the search tool returns snippets rather than fetched
+    pages, the model is citing search results it never opened. Fix the tool contract, cap result
+    size, and say in the description that the URL must be one the tool opened.
+
+    Then measure: a fixture of ten queries with known-good sources, scored on citation validity, not
+    on prose quality. Only after that is it worth editing role text.
+  red_flags:
+    - Rewriting the backstory to say "always cite real sources" and re-running once.
+    - Adding a fourth "fact-checker agent" without a schema or a deterministic check.
+    - Judging the fix by reading one output instead of measuring a fixture set.
+
+- id: crew-scn-002
+  title: A hierarchical crew costs six times a sequential one and skips tasks
+  technologies: [crewai, llm-agents]
+  difficulty: advanced
+  prompt: |
+    A four-agent hierarchical crew handles inbound analysis requests. Its cost is roughly six times
+    the sequential version it replaced, latency is unpredictable, and in some runs the requested
+    review step never appears in the output. The manager uses a strong model. Diagnose the design.
+  approach: |
+    First establish what hierarchy is buying. In hierarchical mode the manager assigns tasks; a task's
+    `agent` is a hint, and steps can be merged or skipped. If the task list is fixed and each step has
+    a clear owner, hierarchy is overhead — a plan call and a review call around every step, plus a
+    manager whose context accumulates all worker output. The skipped review is not a bug so much as a
+    consequence of giving a model discretion over a pipeline that did not need discretion.
+
+    Get the trace: per-step call counts, assignment, and the manager's delegation events. Check
+    whether workers are being re-delegated, whether the manager is producing deliverables itself,
+    and whether `respect_context_window` is summarising the very outputs under review.
+
+    Then simplify: return to `Process.sequential` with explicit `context` dependencies, keep one
+    reviewer task with a guardrail, and keep the strong model only where synthesis needs it. If
+    assignment genuinely is uncertain, keep hierarchy but give workers narrow roles, low `max_iter`,
+    and a documented mapping. Re-measure cost per successful run, not just per run.
+  red_flags:
+    - Tuning the manager's backstory to "always run the review step".
+    - Adding workers to compensate for unclear task definitions.
+    - Accepting the cost because "multi-agent is more capable".
+
+- id: crew-scn-003
+  title: Delegation ping-pong between two agents
+  technologies: [crewai, llm-agents, tool-calling]
+  difficulty: advanced
+  prompt: |
+    A lead agent with delegation enabled coordinates a researcher and a writer. Runs sometimes take
+    several minutes and end with outputs like "I have asked the researcher to gather the data" rather
+    than a finished brief. Tool logs show repeated near-identical searches. What is happening, and
+    how would you restructure it?
+  approach: |
+    Read the delegation tree before changing anything. The pattern is usually mutual: the lead
+    delegates an underspecified sub-task, the delegate asks a clarifying question back, the lead
+    re-delegates. `max_iter` is per agent, so the nesting compounds rather than capping the
+    conversation. The abdicated final answer is the same failure seen from the other end — the lead's
+    deliverable became a receipt for work it requested.
+
+    Treat the root cause as an ownership problem. Give each step a named owner as a task, not a
+    delegation: research and writing become sequential tasks with `context` and typed outputs. Reserve
+    delegation for a genuinely unpredictable need — a policy question, a verification pass — on one
+    agent, with low `max_iter` and delegates that hold narrower tools.
+
+    Add controls: a per-run call and token budget outside the framework, structured delegation logs,
+    and a guardrail or assertion that the final output contains the required sections rather than a
+    status sentence. Then compare quality and cost against the task-based version on a fixture set.
+  red_flags:
+    - Raising `max_iter` so the loop "has room to finish".
+    - Telling the lead "do not delegate" while leaving delegation enabled everywhere.
+    - Blaming the model rather than the absent task ownership.
+
+- id: crew-scn-004
+  title: A support crew leaks one customer's context into another's answer
+  technologies: [crewai, rag, postgresql]
+  difficulty: advanced
+  prompt: |
+    A support triage crew uses memory and a retrieval tool over a shared knowledge base. During a
+    review, an answer quotes a detail from a different customer's previous ticket. The crew is
+    otherwise accurate. How do you find the leak and make the isolation defensible?
+  approach: |
+    Treat it as an incident, not a prompt bug. Two channels are likely: shared memory with no tenant
+    scope, and retrieval that filters by relevance without an authorization filter. Reproduce with two
+    synthetic tenants, then inspect which memories and which retrieved chunks entered the prompt —
+    that record should exist, and its absence is itself a finding.
+
+    Fix memory first: derive a scope from the authenticated request and pass it to every agent
+    (`memory.scope(f"/tenant/{id}")`), never from model output. Purge the contaminated scope and
+    confirm deletion reaches the vector index, not just the metadata store. For retrieval, apply the
+    tenant filter **before** similarity search, inside the tool, not in the prompt — a prompt
+    instruction is not an access control.
+
+    Then make it structural: identity bound server-side in tool constructors, no tenant identifiers in
+    argument schemas, per-tenant scopes in tests, and a regression case that asserts another tenant's
+    marker never appears. Add retention and deletion to the same policy that covers the database, and
+    log scope and filter values on every recall and retrieval for audit.
+  red_flags:
+    - Adding "only use this customer's data" to the agent's backstory.
+    - Deleting the memory table without rebuilding the vector index.
+    - Concluding it was a one-off model hallucination without checking retrieved context.
+
+- id: crew-scn-005
+  title: Putting a synchronous crew behind an HTTP endpoint
+  technologies: [crewai, rest-apis, postgresql]
+  difficulty: intermediate
+  prompt: |
+    A team wants to expose a four-task content crew through a FastAPI endpoint. A prototype takes 20
+    to 90 seconds and sometimes longer; the API gateway times out at 30 seconds. Retries from clients
+    have already produced duplicate published articles. Propose an architecture.
+  approach: |
+    Decouple acceptance from execution. The endpoint validates input, writes a job record with an
+    idempotency key derived from the client request, enqueues work and returns 202 with a job ID. A
+    worker runs `kickoff()` with a timeout and a token budget, writes per-task outputs and the served
+    model identifier to durable storage, and updates status. Clients poll or receive a webhook.
+
+    Make publication idempotent at the boundary: the publish tool takes the job ID as its key and the
+    downstream system enforces uniqueness, so a retry after an ambiguous timeout cannot create a
+    second article. Separate drafting from publishing, and gate publishing behind approval if the
+    content is customer-facing.
+
+    Bound the run explicitly — `max_iter`, tool timeouts, a wall-clock timeout, and a per-run token
+    ceiling enforced outside the framework. Add a dead-letter path for runs that exceed limits, and
+    alert on cost per successful job and on queue age rather than on request latency, which no longer
+    reflects the work.
+  red_flags:
+    - Raising the gateway timeout and calling it fixed.
+    - Retrying the request server-side without an idempotency key on publication.
+    - Running `kickoff()` in the request handler with `verbose=True` as the only observability.
+
+- id: crew-scn-006
+  title: Deciding whether to keep the crew at all
+  technologies: [crewai, llm-agents, langgraph]
+  difficulty: advanced
+  prompt: |
+    A six-agent sequential crew generates weekly competitive briefs. It works, but costs are high,
+    three of the agents produce near-identical prose, and reviewers still rewrite about half of each
+    brief. Leadership asks for a plan to improve quality. What do you propose?
+  approach: |
+    Reframe the request: the measurable problem is that half the output needs rewriting, and the crew
+    structure may be a cause rather than a solution. Start with an evaluation set of past briefs and
+    the edits reviewers made, and classify those edits — missing evidence, wrong emphasis, tone,
+    structure, factual errors. That classification says which step is failing, and it also gives a
+    before/after metric.
+
+    Then test the cheap hypothesis first: collapse the three overlapping agents into one writer with a
+    clear `expected_output` and a reviewer task with a deterministic checklist. Compare cost, latency
+    and reviewer edit rate against the six-agent baseline. If the reviewer's edits are mostly
+    structural, a template plus a single well-specified agent may win outright; if they are evidence
+    problems, the fix is retrieval and guardrails, not more personas.
+
+    Keep the crew only for the parts where roles differ in tools or permissions, and move scheduling,
+    approvals and retries into a Flow or the existing job runner. Present the decision as an
+    experiment with a threshold agreed in advance, not a preference for fewer agents.
+  red_flags:
+    - Adding a seventh agent to review the other six.
+    - Tuning prompts across six agents simultaneously, making attribution impossible.
+    - Optimising cost before establishing what reviewers actually change.

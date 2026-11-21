@@ -1,0 +1,142 @@
+slug: crewai
+title: CrewAI
+category: ai-llm
+summary: "A role-based multi-agent framework: agents with roles and goals, tasks with expected outputs, and a process that runs them as a crew — fast to assemble, and bounded by what prompt-level coordination can guarantee."
+level: advanced
+relations:
+  - to: llm-agents
+    type: uses
+    note: "CrewAI is one way to build an agent system: the agent loop, tool calls and stopping rules are the underlying mechanics, and the crew layer adds roles, task ordering and handoffs."
+  - to: langgraph
+    type: alternative
+    note: "Both coordinate multi-agent work. CrewAI exposes a team-shaped API with implicit state passing; LangGraph exposes an explicit state graph with checkpoints and interrupts. Choose by how much control flow you need to see and resume."
+  - to: tool-calling
+    type: uses
+    note: "Every crew capability is a tool: the schema, description and return format decide whether an agent picks the right one, and the crew inherits every tool-calling failure mode."
+intro:
+  what: |
+    CrewAI is a Python framework for building multi-agent systems out of three nouns. An **Agent** is a
+    role with a goal and a backstory. A **Task** is a unit of work with a description and an expected
+    output. A **Crew** binds agents and tasks together and runs them under a **process** — sequential by
+    default, or hierarchical with a manager that assigns and reviews work. A second construct, **Flows**,
+    wraps crews in event-driven orchestration: decorated methods with typed shared state, conditional
+    routing and persistence.
+
+    The framework is deliberately opinionated in the direction of natural language. Almost every control
+    decision an experienced engineer would put in code — who does what, when a task is finished, whether
+    an answer is good enough — is expressed as English text in a prompt and executed by a model. That is
+    the trade: you get a working multi-agent pipeline in a few dozen lines, and you give up the explicit
+    state, branching and reproducibility you would get from a graph or from ordinary functions.
+
+    CrewAI does not train models, host them, or make them reliable. It assembles prompts, calls a model
+    provider through LiteLLM, executes tools, threads task outputs into later prompts, and records usage.
+    Everything that makes such a system safe — permissions, validation, idempotency, budgets, evaluation —
+    remains the caller's responsibility.
+  why: |
+    Multi-agent designs were initially hand-rolled: a planner prompt, a worker prompt, a loop, and a
+    growing conversation. Rebuilding that skeleton for each project wasted effort, and the resulting code
+    hid its own structure inside string templates. CrewAI packages the skeleton as a reusable vocabulary.
+    A team can describe a process in the same terms they use in a meeting — researcher, analyst, writer,
+    sequential handoff — and get an executable artifact that matches the description closely enough to
+    argue about.
+
+    That legibility is the real product. Role descriptions double as documentation, task boundaries
+    double as log boundaries, and a reviewer can read `crew.py` and understand the intended division of
+    labour without tracing a control-flow graph. For prototypes, internal tooling, content pipelines and
+    bounded research tasks, that speed is worth a lot.
+
+    The cost appears later. Prompt-shaped coordination gives weak guarantees: no enforced schema between
+    steps, no transactional state, no deterministic routing, and a token bill that grows with every agent
+    and every hop. Crews also invite a specific failure mode — adding an agent when the real problem is
+    an underspecified task. Understanding both halves of that trade is what separates a demo from a
+    system.
+  problems:
+    - Expressing a multi-step LLM workflow as roles and tasks instead of bespoke prompt plumbing.
+    - Getting specialist behaviour (research, review, writing) from separate agents with separate tools and instructions.
+    - Assembling a working prototype of a multi-agent pipeline in a single file.
+    - Sequencing dependent LLM work with an inspectable boundary between steps.
+    - Adding event-driven control flow, state and persistence around model-driven work through Flows.
+  where_used:
+    - Research and report generation pipelines that gather, analyse and write.
+    - Content and marketing workflows with distinct drafting and review stages.
+    - Internal analysis assistants that combine search, retrieval and structured summarisation.
+    - Back-office automation where a small number of specialist steps must run in order.
+    - Prototypes used to decide whether a multi-agent design is worth productionising at all.
+  ecosystem: |
+    CrewAI sits on top of LiteLLM for provider access, Pydantic for schemas, and a pluggable embedder and
+    vector store for memory and knowledge. The `crewai-tools` package supplies ready-made tools (search,
+    scraping, file and document readers, RAG helpers), and tools written for LangChain can generally be
+    adapted. MCP servers can be attached as tool sources, which moves integration work out of the crew and
+    into a standard server boundary.
+
+    Neighbours matter for design decisions rather than for imports. Against a single agent with tools,
+    CrewAI adds role separation and explicit task boundaries. Against LangGraph, it trades explicit state
+    and checkpointed resumption for a shorter, more declarative definition. Against a workflow engine such
+    as Airflow or Temporal, it is not a scheduler: it has no cron, no retry semantics for infrastructure
+    failures, and no durable execution model outside Flow persistence.
+  alternatives:
+    - name: LangGraph
+      note: "Explicit state graph with checkpoints, interrupts and resumable runs; more code, far more control over branching and recovery."
+    - name: A single agent with tools
+      note: "Usually the right first design. Add roles only when separate instructions, tools or permissions actually conflict in one prompt."
+    - name: OpenAI Agents SDK and similar
+      note: "Handoff-oriented primitives with a lighter abstraction; orchestration and tracing choices differ."
+    - name: Plain Python plus an LLM client
+      note: "For a fixed three-step pipeline, a function per step is easier to test, version and debug than any framework."
+  related: [llm-agents, langgraph, tool-calling]
+chapters:
+  - id: crew-abstraction
+    title: "The Crew Abstraction: Agents, Tasks and Process"
+    file: chapters/01-crew-abstraction.md
+    minutes: 12
+    level: core
+  - id: agent-definition
+    title: "Defining Agents: Role, Goal, Backstory"
+    file: chapters/02-agent-definition.md
+    minutes: 12
+    level: core
+  - id: tasks-outputs
+    title: "Tasks, Expected Outputs and Structured Results"
+    file: chapters/03-tasks-outputs.md
+    minutes: 13
+    level: advanced
+  - id: processes
+    title: "Sequential and Hierarchical Processes"
+    file: chapters/04-processes.md
+    minutes: 13
+    level: advanced
+  - id: tools
+    title: "Tools and Custom Tool Integration"
+    file: chapters/05-tools.md
+    minutes: 13
+    level: advanced
+  - id: memory
+    title: "Memory and Context Sharing Between Agents"
+    file: chapters/06-memory.md
+    minutes: 13
+    level: advanced
+  - id: delegation-handoffs
+    title: "Delegation, Handoffs and Failure Modes"
+    file: chapters/07-delegation-handoffs.md
+    minutes: 14
+    level: advanced
+  - id: flows-vs-crews
+    title: "Flows: Event-Driven Orchestration vs Crews"
+    file: chapters/08-flows-vs-crews.md
+    minutes: 14
+    level: advanced
+  - id: evaluation-tracing
+    title: "Evaluation, Tracing and Cost Control"
+    file: chapters/09-evaluation-tracing.md
+    minutes: 14
+    level: advanced
+  - id: when-not-to-use
+    title: "When a Crew Is Overkill"
+    file: chapters/10-when-not-to-use.md
+    minutes: 12
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

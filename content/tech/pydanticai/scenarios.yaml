@@ -1,0 +1,132 @@
+- id: pai-scn-001
+  title: A valid result still contains a fabricated citation
+  technologies:
+  - pydanticai
+  - python
+  - pydantic
+  difficulty: advanced
+  prompt: A research assistant returns a `BaseModel` with a non-empty `sources` list
+    and a coherent summary. Every field validates, but two cited documents do not
+    exist. The team says the output contract has guaranteed correctness and wants
+    to auto-publish all future summaries.
+  approach: Separate structural validity from evidence validity. Keep retrieved document
+    identifiers in trusted run dependencies, and have deterministic application code
+    verify every returned source against that candidate set before publishing. Consider
+    designing output as selected IDs rather than arbitrary URLs, and persist provenance
+    with the result. Add a human review or explicit rejection path when evidence is
+    missing. Evaluate factual quality separately with a representative dataset; schema
+    parsing is not a factuality metric.
+  red_flags:
+  - Treating non-empty or schema-valid sources as proof of evidence.
+  - Allowing the model to create authoritative source records.
+  - Auto-publishing without provenance checks or evaluation.
+- id: pai-scn-002
+  title: A model tool call crosses tenant boundaries
+  technologies:
+  - pydanticai
+  - fastapi
+  - python
+  difficulty: advanced
+  prompt: A FastAPI endpoint authenticates the caller and invokes a PydanticAI agent.
+    A search tool accepts both `tenant_id` and `query` as model-generated arguments.
+    A customer finds that changing the tenant ID in a prompt can retrieve another
+    account's records.
+  approach: Treat this as an authorization defect, not a prompt issue. Derive the
+    tenant from the authenticated principal in FastAPI and pass it through a trusted
+    dependency object. Remove or ignore model-controlled tenant IDs. Ensure the service
+    scopes queries at the data layer and apply object-level policy. Add tests that
+    try cross-tenant identifiers and assert the repository never returns or queries
+    another tenant. Review logs and determine whether prior access needs incident
+    handling.
+  red_flags:
+  - Adding a stronger system prompt as the only fix.
+  - Accepting a model-supplied identity claim as authorization.
+  - Testing only the response text rather than the data access boundary.
+- id: pai-scn-003
+  title: Validation retries exhaust the request budget
+  technologies:
+  - pydanticai
+  - python
+  difficulty: intermediate
+  prompt: An extraction agent has a strict output model. After a provider upgrade,
+    its outputs often fail validation, causing several correction requests. HTTP latency
+    and token usage rise sharply, then requests fail after the retry limit. The team
+    proposes making every field optional.
+  approach: Measure validation categories, retry counts, model latency and token usage
+    before changing the contract. Reproduce failures with captured sanitized cases
+    and a deterministic FunctionModel test. Confirm provider structured-output support
+    and compare model behavior with a small evaluation set. Keep truly required fields
+    required; represent unknown values intentionally. Bound retries and return a clear
+    failure or human-review state. Consider a compatible provider/model change or
+    schema simplification only when domain semantics remain intact.
+  red_flags:
+  - Making required data optional to hide a compatibility problem.
+  - Increasing retries without budgets or failure metrics.
+  - Assuming a parseable result means extraction quality recovered.
+- id: pai-scn-004
+  title: A slow client pins agent stream resources
+  technologies:
+  - pydanticai
+  - fastapi
+  - python
+  difficulty: advanced
+  prompt: A FastAPI route forwards an agent stream to browsers over SSE. Each run
+    holds a request database session and an upstream model connection. During peak
+    traffic, clients on poor networks remain connected and database pool checkout
+    latency increases. Disconnects do not appear to cancel the provider run.
+  approach: Trace resource lifetimes from request start through stream teardown. Fetch
+    required data and release transaction/session resources before waiting on the
+    LLM where possible. Ensure client disconnect cancellation closes or cancels the
+    agent stream and upstream provider resources. Apply concurrency limits, idle and
+    total timeouts, bounded buffering, and correct reverse-proxy streaming configuration.
+    Test slow readers and disconnects through the ASGI application and production
+    proxy, and monitor active streams and pool pressure.
+  red_flags:
+  - Increasing the database pool before checking held sessions.
+  - Assuming SSE automatically cancels upstream work.
+  - Holding transactions open for the browser stream lifetime.
+- id: pai-scn-005
+  title: Tests accidentally call a paid provider
+  technologies:
+  - pydanticai
+  - pytest
+  - python
+  difficulty: intermediate
+  prompt: A CI job begins making real provider requests from a test module after an
+    agent fixture changes. It is slow and nondeterministic, and one test incurred
+    unexpected cost. Other tests check only final text, not whether a write tool was
+    called after an authorization denial.
+  approach: Prevent non-test model requests in unit tests using the supported global
+    guard and replace the agent model in scoped overrides. Use TestModel for simple
+    paths and FunctionModel for exact invalid outputs, tool requests, and retry sequences.
+    Make fake dependencies record calls; assert denied requests trigger no write operation.
+    Separate live-provider integration tests behind explicit credentials, usage caps
+    and opt-in markers. Review override scope for concurrency leaks and avoid snapshots
+    of volatile metadata.
+  red_flags:
+  - Mocking only the final answer while real tools or models still run.
+  - Disabling the network guard to make flaky tests pass.
+  - Failing to assert that unsafe side effects did not happen.
+- id: pai-scn-006
+  title: Choosing between typed agent and durable workflow graph
+  technologies:
+  - pydanticai
+  - langchain
+  - python
+  difficulty: advanced
+  prompt: A team is prototyping a customer-claims workflow. The current version uses
+    one PydanticAI agent with two read tools and a typed extraction result. Product
+    now requires human approval, resumability after outages, durable state for days,
+    and audit history. The team wants to add a chain of agents without defining persistence
+    semantics.
+  approach: 'Clarify the workflow lifecycle before selecting abstractions: state transitions,
+    human approval, idempotency, durable checkpoints, retries and audit ownership.
+    A bounded typed PydanticAI agent remains suitable for extraction or a node, but
+    a durable orchestrator or explicit state machine may own long-lived control flow.
+    Prototype the failure and resume path, not just the successful run. Compare current
+    framework capabilities, operations, migration cost and team expertise, and keep
+    claims/domain services framework-independent.'
+  red_flags:
+  - Assuming in-memory agent history is durable workflow state.
+  - Choosing a framework from a feature checklist without testing recovery.
+  - Rewriting domain rules into model prompts or framework callbacks.

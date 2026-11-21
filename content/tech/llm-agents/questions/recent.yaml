@@ -1,0 +1,288 @@
+- id: agent-recent-001
+  topic: tooling
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What problem does the Model Context Protocol solve for agents, and what does it not solve?
+  answer: |
+    MCP standardises how tools and resources are exposed to a model client: a server declares
+    tools with JSON schemas, resources, and prompts, and any compliant client can discover and call
+    them. Before it, every agent framework had its own plugin interface, so an integration written
+    for one product had to be rewritten for the next. MCP replaces N×M glue with N servers and M
+    clients, which is why it spread quickly after Anthropic introduced it in late 2024.
+
+    What it does not solve is the hard part. A standard transport does not make a tool well
+    described, idempotent, or safely scoped. It does not tell the model when *not* to use a tool,
+    and it does not bound the blast radius of one that is over-privileged — a server that exposes
+    `run_shell` is exactly as dangerous when it speaks a standard protocol. It also introduces a
+    supply-chain question: a third-party server's tool descriptions enter your prompt, so a
+    malicious or compromised server can attempt tool poisoning through the description text itself.
+
+    Treat MCP as an integration standard, and keep the tool-design, authorisation, and injection
+    controls from the rest of this module.
+  tags: [mcp, interoperability, supply-chain]
+
+- id: agent-recent-002
+  topic: orchestration
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How do you choose between an explicit graph framework, a multi-agent framework, and plain code with a loop?
+  answer: |
+    Start from what you need to control. If you need checkpointed state, resumable runs, interrupts
+    for human approval, and per-node tool scoping, an explicit graph (LangGraph being the most
+    literal about it) gives those as first-class features rather than things you build. If the task
+    is short, exploratory, and has no compliance surface, a plain loop with a step budget is less
+    code and fewer abstractions to debug.
+
+    Multi-agent role frameworks (CrewAI and similar) are attractive when the work genuinely divides
+    into distinct responsibilities with different tools and prompts — research versus review, for
+    instance. The trap is using them to fix reliability: two unreliable reasoners exchanging prose
+    do not become reliable, they multiply cost and make failures harder to attribute. Most teams
+    that adopted a multi-agent topology end up collapsing it into one agent with better tools.
+
+    The practical default: one agent, curated tools, a deterministic shell. Add a graph when you need
+    durability or audit, and add roles only when a role boundary maps to a real permission boundary.
+  tags: [langgraph, crewai, architecture]
+
+- id: agent-recent-003
+  topic: computer-use
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What changes when an agent's tool is a browser or a desktop rather than an API?
+  answer: |
+    Three things: the observation is huge and noisy, the action space is untyped, and every action
+    is effectively irreversible in a shared session.
+
+    A screenshot or DOM dump costs thousands of tokens per step, so context management becomes the
+    design constraint rather than an optimisation — you need element extraction, region cropping, or
+    an accessibility tree instead of raw pixels. Actions like "click at (412, 233)" carry no
+    semantics, so there is no schema to validate and no idempotency key to derive; a retry may click
+    something else because the page moved. And the session holds cookies and credentials, so a
+    prompt-injected instruction in page text can act as the logged-in user.
+
+    Defences: run in a disposable, network-restricted sandbox with its own profile; prefer
+    semantic actions (click element by role and name) over coordinates; gate anything that submits
+    a form, spends money, or changes settings; and log screenshots plus the accessibility tree for
+    each step so a failure is reviewable. Re-verify state after each action rather than assuming the
+    click landed.
+  tags: [computer-use, browser, sandboxing]
+
+- id: agent-recent-004
+  topic: structured-output
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: Why prefer schema-constrained output over parsing free text when routing an agent?
+  answer: |
+    Because routing is a control-flow decision and control flow should not depend on prose. If the
+    graph branches on whether the model's sentence contains the word "refund", a negation ("no
+    refund is possible") or a quotation ("the customer asked about refund policy") sends the run
+    down the wrong path, and the failure is invisible until the effect happens.
+
+    Constrain the output to an enum plus the fields the decision needs — `{"disposition":
+    "refund" | "research" | "answer" | "escalate", "confidence": float, "rationale": str}` — and
+    route on the enum. Schema-constrained decoding, or validation with a repair retry, makes the
+    decision machine-checkable and the parse failure explicit rather than silent.
+
+    Two rules complete it. Treat a validation failure as a routing outcome (escalate or retry once),
+    never as a reason to fall through to a default branch that happens to be the most common. And
+    keep the rationale as evidence for reviewers and traces, not as the parsing surface — it is
+    useful precisely because it is not constrained.
+  tags: [structured-output, routing, control-flow]
+
+- id: agent-recent-005
+  topic: cost
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What is context engineering, and why has it displaced prompt engineering in agent design?
+  answer: |
+    Prompt engineering asks what to say to the model; context engineering asks what the model should
+    see at each step, in what order, and at what cost. In an agent, the prompt is mostly fixed while
+    the assembled context changes every step, so the decisions that determine quality are which
+    observations to keep, how to represent tool results, where to place the task statement, and what
+    to retrieve — not how to phrase the instruction.
+
+    The shift is driven by three realities. Context is a budget: every step resends it, so a
+    bloated working set costs money on every turn and dilutes attention. Recall degrades for
+    material buried in the middle of a long context, so ordering is a correctness concern. And
+    provider-side prompt caching rewards a stable prefix, so how you structure the context has a
+    direct cost consequence — a regenerated system prompt can multiply spend.
+
+    Practically: pin the task, keep few observations verbatim, summarise the tail into structured
+    state, put dynamic content last, and truncate at the tool boundary with a handle rather than in
+    the assembler.
+  tags: [context-engineering, caching, budget]
+
+- id: agent-recent-006
+  topic: orchestration
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: When do subagents help, and when do they just multiply cost and confusion?
+  answer: |
+    A subagent helps when its value is context isolation, not intelligence. If a subtask produces a
+    large amount of intermediate material that the parent does not need — reading twenty files to
+    answer one question, searching a wide corpus, exploring a repository — running it in a separate
+    context and returning a compact result keeps the parent's window small and its instructions
+    salient. That is a real, measurable benefit.
+
+    It stops helping when the subtask needs the parent's context, when the result is hard to
+    summarise without loss, or when the boundary requires judgement. Then you pay twice: the child
+    re-derives context the parent already had, and the parent has to interpret a summary it cannot
+    verify. Failures also become harder to attribute, since the trace now has a nested run with its
+    own stop reason.
+
+    Rules that keep it honest: give the child a narrow tool set and an explicit token budget, require
+    a typed result (findings, sources, status) rather than prose, forbid the child from acting on
+    the world, and keep nesting shallow. If you cannot state what the child saves in tokens, you do
+    not need one.
+  tags: [subagents, context-isolation, cost]
+
+- id: agent-recent-007
+  topic: evaluation
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: Why don't public agent benchmarks predict performance on your workload?
+  answer: |
+    Because an agent's score is a joint property of the model, the tools, the prompt, and the
+    environment — and only the first is shared with a benchmark. Public suites fix their own tool
+    set, their own data, and their own notion of success. Your tools have different schemas, your
+    documents have different structure, your users phrase requests differently, and your definition
+    of a good outcome includes constraints the benchmark never modelled, such as not refunding
+    twice or not emailing the wrong person.
+
+    There is also contamination and optimisation pressure: benchmark tasks appear in training data,
+    and vendors tune for the suites that are published. A high score tells you the model can do the
+    kind of reasoning the suite tests, not that it will be reliable in your tool surface.
+
+    Use public benchmarks for coarse model selection and for sanity checks on capability classes
+    (tool selection, long-horizon tasks, refusal). Then build a small, versioned suite from your own
+    traces — forty to a hundred real tasks with world-state assertions — and treat that as the
+    number that gates releases.
+  tags: [benchmarks, evaluation, validity]
+
+- id: agent-recent-008
+  topic: human-in-the-loop
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How do you decide how much autonomy to give an agent, rather than arguing about it in the abstract?
+  answer: |
+    Replace the argument with a per-action risk classification. For each action the agent can take,
+    record reversibility, blast radius, whether it touches money or personal data, and whether an
+    error is detectable after the fact. That gives four tiers: log-and-sample for read-only work,
+    post-hoc review with an undo window for low-value reversible writes, pre-execution approval for
+    money or customer-visible changes, and dual approval plus no auto-execution path for
+    irreversible or regulated actions.
+
+    Then measure the tier rather than trusting it. Track override rate at the approval gates,
+    incident rate per action class, and cost per success. When a class shows a low error rate over a
+    meaningful sample and a reversal path exists, move it down a tier; when an incident occurs, move
+    it up and add the eval case. Autonomy becomes an empirical dial with evidence behind each step,
+    not a philosophical position.
+
+    The failure to avoid in both directions: gating everything, which trains reviewers to approve
+    without reading, and gating nothing because the demo worked.
+  tags: [autonomy, risk-tiers, approvals]
+
+- id: agent-recent-009
+  topic: security
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What is tool poisoning, and how does it differ from injecting instructions through a web page?
+  answer: |
+    Tool poisoning puts the malicious instruction in the tool's *description* rather than in the
+    content it returns. When an agent connects to a third-party tool server, every tool description
+    is serialised into the prompt. A server can therefore include text that the user never sees —
+    hidden or subtly worded instructions telling the model to read a file, pass a parameter
+    containing conversation context, or prefer this tool over others. The model cannot distinguish a
+    description written in good faith from one written to manipulate it.
+
+    It differs from content injection in two ways. The payload arrives through the configuration
+    channel, which is trusted by construction, so "treat tool output as untrusted" controls miss it.
+    And it is persistent: the description is present on every step of every run, not only when a
+    page happens to be fetched.
+
+    Controls: pin and review tool servers like dependencies, diff their descriptions on upgrade,
+    prefer first-party or allowlisted servers, and treat a description that instructs rather than
+    describes as a red flag. Constrain what a compromised description could achieve — least
+    privilege credentials, egress allowlists, approval for side effects — because detection will not
+    be perfect.
+  tags: [tool-poisoning, mcp, supply-chain]
+
+- id: agent-recent-010
+  topic: operations
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What does durable execution mean for agents, and why does it change the deployment shape?
+  answer: |
+    Durable execution means a run survives process death: state is persisted at defined boundaries,
+    a crash resumes at the last boundary instead of restarting, and waiting for a human or an
+    external event does not consume a worker. For agents this is not a nicety, because runs last
+    minutes to hours, pause for approval, and are expensive to repeat.
+
+    The practical consequences are concrete. The run becomes a record with an id before any model is
+    called, so it can be queued, inspected, and cancelled. Steps are checkpointed after side effects
+    are confirmed, which forces every write to be idempotent, since replay is the normal failure
+    path. The HTTP layer becomes a control plane — start, stream progress, approve, cancel — rather
+    than the execution environment. And the state schema must be versioned, because a resume may
+    happen across a deploy.
+
+    The cost is real infrastructure: a queue, a state store, and workers. The alternative — a
+    long-lived request — fails on the first timeout, and the workaround (retry the whole run) is
+    what produces duplicate refunds and duplicate emails.
+  tags: [durability, checkpointing, queues]
+
+- id: agent-recent-011
+  topic: operations
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: A model version you depend on is being deprecated. What does a safe migration look like?
+  answer: |
+    Treat it as a code migration with a behavioural gate, not a configuration edit. First, pin the
+    old version explicitly while you prepare, so the deprecation date does not arrive as an outage.
+    Then inventory what the release actually contains: system prompts, tool descriptions, tool
+    schemas, decoding settings, and any routing logic that assumed the old model's tool-call format
+    or refusal behaviour.
+
+    Run the full eval suite against the new model on the same tools and prompts, and compare per
+    slice rather than in aggregate. Expect differences in argument formatting, parallel tool calls,
+    verbosity, and refusal thresholds; a model that answers better can still break a parser. Where
+    the prompt encoded model-specific workarounds, remove them deliberately and re-measure, rather
+    than carrying them forward.
+
+    Then shadow on live traffic without executing side effects, canary a small percentage with a
+    kill switch, and ramp on production metrics: success rate, cost per success, step-limit rate,
+    escalation rate. Keep the old release loadable for in-flight runs, and record the model version
+    in every trace so a regression can be attributed.
+  tags: [model-migration, versioning, canary]
+
+- id: agent-recent-012
+  topic: cost
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How do you use model routing inside an agent without making the trajectory less reliable?
+  answer: |
+    Route by node, not by request. Each step in a trajectory has a different difficulty profile:
+    classification, extraction, argument formatting, and routing are usually handled well by a small
+    model, while planning, ambiguous diagnosis, and final synthesis are where the large model earns
+    its price. Assign a model tier per node and measure each node's contribution to outcome.
+
+    Three safeguards matter. Keep the routing decision in code with a fixed policy, not in the
+    model's judgement, or you have added a second unreliable decision to every step. Validate the
+    handoffs: if a small model produces a disposition or an argument object, validate it against the
+    schema before a large model or a tool consumes it, so a cheap step cannot silently corrupt an
+    expensive one. And evaluate the mix end to end — per-node quality metrics can improve while the
+    assembled trajectory gets worse, usually through subtle context loss between tiers.
+
+    Watch the asymmetry: routing errors are cheap per call and expensive per run, because a bad
+    classification sends the whole trajectory down the wrong branch.
+  tags: [model-routing, cost, validation]

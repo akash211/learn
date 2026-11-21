@@ -1,0 +1,562 @@
+- id: crew-basic-001
+  topic: fundamentals
+  difficulty: beginner
+  question: What is CrewAI, and what problem does it actually solve?
+  answer: |
+    CrewAI is a Python framework for building multi-agent LLM systems from a team metaphor. An
+    **Agent** carries a role, goal and backstory; a **Task** carries a description and an expected
+    output; a **Crew** binds them and runs them under a process, either `sequential` or
+    `hierarchical`. **Flows** add event-driven orchestration around crews.
+
+    The problem it solves is authoring cost. Hand-rolling a multi-agent pipeline means writing
+    planner prompts, worker prompts, a loop and the glue that threads outputs between steps — then
+    rebuilding that skeleton on the next project. CrewAI packages the skeleton, so a workflow can
+    be described in the vocabulary a team already uses and become executable code quickly.
+
+    What it does not solve is reliability. Control flow is expressed in natural language, task
+    outputs pass as text, and there is no transactional state. The framework assembles prompts,
+    calls models through LiteLLM, runs tools and records usage. Permissions, validation,
+    idempotency, budgets and evaluation remain your responsibility.
+
+    Interviewers usually want that distinction: CrewAI is an authoring abstraction over agent
+    loops, not a guarantee of multi-agent quality.
+  tags: [fundamentals, multi-agent, orchestration]
+
+- id: crew-basic-002
+  topic: fundamentals
+  difficulty: beginner
+  question: Explain the difference between an Agent, a Task and a Crew.
+  answer: |
+    An **Agent** is a configured persona: `role`, `goal`, `backstory`, plus an `llm`, a `tools`
+    list and limits such as `max_iter`. It is a prompt constructor with a tool loop, not a running
+    process. The same agent can serve several tasks.
+
+    A **Task** is a unit of work: a `description` (instructions), an `expected_output` (definition
+    of done), the `agent` assigned to it, optional `context` from earlier tasks, and optional
+    output schema or guardrails. Tasks are where contracts live; agents are where capabilities
+    live.
+
+    A **Crew** binds a list of agents to a list of tasks and runs them under a `Process`.
+    Sequential mode executes tasks in list order, threading each output into the next. Hierarchical
+    mode inserts a manager that assigns and reviews work.
+
+    The separation matters because quality problems are usually task problems. A vague
+    `expected_output` will disappoint no matter how well the agent's backstory is written, and a
+    strong agent cannot rescue a task that never says what success looks like.
+  tags: [agents, tasks, crews]
+
+- id: crew-basic-003
+  topic: agents
+  difficulty: beginner
+  question: What do an agent's role, goal and backstory actually control?
+  answer: |
+    All three become system-level prompt text that is re-sent on every call that agent makes, so
+    they are persona tokens with a recurring cost.
+
+    `role` sets domain, stance and vocabulary. "Regulatory filing analyst" selects a register and
+    a set of distinctions; "AI assistant" selects the average of the training distribution.
+
+    `goal` resolves ambiguity inside a task. The task says what to produce; the goal says what to
+    prefer when the task is underspecified — precision over volume, cite or abstain, report
+    disagreement rather than averaging it.
+
+    `backstory` sets register and implicit standards. "You quote the sentence before you state a
+    number" changes behaviour; "15 years of experience" mostly changes tone. It is not memory and
+    not a knowledge base: it is static text, so facts placed there go stale and are paid for on
+    every call.
+
+    The practical ranking is that checkable rules in `expected_output` outperform adjectives in the
+    persona, and `tools`, `llm` and `max_iter` usually matter more than any of the three strings.
+  tags: [agents, prompting, persona]
+
+- id: crew-basic-004
+  topic: agents
+  difficulty: intermediate
+  question: What does allow_delegation do, and when should it be enabled?
+  answer: |
+    `allow_delegation=True` gives the agent two extra tools: delegate work to a coworker, and ask a
+    question to a coworker. The coworker runs its own agent loop and returns text; control stays
+    with the delegator, which then continues.
+
+    That is a nested call, not a handoff. The delegator still owns the task, so delegation adds a
+    second loop inside the first — with its own prompt, tools, iterations and cost.
+
+    It is worth enabling when the need for specific expertise is genuinely unpredictable at
+    authoring time: a coordinator that occasionally needs a policy specialist, or a writer that
+    wants a verification pass. It is the wrong tool when you already know which agent handles
+    which step — write that as a task instead.
+
+    The default is `False` for good reason. Enabled broadly, it produces over-delegation (nobody
+    does the work), abdication (the answer becomes "I have asked the researcher"), provenance loss
+    and unpredictable cost. Enable it on one or two agents, give delegates narrower tools, keep
+    `max_iter` low, and inspect the delegation tree in the trace rather than trusting the summary.
+  tags: [delegation, agents, cost]
+
+- id: crew-basic-005
+  topic: processes
+  difficulty: beginner
+  question: What is the difference between a sequential and a hierarchical process?
+  answer: |
+    `Process.sequential` runs tasks in the order they appear in the list. Each task's agent runs
+    its own loop, and the resulting text is threaded into the next task's prompt. Order is exactly
+    what you wrote, cost is roughly linear in tasks plus tool calls, and a failure points at one
+    task.
+
+    `Process.hierarchical` inserts a manager. You supply `manager_llm` (from which a manager agent
+    is constructed) or `manager_agent` (a fully defined one). The manager plans, delegates each
+    step to an agent it judges suitable, reviews the result and may re-delegate. Tasks are not
+    pre-assigned in this mode, so a task's `agent` is closer to a hint than an instruction.
+
+    Hierarchy buys adaptivity and a review gate; it costs several times the model calls of the
+    equivalent sequential crew, and it makes order approximate and debugging harder. The manager
+    also becomes a context bottleneck, because it must hold the accumulating outputs it supervises.
+
+    Choose sequential when the pipeline is known and each step has a clear owner — which is most
+    useful crews. Choose hierarchical when assignment is genuinely uncertain and you can afford the
+    extra calls.
+  tags: [processes, hierarchical, sequential]
+
+- id: crew-basic-006
+  topic: processes
+  difficulty: intermediate
+  question: When would you supply manager_agent instead of manager_llm?
+  answer: |
+    `manager_llm` takes a model identifier, and CrewAI builds a default manager agent around it.
+    That is enough when you only want a stronger model supervising cheaper workers.
+
+    `manager_agent` takes a full `Agent`, which lets you control four things the default manager
+    does not expose well: the manager's instructions (routing policy, when to reject an output,
+    whether it may produce the deliverable itself), its model and temperature, its tools, and its
+    `max_iter`. A custom manager is also how you encode review criteria — "reject any output
+    missing evidence fields and re-delegate once" — as a goal rather than hoping the default
+    manager infers it.
+
+    The trade-off is that you now own a prompt that decides routing for the whole crew. Keep it
+    short and behavioural. If the manager's instructions start enumerating specific
+    task-to-agent mappings, you have reimplemented sequential execution with extra model calls;
+    write the mapping in code and drop back to `Process.sequential`.
+
+    One caution: a custom manager with a weak model routes badly and confidently. Match the
+    manager's model to the difficulty of the assignment decision, not to the workers' model.
+  tags: [processes, manager-agent, routing]
+
+- id: crew-basic-007
+  topic: tasks
+  difficulty: beginner
+  question: What is the difference between a task's description and its expected_output?
+  answer: |
+    The `description` is instructions: what to do, in what order, with which tools, and what to do
+    when the obvious path fails. It should be self-contained, because a task may be retried with
+    only the context the process hands it.
+
+    The `expected_output` is the definition of done. It is injected into the prompt as the target,
+    and it is the stronger of the two fields because models optimise toward what they can see being
+    checked. "A summary of the findings" is unfalsifiable; "3-8 items, each with a source URL, no
+    empty URL field" is a target.
+
+    A useful division: the description says how to work, the expected output says what to hand
+    back, and every sentence in the expected output should be checkable in about ten seconds by a
+    person reading the result.
+
+    Neither field enforces anything. Both are prompt text. If a requirement matters — schema,
+    arithmetic, an allowed value — put it in `output_pydantic` or a guardrail, where failure
+    produces an error instead of a slightly worse answer.
+  tags: [tasks, expected-output, contracts]
+
+- id: crew-basic-008
+  topic: tasks
+  difficulty: intermediate
+  question: What does the context parameter on a Task do, and what does it not do?
+  answer: |
+    `context=[other_task, ...]` declares that the listed tasks' outputs should be included as
+    context for this task. It is how you reference a dependency that is not simply the immediately
+    preceding step — for example a writer that must see both the research and the review, with a
+    task in between.
+
+    It does **not** control execution order. The process decides order; `context` only decides what
+    text is available. A task can name a task that has not run yet and receive nothing, which is a
+    silent failure rather than an error.
+
+    In a sequential process the previous task's output is already threaded forward, so `context` is
+    for additional, specific dependencies. In a hierarchical process the manager decides
+    assignments, and context still shapes what each step sees.
+
+    Two costs to remember: every context entry is appended to the prompt, so wide context inflates
+    both tokens and the chance of the model latching onto irrelevant detail. Attach what the task
+    needs to do its job, not everything produced so far.
+  tags: [tasks, context, data-flow]
+
+- id: crew-basic-009
+  topic: tasks
+  difficulty: intermediate
+  question: How do you get a validated structured result out of a task?
+  answer: |
+    Use `output_pydantic=Model` (or `output_json=Model`) on the task. CrewAI asks the agent for a
+    response conforming to that schema and converts the final message into it, so the task output
+    exposes `.pydantic` (a validated instance) or `.json_dict` (a plain dict). Define the model with
+    Pydantic `Field` descriptions, because those descriptions are part of what the model sees.
+
+    Three caveats matter in practice. First, only declared fields are checked — extra prose and
+    missing nuance are invisible to the schema. Second, conversion happens on free text, so nested
+    schemas and long lists fail more often than flat ones; keep models shallow and test adversarial
+    outputs. Third, a valid parse says nothing about truth: a well-formed `source_url` can still be
+    wrong, so validate facts with a guardrail or an external check.
+
+    `expected_output` should still describe the shape in words, since it guides generation, but
+    treat the schema as the contract and the prose as the hint. Downstream code should consume the
+    typed object, never re-parse `.raw`.
+  tags: [structured-output, pydantic, tasks]
+
+- id: crew-basic-010
+  topic: tasks
+  difficulty: advanced
+  question: What is a task guardrail, when does it run, and what should it check?
+  answer: |
+    A guardrail is a Python callable attached to a task with `guardrail=` (or a list with
+    `guardrails=`). It runs **after** the task produces output and before the crew moves on. It
+    receives the task output and returns a tuple: `(True, value)` to accept, or `(False, "reason")`
+    to reject. A rejection sends the reason back to the agent for another attempt, up to
+    `guardrail_max_retries` (default 3), after which the task fails.
+
+    Its value is that it is deterministic code sitting at a boundary the model cannot argue with.
+    Good checks: does every cited URL resolve, do line items sum to the stated total, is the date
+    in range, is the account on the allowlist, is the JSON schema satisfied. Bad checks: a small
+    model asked "is this good?" — that is a more expensive opinion with the same blind spots as the
+    original.
+
+    Guardrails do not retry infrastructure failures and do not make a run transactional. A task
+    that already sent an email has already sent it; the guardrail runs on text, not on side effects.
+    Pair them with idempotent write tools and keep each guardrail fast, so a rejection loop does not
+    dominate cost.
+  tags: [guardrails, validation, tasks]
+
+- id: crew-basic-011
+  topic: tools
+  difficulty: intermediate
+  question: How do you write a custom tool, and when do you use BaseTool rather than @tool?
+  answer: |
+    Both routes produce the same contract: a name, a description and an argument schema the model
+    can read.
+
+    Subclass `BaseTool` and declare `name`, `description`, `args_schema` (a Pydantic model) and a
+    `_run` method. Use this when the tool needs configuration or state — an API client, a tenant
+    identifier, a database connection. Because you control `__init__`, this is also where
+    credentials and identity belong: pass the tenant from the authenticated request, never as a
+    model-chosen argument.
+
+    Use the `@tool` decorator when a plain function with type hints and a docstring is enough. It
+    is shorter and reads like ordinary Python, which makes it good for pure transformations.
+
+    Whichever you choose, the model never sees your implementation. It chooses from the
+    description, fills the schema and reads what you return — so the description must say what the
+    tool does, when to use it instead of a neighbouring tool, what the arguments mean and how it
+    fails. Return compact, actionable results and catch exceptions into structured errors rather
+    than letting a stack trace end the run.
+  tags: [tools, basetool, custom-tools]
+
+- id: crew-basic-012
+  topic: tools
+  difficulty: beginner
+  question: Why does a tool's description matter more than its implementation quality?
+  answer: |
+    Because the description is the only part of the tool the model can see. Tool choice and
+    argument filling are decisions made from text: a name, a description and a JSON schema. A
+    beautifully implemented tool with a vague description is, from the agent's point of view, a
+    vague tool.
+
+    Descriptions should say what the tool does, when to use it **instead of** the alternative, what
+    the arguments mean and what the return looks like. The strongest single improvement is naming
+    the exclusion: "use for ticket search; do not use for customer records — use
+    `customer_lookup`". Models choose badly between overlapping descriptions and well between
+    descriptions that partition the space.
+
+    The schema is part of the description. Field descriptions, enums and required flags all shape
+    what the model supplies. A free-form string argument invites invented identifiers; an enum
+    invites a valid choice.
+
+    This is also why tool catalogues degrade behaviour: every additional tool competes for
+    attention. Three well-described tools usually outperform fifteen adequate ones.
+  tags: [tools, descriptions, tool-choice]
+
+- id: crew-basic-013
+  topic: tools
+  difficulty: advanced
+  question: What are the security risks of giving a crew broad tool access?
+  answer: |
+    A tool set is an authorization surface, and a crew shares it more widely than it appears. Four
+    risks dominate.
+
+    **Privilege escalation through delegation.** If any reachable agent holds a write tool, a
+    delegating agent can ask it to act. The effective permission set is the union of tools reachable
+    in the delegation graph, not the tools on the agent you are looking at.
+
+    **Model-chosen identity.** A `user_id` or `tenant_id` in an argument schema lets the model pick
+    whose data to touch. Identity must be bound server-side in the tool's constructor.
+
+    **Injection through tool output.** Retrieved pages, tickets and emails are untrusted input. Text
+    in them that says "ignore previous instructions" is data, not policy, and a broadly-tooled agent
+    may act on it. Treat every tool result as adversarial content.
+
+    **Free-form arguments.** A URL, SQL string, file path or shell command built from model output
+    is an SSRF, injection or traversal bug. Offer enumerated operations and validated identifiers.
+
+    The mitigation is boring and effective: narrow tools per agent and per task, no write tools
+    unless required, allowlists, approval for irreversible actions, and a documented delegation
+    graph reviewed like an IAM policy.
+  tags: [security, tools, permissions]
+
+- id: crew-basic-014
+  topic: memory
+  difficulty: intermediate
+  question: What memory types did CrewAI historically expose, and what replaced them?
+  answer: |
+    Older documentation described four types. **Short-term memory** held recent interaction context
+    within a run, in a searchable vector store rather than a replayed transcript. **Long-term
+    memory** retained facts and task results across runs, typically in a local SQLite store scored
+    by recency and relevance. **Entity memory** stored people, companies and projects with their
+    attributes so later steps could resolve "the client" to a record. **Contextual memory** was the
+    composite view assembled for a given task.
+
+    Current documentation describes a single `Memory` class that replaces those separate stores, along
+    with external memory integrations. You call `remember()`, `recall()`, `forget()` and
+    `extract_memories()`; records live in a hierarchy of scopes and are ranked by a blend of
+    semantic similarity, recency and importance, with configurable weights.
+
+    Know both vocabularies. The four types explain why the feature exists and still appear in
+    interviews and tutorials; the unified class is what current code imports. Either way, memory is
+    retrieval, not storage you can rely on for correctness.
+  tags: [memory, history, entity-memory]
+
+- id: crew-basic-015
+  topic: memory
+  difficulty: advanced
+  question: How does CrewAI's unified Memory class work, and how do scopes isolate data?
+  answer: |
+    `Memory` stores records through `remember()`, which can infer scope, categories and importance
+    with a model call, and retrieves them through `recall()`, which ranks candidates by a composite
+    score blending semantic similarity, recency and importance. `forget()` deletes by scope or
+    record, `extract_memories()` pulls atomic facts from longer text, and `tree()` and `info()`
+    expose the scope structure.
+
+    Scopes are hierarchical paths — `/project/alpha`, `/agent/researcher` — and they are the
+    isolation mechanism. `memory.scope("/tenant/123")` returns a view whose reads and writes are
+    confined to that subtree, which is how you keep one customer's context out of another's prompt.
+    Derive the scope from the authenticated request, never from model output or user text.
+
+    In a crew, `memory=True` creates a default instance shared by all agents, and each task triggers
+    extraction from the output plus recall before the next step. An agent can instead receive a
+    private scope while others read shared memory. In Flows, `self.remember()` and `self.recall()`
+    are available directly.
+
+    Cost and privacy follow: enabling memory adds model and embedding calls to every task, and sends
+    that content to the configured embedder.
+  tags: [memory, scopes, isolation]
+
+- id: crew-basic-016
+  topic: memory
+  difficulty: advanced
+  question: Why is crew memory not a substitute for a database?
+  answer: |
+    Because memory is optimised for plausible relevance, not correctness. It answers "what might be
+    related to this query", not "what is the current value". The two questions diverge exactly where
+    production systems care.
+
+    Concretely: recall can return a fact that was true last quarter next to the one that superseded
+    it, with no ordering guarantee and no indication of which is current. It can return nothing,
+    which looks identical to returning something unhelpful. It can be poisoned by text the crew read
+    — an injected instruction stored as a "fact" and retrieved into later prompts. And it has no
+    transactions, no uniqueness constraints and no audit trail.
+
+    The rule that holds up: if being wrong about a value would require a correction to a customer,
+    read it from the system of record through a tool at the moment you need it. Use memory for
+    continuity — preferences, prior decisions, open questions, the shape of the last attempt.
+
+    Operationally, memory is also personal data. Scopes must be tenant-derived, deletion must include
+    the vector index, and the embedder is a data-egress path that needs the same review as any other
+    third-party call.
+  tags: [memory, correctness, privacy]
+
+- id: crew-basic-017
+  topic: crews
+  difficulty: beginner
+  question: How do inputs reach a crew, and what are the risks of interpolation?
+  answer: |
+    `crew.kickoff(inputs={"topic": "..."})` supplies values that are interpolated into `{placeholders}`
+    in agent roles, goals, backstories, task descriptions and expected outputs, and into output file
+    paths. The generated project also prompts for missing inputs when you run it from the CLI, using
+    defaults declared in the project configuration.
+
+    The convenience hides two risks. First, interpolation happens into **prompt text**, including
+    system-level persona fields. A value containing instructions is not passed as data; it becomes
+    part of the instruction. That is a prompt-injection channel with a friendly API, and it is worse
+    when the placeholder sits in a `role` or `goal` than in a task description.
+
+    Second, placeholders are string substitution, not validation. A missing key becomes a literal
+    `{topic}` or an error depending on configuration; an unexpected type becomes `"None"`. Validate
+    inputs before kickoff — required keys, types, length, allowed values — and prefer passing
+    untrusted content through task data or tool results, where it is framed as material to process.
+
+    Never interpolate user input into a file path without normalising it.
+  tags: [kickoff, inputs, injection]
+
+- id: crew-basic-018
+  topic: crews
+  difficulty: intermediate
+  question: What does kickoff return, and how do you inspect what each task produced?
+  answer: |
+    `kickoff()` returns a `CrewOutput`. `.raw` is the final task's text; `.tasks_output` is a list of
+    `TaskOutput` objects, one per task, each exposing `.raw`, and — when a schema was requested —
+    `.pydantic` or `.json_dict`, along with the agent that produced it. Token accounting is available
+    through the crew's usage metrics, and a Flow aggregates usage across every call it made.
+
+    Inspecting per-task output is the difference between debugging and guessing. A crew that returns
+    only a string has discarded the evidence you need: which step was weak, which agent drifted, where
+    a caveat was dropped between hops. Log the task list with IDs and lengths, alongside the run ID,
+    and store the structured form when one exists.
+
+    Two practical notes. The final `.raw` is often the least informative artefact, because it is the
+    last agent's summary of everyone else's work. And in delegating or hierarchical crews, the task
+    outputs still do not show delegation subtrees — those appear in events and callbacks, which is
+    why trace-level logging is worth setting up before you need it.
+  tags: [crew-output, task-output, debugging]
+
+- id: crew-basic-019
+  topic: flows
+  difficulty: intermediate
+  question: What is a Flow, and how does it relate to a crew?
+  answer: |
+    A Flow is an event-driven orchestration class. Methods are decorated with `@start`, `@listen` or
+    `@router`; state is a dict or Pydantic model on `self.state`; and the run can be persisted and
+    resumed. Listeners fire when the method or router label they subscribe to completes, and routers
+    branch on a returned label.
+
+    The relationship is composition, not competition. A crew is a linear team process; a Flow is the
+    program that decides which crews run, with what inputs, and what happens on failure. The useful
+    reframing is **a crew is a step**: it has a defined input and output, and its internal role
+    structure is not the Flow's concern.
+
+    That division gives you the four things crews lack — branching, resumption, human approval and
+    composition of several crews — while keeping role-based work inside the crew where it belongs.
+
+    Draw the boundary once: Flows own control flow, validation, approvals and persistence; crews own
+    role-based work with a known internal sequence. Systems that blur it end up with giant Flow
+    methods that are really crews, or crews containing conditional prose that should have been
+    routers.
+  tags: [flows, orchestration, composition]
+
+- id: crew-basic-020
+  topic: flows
+  difficulty: intermediate
+  question: Explain @start, @listen and @router in a Flow.
+  answer: |
+    `@start()` marks an entry point. A Flow can have several; all whose conditions are satisfied run
+    at the beginning, often in parallel. `@start("label")` can also gate a start on a prior router
+    label, which is how loops are expressed — a rejection routes back to an entry.
+
+    `@listen(x)` runs a method when `x` completes. `x` can be the method itself or its name as a
+    string, and for routers it is the emitted label rather than the router method. `or_(a, b)` and
+    `and_(a, b)` combine triggers when a step should fire on either or on both.
+
+    `@router(x)` returns a label that determines which listeners run next. Declare the labels — a
+    `Literal[...]` return annotation, or `emit=["approved", "rejected"]` — so that plotting and
+    tooling can see the branches; without them the router's edges are invisible.
+
+    The practical discipline is to route on validated values, not raw model text. Parse the model's
+    answer into an enum first, then return the label. A typo in a label does not raise; it silently
+    matches no listener, and the Flow ends early with a valid-looking state.
+  tags: [flows, router, decorators]
+
+- id: crew-basic-021
+  topic: flows
+  difficulty: advanced
+  question: What does @persist do, and what is the difference between resuming and forking a Flow?
+  answer: |
+    `@persist` snapshots Flow state so a run can survive a restart. Applied to the class it persists
+    after every method; applied to a single method it persists only that step. The default backend is
+    SQLite, and the persistence layer is pluggable for a real database.
+
+    Two kickoff modes use those snapshots differently. `kickoff(inputs={"id": existing_uuid})`
+    **resumes**: it loads the latest snapshot for that ID and continues writing history under the
+    same flow UUID. `kickoff(restore_from_state_id=existing_uuid)` **forks**: it hydrates a new run
+    from that snapshot, assigns a fresh state ID, and leaves the original history intact.
+
+    Resume is for recovering a failed run. Fork is for replaying from a known point — debugging, or
+    re-running after a fix — while keeping the ability to compare runs.
+
+    Persistence is a state snapshot, not a transaction log. If a process dies after a step performed
+    an external side effect but before the snapshot was written, that step runs again. Every step
+    with a side effect must be idempotent, keyed by something stable in state rather than a fresh
+    UUID generated per attempt.
+  tags: [flows, persistence, resume]
+
+- id: crew-basic-022
+  topic: failures
+  difficulty: advanced
+  question: Why do crews loop or blow up in cost, and how do you bound it?
+  answer: |
+    Three multipliers compound. Each task is an agent loop of up to `max_iter` model calls (default
+    20), so one confused agent can issue twenty calls for a task that needed three. Each delegation
+    is a *nested* loop, and `max_iter` is per agent, so limits multiply rather than compose. Each
+    later task's prompt contains earlier task outputs, so tokens per call grow with position in the
+    crew.
+
+    Add memory extraction and recall per task, a manager's plan-and-review calls in hierarchical
+    mode, and guardrail retries, and a four-task crew can easily cost an order of magnitude more
+    than the same work done in one agent.
+
+    The usual trigger is a task that cannot be completed as written: a tool returns nothing useful,
+    `expected_output` is unreachable, or the agent keeps retrying a failing call. The agent does not
+    give up; it iterates.
+
+    Bound it outside the framework as well as inside: a per-run token and call budget, low
+    `max_iter` per agent, timeouts inside tools, `max_execution_time`, fewer tasks, cheaper models
+    for extraction, and alerting on calls-per-successful-run rather than only on spend.
+  tags: [cost, loops, limits]
+
+- id: crew-basic-023
+  topic: evaluation
+  difficulty: advanced
+  question: How would you evaluate a crew before and after a change?
+  answer: |
+    At three levels. **Task level**: validate each `TaskOutput` against its schema, check guardrail
+    pass rates, and assert task-specific properties such as "every finding has a resolvable URL".
+    **Trajectory level**: tool calls per task, wrong-tool rate, delegation depth, retry counts,
+    latency. **Outcome level**: human acceptance or a downstream correction rate, sampled rather
+    than exhaustive.
+
+    Build a fixture set of fifteen to forty cases: happy path, empty input, ambiguous request,
+    contradictory sources, adversarial content, tool failure. Assert properties, not expected
+    strings, because a crew is not reproducible — temperature zero does not fix provider routing,
+    model alias updates or a changing world. Report pass rates over several runs (ten is a
+    reasonable default) and treat a drop from 98% to 90% as a regression even if today's run
+    passed.
+
+    Change one variable at a time — model, prompt, tool description, process — so a regression has
+    an attribution. Use `crewai test` as a quick variance smoke test and `crewai replay -t <task_id>`
+    to iterate on one step without paying for the whole crew. Use an LLM judge only for properties
+    you cannot assert, calibrated against human labels.
+  tags: [evaluation, fixtures, regression]
+
+- id: crew-basic-024
+  topic: design
+  difficulty: advanced
+  question: When is a crew the wrong choice?
+  answer: |
+    When the work does not decompose into roles that need different tools, permissions, context or
+    instructions. If every step uses the same voice and the same capabilities, the agents are
+    paragraphs with a cost multiplier.
+
+    Specifically: a single input-to-output transformation is a model call; a fixed pipeline with no
+    tools is a few functions; one agent with a handful of tools covers most "agentic" needs. A crew
+    earns its coordination cost when, say, a search-enabled researcher and a citation-checking
+    editor genuinely need different tools and conflicting instructions.
+
+    A crew is also wrong when the requirement is branching, retries, resumption or human approval —
+    those belong in a Flow or an explicit graph, not in prompt text. And it is wrong when the answer
+    must be computed, authorized or audited: totals, eligibility and permissions belong in code,
+    with a model phrasing the result at most.
+
+    The test is falsifiability. If you cannot state what evidence would show the crew beats a single
+    agent, you are buying coordination cost for a demo. Start one row cheaper and move down only
+    with measurements.
+  tags: [design, trade-offs, overkill]

@@ -1,0 +1,112 @@
+concepts:
+- title: Typed agent contract
+  detail: '`Agent[DepsT, OutputT]` relates run dependencies and final output; Python
+    typing helps static tools but is not universal runtime enforcement.'
+- title: Pydantic validation
+  detail: Pydantic validates declared model and tool argument boundaries; valid structure
+    is not proof of semantic truth.
+- title: Run result
+  detail: The run returns a result wrapper; application payload is `result.output`,
+    distinct from usage and message metadata.
+- title: Agent run
+  detail: '`await agent.run(...)` is the normal async completion path; avoid `run_sync`
+    inside an active event loop.'
+- title: Tool context
+  detail: '`@agent.tool` receives `RunContext[DepsT]` first; `@agent.tool_plain` is
+    for tools without run context.'
+- title: Tool schema
+  detail: Typed signatures and documentation define a model-facing schema; code still
+    validates authorization and business rules.
+- title: Runtime dependencies
+  detail: Pass trusted service/context objects with `deps=...` on each run; agent
+    definitions should not hold mutable user state.
+- title: Final output
+  detail: '`output_type` can define structured output; verify facts, evidence and
+    policy separately after parsing.'
+- title: Correction loop
+  detail: Validation or `ModelRetry` can request another model attempt; retries consume
+    time and tokens and must be bounded.
+- title: Provider portability
+  detail: A common API does not imply identical model capabilities, tool behavior,
+    schemas, costs or privacy terms.
+- title: Streaming
+  detail: Partial chunks and partial structured values are provisional; use the completed
+    result for irreversible actions.
+- title: TestModel
+  detail: Use `TestModel` for deterministic basic interactions, not as evidence of
+    real-model quality.
+- title: FunctionModel
+  detail: Use `FunctionModel` to script precise model responses and test multi-step
+    or failure paths.
+- title: Agent.override
+  detail: Scoped overrides can replace model/dependencies for tests; avoid mutable
+    override leakage across concurrent tests.
+- title: FastAPI boundary
+  detail: Authenticate and build request-scoped services in FastAPI, then pass them
+    to the agent; return an explicit response DTO.
+- title: MCP trust boundary
+  detail: An MCP toolset integrates external tools, but server identity, tool authority,
+    lifecycle and outputs require independent review.
+traps:
+- Equating schema-valid output with factual correctness or authorization.
+- Putting tenant IDs or credentials in model-controlled tool arguments.
+- Treating tool descriptions or system prompts as security enforcement.
+- Treating partial stream output as a completed validated object.
+- Assuming TestModel tests prompt quality or behavior of a live provider.
+- Running broad or unbounded retries after validation or provider failure.
+advanced:
+- Use narrow dependency interfaces and derive identity from trusted request context;
+  keep permission checks in tool or domain code.
+- Validation retries can increase latency/cost; distinguish schema repair from semantic
+  rejection and provider outage.
+- Output union and native structured-output support vary by model/provider; maintain
+  compatibility tests for required features.
+- Long agent waits can occupy request resources; close transactions before model calls
+  when workflow semantics allow.
+- Client disconnect must cancel or clean up streamed runs; bound concurrent streams
+  and slow-consumer buffering.
+- MCP server-provided schemas and results are external inputs; allowlist tools and
+  authorize side effects in the application.
+comparisons:
+- a: '`Agent`'
+  b: '`AgentRunResult`'
+  difference: Reusable workflow definition versus one run’s output and metadata.
+- a: '`@agent.tool`'
+  b: '`@agent.tool_plain`'
+  difference: Context-injected dependency access versus a plain tool without run context.
+- a: '`deps_type`'
+  b: '`output_type`'
+  difference: Application-provided runtime dependencies versus the final value contract.
+- a: Schema validity
+  b: Semantic correctness
+  difference: Declared shape/constraints pass versus factual, policy, and business
+    rules pass.
+- a: '`TestModel`'
+  b: '`FunctionModel`'
+  difference: Convenient test behavior versus scripted responses for precise interaction
+    scenarios.
+- a: Streaming partial
+  b: Final result
+  difference: Provisional chunks/partial structures versus completed output suitable
+    for full validation.
+- a: PydanticAI
+  b: Graph orchestration
+  difference: Type-first bounded agent interaction versus explicit durable state/branching
+    needs; compare current capabilities.
+commands:
+- label: Install PydanticAI package
+  code: python -m pip install pydantic-ai
+- label: Install core with MCP support (verify current extra)
+  code: python -m pip install "pydantic-ai-slim[mcp]"
+- label: Run unit tests
+  code: pytest -q
+- label: Run a focused agent test
+  code: pytest -q tests/test_agent.py
+- label: Type-check project (if configured)
+  code: mypy src
+- label: Inspect installed package version
+  code: python -m pip show pydantic-ai
+- label: Set provider key in shell (example)
+  code: export OPENAI_API_KEY="…"
+- label: Run app tests with coverage (if configured)
+  code: pytest --cov=app --cov-report=term-missing

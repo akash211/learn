@@ -1,0 +1,169 @@
+- id: lc-scn-001
+  title: RAG assistant answers confidently when retrieval finds nothing
+  technologies: [langchain, postgresql, fastapi]
+  difficulty: advanced
+  prompt: |
+    A support assistant built as a retrieval chain answers policy questions from an internal
+    handbook. Users report confident answers about policies that do not exist — "employees get
+    25 days of sabbatical" — where the handbook says 12 weeks and the question was about a
+    different topic entirely. Retrieval logs show that for roughly 30% of questions the retriever
+    returns four chunks with low similarity scores, and the chain answers anyway. The team has
+    been tuning the system prompt for two weeks.
+  approach: |
+    Separate retrieval failure from generation failure before touching either prompt. Log the
+    retrieved chunk ids, scores and sources per request, then check the labelled evaluation set:
+    if the correct chunk is absent from the top-k, the problem is retrieval and prompt work is
+    wasted. Three fixes in order. Add a score threshold so a low-confidence result returns no
+    context at all, and make the prompt's contract conditional on context being present. Add an
+    explicit refusal path — a fixed token the application detects — and test it on adversarial
+    questions whose answers are not in the corpus. Then improve retrieval: hybrid search for exact
+    identifiers, a reranker over 30 candidates keeping 5, and section-aware chunking so a policy
+    paragraph is not split mid-clause. Measure retrieval recall and refusal correctness separately
+    from answer quality.
+  red_flags:
+    - Rewriting the system prompt before measuring retrieval recall.
+    - Adding "do not hallucinate" instructions without a refusal path the code can detect.
+    - Raising k to 10 to "give the model more context", which adds more irrelevant text.
+    - No labelled set, so every change is judged by the last complaint.
+
+- id: lc-scn-002
+  title: Streaming works locally and arrives in one block in production
+  technologies: [langchain, fastapi, kubernetes]
+  difficulty: intermediate
+  prompt: |
+    A chat endpoint returns an SSE stream generated from `chain.astream_events(...)`. Locally and
+    in the staging test client, tokens appear incrementally. Behind the production ingress, the
+    UI stays empty for six seconds and then receives the entire answer at once. The team has
+    already replaced the model adapter and added a larger timeout, with no change.
+  approach: |
+    Treat it as a buffering problem in the path, not a LangChain problem. Verify the application
+    actually emits incrementally by timing the first byte from inside the pod; if chunks appear
+    there, the buffer is downstream. Then check the response headers — `X-Accel-Buffering: no` for
+    nginx, disabled proxy buffering or response buffering at the ingress or CDN, and no compression
+    middleware that accumulates for gzip. Confirm with a client that does not buffer, such as
+    `curl -N`. Also check that the chain genuinely streams: a `RunnableLambda` wrapping
+    `model.invoke`, or a parser that needs the complete output, produces one chunk at the end and
+    would look identical from the browser. Add a heartbeat comment on idle connections and measure
+    time to first token as the SLI.
+  red_flags:
+    - Changing the model or increasing timeouts without measuring first-byte time at the pod.
+    - Testing only with the framework's test client, which does not buffer.
+    - Assuming the ingress is innocent because staging works.
+    - Concluding that streaming is broken without checking whether the chain emits more than one chunk.
+
+- id: lc-scn-003
+  title: Conversation history appears across user accounts
+  technologies: [langchain, postgresql, fastapi]
+  difficulty: advanced
+  prompt: |
+    A support chatbot stores conversations with `RunnableWithMessageHistory` backed by a Postgres
+    table. A customer reports seeing a question they never asked, followed by an answer that
+    referenced another company's contract terms. The service uses `session_id` from the JSON
+    request body and a history factory that returns `store.setdefault(session_id, ...)`. Nobody
+    has been able to reproduce it in staging.
+  approach: |
+    Treat it as a data-exposure incident first: identify affected conversations from the history
+    table, notify per policy, and rotate anything sensitive that was disclosed. Then fix the
+    identity model. The session key must be derived from the authenticated principal — user id
+    plus conversation id — and the conversation must be authorised against that principal before
+    any history is loaded. Never accept a client-supplied key as the lookup key, and never fall
+    back to a shared default when it is missing.
+
+    Staging did not reproduce it because nobody tried two accounts with the same conversation id;
+    the reproduction is a test with two authenticated users sending a colliding `session_id` and
+    asserting isolation. Add a unique constraint on (tenant, conversation) and make the history
+    read a scoped query rather than a dict lookup. Audit other paths with the same pattern —
+    caches, vector-store namespaces and trace metadata often share the flaw.
+  red_flags:
+    - Reproducing in staging before containing the leak.
+    - Making the session id a longer random string and calling it a fix.
+    - Trusting a client-provided tenant or user id anywhere in the prompt path.
+    - Assuming one code path is affected without auditing vector namespaces and caches.
+
+- id: lc-scn-004
+  title: A dependency upgrade changes answers without any code change
+  technologies: [langchain, python, cicd]
+  difficulty: advanced
+  prompt: |
+    An extraction service pins `langchain` but allows `langchain-core` and `langchain-openai` to
+    float. After a routine rebuild, structured extraction starts failing for about 8% of documents
+    with `OutputParserException`, and tool calls arrive with `args` as a JSON string instead of an
+    object. No application code changed. The team's fix is to pin everything to the versions from
+    a six-month-old lockfile.
+  approach: |
+    Restore service first with the last known-good lockfile, then diagnose. Diff resolved versions
+    between the two builds — the failing set almost always shows a minor bump in `langchain-core`
+    or a provider adapter, sometimes a transitive Pydantic or provider SDK change. Reproduce with
+    one failing document and print the raw model output; the failure is usually a changed
+    structured-output mechanism or a tool-call serialisation difference, not a model regression.
+
+    Then fix the brittleness rather than the version number. Pin `langchain-core` explicitly with
+    a compatible range, pin partner packages exactly in the application, and add a contract test
+    that exercises one real call per provider and asserts the shape of parsed output. Add the
+    failing document to the evaluation set so the next upgrade is gated by behaviour, not by
+    hope. Freezing at six-month-old versions works until a provider deprecates a model, at which
+    point the same class of failure returns with no upgrade path.
+  red_flags:
+    - Pinning everything to an old lockfile as a permanent solution.
+    - Blaming the model provider without diffing resolved package versions.
+    - Fixing the parser with a regex that accepts both shapes and hides the difference.
+    - No contract test, so the next rebuild repeats the incident.
+
+- id: lc-scn-005
+  title: Agent cost triples after a tool description edit
+  technologies: [langchain, python, fastapi]
+  difficulty: advanced
+  prompt: |
+    An internal operations agent calls four tools. A developer rewrote one tool's docstring to be
+    "clearer" and merged it on a Friday. By Monday, average cost per request has tripled and p95
+    latency is 40 seconds. Traces show the agent calling `lookup_order` repeatedly, sometimes five
+    or six times in a row, then giving a correct answer. Step limits are at their default and
+    nobody has looked at token usage per run.
+  approach: |
+    Reproduce with a recorded input and diff the traces before and after the docstring change,
+    rather than theorising. The likely cause is a description that no longer states the input
+    format or the stopping condition, so the model retries after an error it cannot interpret.
+    Read the tool result text in the trace: errors like "invalid id" with no guidance invite
+    retries.
+
+    Fix in three layers. Restore a description that says what the tool does, when not to use it,
+    what it returns, and what an error means, and make error strings actionable ("order id must
+    match A-1234; call search_orders to find it"). Add bounds that would have contained the
+    damage: a step limit, a token budget per request, a per-tool call cap and a wall-clock
+    timeout. Add cost and step count to the dashboard, and put the failing trace into the
+    evaluation set. Finally, treat tool descriptions as prompt code: review and evaluate them like
+    prompt changes, because that is what they are.
+  red_flags:
+    - Raising the step limit so requests can finish.
+    - Editing the docstring again without reproducing on recorded input.
+    - Looking only at latency, which is a symptom of step count.
+    - No budget or alert on tokens per request, so the next regression runs for days.
+
+- id: lc-scn-006
+  title: Structured extraction breaks after a model swap
+  technologies: [langchain, python, pydantic]
+  difficulty: intermediate
+  prompt: |
+    A document-extraction pipeline uses `PydanticOutputParser` with `format_instructions` and a
+    small model. Costs are cut by switching to a cheaper model on the same provider. Extraction
+    accuracy drops, and about 15% of calls now fail with `OutputParserException`. The raw output
+    shows valid JSON wrapped in a markdown fence, sometimes preceded by "Here is the extracted
+    data:". Retries at the chain level with `with_retry` fix some cases but double the cost.
+  approach: |
+    Recognise this as a mechanism mismatch, not a model quality problem. The pipeline asks for JSON
+    in prose; the new model complies less literally. Switch to native structured output with
+    `with_structured_output(Schema)` and, if needed, an explicit `method=` for the provider, which
+    removes the fenced-prose failure mode at the source. Verify the schema is one the provider
+    accepts — flat, `Literal` enums, no unresolved `$ref` cycles — because a rejected schema
+    often degrades silently to prompt-and-parse.
+
+    Then harden the edges: strip fences defensively only as a fallback, retry once with the
+    validation error appended rather than retrying the identical call, and set
+    `include_raw=True` so failures carry the raw message. Add the failing documents to the
+    evaluation set and gate the next model change on pass rate. Retrying identical requests is the
+    expensive non-fix: deterministic output failures do not resolve by repetition.
+  red_flags:
+    - Retrying identical calls and calling the extra cost resilience.
+    - A permissive regex that accepts fenced JSON without noticing the mechanism changed.
+    - Swapping back to the expensive model without understanding the failure.
+    - No evaluation set, so a drop in accuracy is measured by anecdote.

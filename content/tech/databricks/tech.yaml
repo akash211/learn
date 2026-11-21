@@ -1,0 +1,138 @@
+slug: databricks
+title: Databricks
+category: data-engineering
+summary: A managed lakehouse platform — Spark compute, Delta storage, Unity Catalog governance and a job scheduler — where most of the hard decisions are about compute shape, table layout and cost, not about writing SQL.
+level: core
+relations:
+  - to: pyspark
+    type: uses
+    note: Databricks Runtime is a packaged Spark distribution; the DataFrame API is the same, but Photon, managed clusters and the catalog layer change how a job is planned, scheduled and billed.
+  - to: delta-lake
+    type: foundation
+    note: Delta is the default table format for managed tables; Unity Catalog, predictive optimization and streaming sinks assume a transactional table underneath.
+  - to: parquet
+    type: uses
+    note: Every Delta table is Parquet files plus a log, so file sizing, statistics and pruning still decide scan cost.
+  - to: snowflake
+    type: alternative
+    note: A managed warehouse with a stronger SQL and concurrency story; Databricks trades some of that polish for open storage and one engine across ETL, streaming and ML.
+  - to: airflow
+    type: complements
+    note: Databricks Jobs schedule work inside the platform; Airflow or Dagster is still used when a pipeline spans systems Databricks does not own.
+intro:
+  what: |
+    Databricks is a managed data platform built around Apache Spark. You get a workspace — a web
+    UI with notebooks, a SQL editor, a job scheduler, a cluster manager and a catalog — plus
+    compute that Databricks provisions in your cloud account or in its own. Underneath, jobs run
+    on Databricks Runtime, a packaged Spark distribution with a faster engine (Photon), Delta
+    Lake as the default table format, and Unity Catalog for naming, permissions and lineage.
+
+    It is not a database and not a thin Spark host. A large part of the product is the layer
+    above the engine: clusters that start and stop on demand, jobs with task graphs and retries,
+    SQL warehouses sized for BI concurrency, and a governance model that follows the data rather
+    than the workspace. The engine is familiar Spark; the operational surface around it is the
+    thing worth learning.
+  why: |
+    Running Spark yourself means owning a cluster manager, storage credentials, a Hive metastore,
+    library conflicts, a scheduler, a notebook server and an access-control story that survives an
+    audit. Each of those is a small project, and together they dominate the time a data team
+    spends not writing pipelines.
+
+    Databricks sells the assembled version: storage stays in your account, compute is elastic,
+    and the platform supplies the pieces that are tedious to operate. The trade is real — you are
+    renting a runtime and a control plane, per-hour compute is priced at a premium over raw VMs,
+    and some behaviour is Databricks-specific in ways that do not port back to open-source Spark.
+    Knowing which parts are Spark, which are Delta, and which are Databricks-only is what keeps
+    an architecture portable and a cost model honest.
+  problems:
+    - Stand up Spark compute without building a cluster manager, image pipeline or metastore.
+    - Give analysts SQL warehouses and engineers notebooks against the same governed tables.
+    - Schedule multi-step pipelines with dependencies, retries and alerting without a separate scheduler.
+    - Centralise grants, lineage and auditing across workspaces and clouds.
+    - Keep one copy of data for batch, streaming, BI and model training instead of copying between systems.
+    - Make the cost of each workload visible enough to attribute and reduce it.
+  where_used:
+    - Lakehouse ETL and ELT where bronze, silver and gold tables live in cloud object storage.
+    - Streaming ingestion from Kafka, Event Hubs, Kinesis or landed files into Delta tables.
+    - SQL analytics and dashboards over the same tables, served by SQL warehouses.
+    - Feature engineering, model training and batch scoring next to the data.
+    - Migration targets for on-premise Hive, warehouse stored procedures and legacy Spark clusters.
+  ecosystem: |
+    Databricks sits on three layers it does not fully own. Storage is S3, ADLS or GCS; the table
+    format is Delta (or Iceberg, increasingly); the engine is Spark. Its neighbours are the
+    orchestrators above it (Airflow, Dagster, Azure Data Factory), the BI tools beside it (Power
+    BI, Tableau, Looker) and the sources below it (Kafka, database CDC, file drops).
+
+    Inside the platform the pieces chain: Unity Catalog resolves names and enforces grants, a
+    cluster or warehouse supplies compute, Delta stores the tables, Jobs or a declarative pipeline
+    runs the transformations, and system tables record what happened and what it cost. Most
+    production incidents are diagnosed by walking that chain in order rather than by reading the
+    pipeline code again.
+  alternatives:
+    - name: Snowflake
+      note: Managed warehouse with mature SQL, concurrency and governance; less control over storage layout and a weaker story for arbitrary Spark workloads.
+    - name: Microsoft Fabric
+      note: Similar lakehouse shape inside the Microsoft estate; attractive if the organisation already lives in Azure and Power BI.
+    - name: Amazon EMR / Glue
+      note: Cheaper raw Spark on AWS, but you assemble the catalog, scheduler, notebooks and governance yourself.
+    - name: Google BigQuery
+      note: Serverless SQL with strong separation of storage and compute; less suited to fine-grained Spark control and non-SQL engine work.
+    - name: Self-managed Spark on Kubernetes
+      note: Maximum portability and no platform premium; the operational burden is the entire product Databricks replaces.
+  related: [pyspark, delta-lake, parquet, snowflake, airflow]
+chapters:
+  - id: workspace-architecture
+    title: Workspace Architecture, Control Plane and Compute Plane
+    file: chapters/01-workspace-architecture.md
+    minutes: 13
+    level: core
+  - id: clusters-and-sizing
+    title: Cluster Types, Access Modes and Sizing
+    file: chapters/02-clusters-and-sizing.md
+    minutes: 14
+    level: core
+  - id: notebooks-repos
+    title: Notebooks, Repos and the Development Workflow
+    file: chapters/03-notebooks-repos-workflow.md
+    minutes: 12
+    level: core
+  - id: jobs-orchestration
+    title: Jobs, Multi-Task DAGs and Orchestration
+    file: chapters/04-jobs-orchestration.md
+    minutes: 14
+    level: core
+  - id: unity-catalog
+    title: Unity Catalog, Grants and Lineage
+    file: chapters/05-unity-catalog.md
+    minutes: 14
+    level: core
+  - id: delta-in-practice
+    title: Delta Lake in Practice
+    file: chapters/06-delta-in-practice.md
+    minutes: 14
+    level: core
+  - id: photon-sql-warehouse
+    title: Photon and the SQL Warehouse Reality
+    file: chapters/07-photon-sql-warehouse.md
+    minutes: 13
+    level: core
+  - id: medallion-design
+    title: Medallion Architecture and Table Design
+    file: chapters/08-medallion-table-design.md
+    minutes: 14
+    level: core
+  - id: streaming
+    title: Streaming, Auto Loader and Triggers
+    file: chapters/09-streaming-autoloader.md
+    minutes: 14
+    level: advanced
+  - id: cost-incident-triage
+    title: Cost Control and Performance Incident Triage
+    file: chapters/10-cost-and-incident-triage.md
+    minutes: 15
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

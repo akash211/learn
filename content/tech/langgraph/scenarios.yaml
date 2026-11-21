@@ -1,0 +1,83 @@
+- id: lg-scn-001
+  title: Stop a research agent from looping without returning a useful result
+  technologies: [langgraph, llm-agents, langchain]
+  difficulty: advanced
+  prompt: |
+    A research assistant searches internal documents, asks a model to assess whether its evidence is enough, and repeats retrieval when it is not. In production, some requests make many tool calls and eventually fail at the recursion limit. Other requests return a confident answer with no sources. The product team wants a fixed latency and cost budget, a useful partial result when the search is inconclusive, and traceability for every source.
+  approach: |
+    First make success measurable: require a minimum evidence standard or explicit abstention, not a model's unstructured claim that it is done. Model separate nodes for query planning, retrieval, evidence validation, and synthesis; route only on validated state. Track iteration count, tool-call count, deadline, and evidence IDs, and terminate with a marked incomplete result when any task budget is reached. Preserve source IDs and excerpts rather than passing opaque summaries alone. Treat recursion_limit as a final runtime guard, not the product-level budget. Test empty results, duplicate evidence, retrieval timeout, malformed model output, and budget exhaustion. Use trace inspection and a versioned evaluation set to detect unsupported answers and unnecessary calls. Make retrieval read-only or idempotent and bound parallel fan-out.
+  red_flags:
+    - Increasing the recursion limit without adding task-level stopping rules.
+    - Treating a model's confidence statement as evidence quality.
+    - Returning a plausible answer without marking missing sources.
+    - Logging sensitive retrieved documents without a retention policy.
+
+- id: lg-scn-002
+  title: Resume an approval workflow safely after deployment
+  technologies: [langgraph, langsmith]
+  difficulty: advanced
+  prompt: |
+    A workflow drafts a high-value refund, calls `interrupt()` for manager approval, and applies the refund after resume. The manager may respond hours later, while the service deploys a new graph version. A recent incident applied the same refund twice after a worker restarted. Design the graph and service behavior so approvals are authorized, stale proposals are rejected, and resumption is durable.
+  approach: |
+    Use a durable checkpointer and a stable thread ID linked to the refund case in an application-owned record. Authenticate and authorize each reviewer; an ID alone is not permission. Include a canonical proposal reference or hash in the interrupt payload and re-check the amount, order status, and policy when applying. Validate an explicit approve/reject response and expire or cancel stale requests. Put the interrupt before the effect node; on resume, the node may restart from its beginning. Apply the refund with a stable idempotency key and record the external operation outcome so retries reconcile rather than repeat. Version the workflow and preserve compatibility for paused threads or route them to a compatible implementation. Test worker restart, duplicate resumes, rejection, changed proposal, database outage, and version rollout.
+  red_flags:
+    - Using an in-memory saver for durable approval state.
+    - Treating `thread_id` as authorization or reviewer identity.
+    - Relying on checkpointing for exactly-once refund effects.
+    - Renaming paused workflow nodes without a migration plan.
+
+- id: lg-scn-003
+  title: Design concurrent specialist fan-out with reliable aggregation
+  technologies: [langgraph, langchain, llm-agents]
+  difficulty: advanced
+  prompt: |
+    A document review graph sends a request to several specialist reviewers in parallel. Each specialist reports findings into a shared state list. Results sometimes appear in different orders, duplicate findings occur after retries, and one specialist may time out. The final synthesis node must distinguish complete from partial review and preserve citations.
+  approach: |
+    Define a reducer for the shared findings channel and make each finding carry a stable reviewer and source identifier. Deduplicate by an explicit key or merge into a mapping rather than trusting list append semantics alone. Use `Send` if the reviewer set is dynamic; set a concurrency cap and per-specialist deadline. Track expected, completed, failed, and timed-out work so the join node knows whether it has a complete set. Decide whether partial synthesis is allowed, and label it clearly when used. Sort results by stable IDs if order matters. Retry only transient failures and make repeated outputs idempotent. Test zero reviewers, duplicate worker completion, one permanent failure, partial deadline expiry, reducer conflict, and citation preservation. Evaluate parallelism against a simpler serial baseline for cost and quality.
+  red_flags:
+    - Assuming parallel completion order is deterministic.
+    - Overwriting shared state with the last completed specialist.
+    - Silently treating a missing specialist as a successful empty result.
+    - Unbounded fan-out from user-controlled input.
+
+- id: lg-scn-004
+  title: Make a model-proposed support action safe to execute
+  technologies: [langgraph, langchain, llm-agents]
+  difficulty: advanced
+  prompt: |
+    A support agent can look up tickets and issue account credits. The model sometimes proposes a credit above policy limits and the tool occasionally times out after the external service has processed the request. Product asks for human approval on large credits, no duplicate credits, and a reliable audit trail.
+  approach: |
+    Separate read-only lookup from the effectful credit tool. Validate tool arguments against a deterministic policy, authenticated user, tenant, and ticket before approval or execution. Use a structured action proposal with amount, account, reason, and canonical request ID. For large credits, pause with `interrupt()` and resume only after the application authenticates an authorized approver and validates an explicit decision. Apply the credit with an idempotency key and reconcile uncertain outcomes by querying the authoritative credit service. Give tools deadlines and bounded retries; do not retry non-retryable validation or authorization errors. Keep detailed failures in protected logs and expose safe error categories to the model. Audit proposal, approver, policy version, tool outcome, and graph version. Test malicious arguments, duplicate resume, timeout-after-success, and stale approval.
+  red_flags:
+    - Giving the model unrestricted access to a credit endpoint.
+    - Treating tool schema validation as authorization.
+    - Retrying a timed-out credit without idempotency.
+    - Accepting any truthy resume value as approval.
+
+- id: lg-scn-005
+  title: Debug a regression hidden behind unchanged final answers
+  technologies: [langgraph, langsmith]
+  difficulty: advanced
+  prompt: |
+    After changing a prompt and a routing function, an LLM assistant still produces similar final answers in a small smoke test. Production has more tool calls and sometimes skips retrieval. The team needs a release gate that catches trajectory regressions and protects sensitive user data in traces.
+  approach: |
+    Compare traces from versioned graph, prompt, and tool configurations. Inspect route labels, node sequence, retrieval evidence IDs, tool arguments, errors, and call counts rather than comparing final text alone. Build a representative dataset with direct-answer, source-required, ambiguous, no-evidence, and malformed-output cases. Use deterministic evaluators for route and budget constraints, and calibrated semantic evaluation with human review for grounding and helpfulness. Include per-case failure analysis, not just an aggregate score. Add regression tests for the specific skipped-retrieval route. Configure LangSmith tracing only with an explicit redaction and retention policy; limit access because traces may include prompts and documents. Canary the change and monitor operational error and tool-call signals before broader rollout.
+  red_flags:
+    - Approving the change based only on a few final-answer examples.
+    - Combining prompt and dataset changes without version identifiers.
+    - Retaining raw customer traces indefinitely by default.
+    - Using an uncalibrated LLM judge as the sole release gate.
+
+- id: lg-scn-006
+  title: Migrate paused threads when state and graph topology change
+  technologies: [langgraph, llm-agents]
+  difficulty: advanced
+  prompt: |
+    A deployment renames an `approve_action` node to `review_action`, changes a checkpointed `status` field from a string to an enum, and changes the meaning of one route. Hundreds of threads may be paused at the old approval interrupt. The team wants to deploy without losing in-flight work.
+  approach: |
+    Inventory paused threads and identify their graph/state version and next node. Do not assume compilation upgrades checkpoints. Keep the old node available for a compatibility window or route old-version threads to a pinned graph implementation. Add a new field or migration step rather than reinterpreting the existing `status` value in place; map old values explicitly and handle unknown states. Preserve the semantics of the old approval contract and validate any resume response against the proposal version. Test representative old checkpoint snapshots, including a paused interrupt, under the new deployment. Define a migration or cancellation path for threads that cannot be safely resumed. Record graph version with application metadata, monitor migration outcomes, and maintain rollback compatibility with data already written by new code.
+  red_flags:
+    - Renaming/removing the node that paused threads are about to enter.
+    - Assuming a type annotation converts existing checkpoint values.
+    - Reusing old approvals after the proposal meaning changed.
+    - Deploying without a tested rollback or old-checkpoint fixture.

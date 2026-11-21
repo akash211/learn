@@ -1,0 +1,513 @@
+- id: agent-basic-001
+  topic: fundamentals
+  difficulty: beginner
+  question: What are the four parts of an agent loop, and what breaks if one is missing?
+  answer: |
+    The four parts are a model call, a state object, a tool interface, and a stopping rule. The
+    model call decides the next action from the current context. State (task, steps taken,
+    observations, artefacts, budget used) lives outside the model, because the model retains
+    nothing between calls. The tool interface is the action space: typed functions with
+    descriptions, schemas, and defined errors. The stopping rule ends the run on a final answer,
+    a step limit, a token or time budget, or a human interrupt.
+
+    Missing state means you cannot resume, enforce a budget, or answer "what did it try?" without
+    parsing prose. Missing tools makes it a chatbot. Missing a stopping rule produces a run that
+    never terminates, or terminates only when the provider errors. Missing an explicit final-answer
+    condition means the model may keep calling tools after it already has the answer. Most
+    "mysterious agent behaviour" is one of these four missing, not a model quality problem.
+  tags: [agent-loop, state, tools]
+
+- id: agent-basic-002
+  topic: fundamentals
+  difficulty: beginner
+  question: What distinguishes an agent from a pipeline that also uses an LLM at every step?
+  answer: |
+    The distinguishing property is who chooses the next step at runtime. In a pipeline, an engineer
+    wrote the sequence — extract, classify, draft — and the model only produces content for each
+    fixed stage. In an agent, the model selects among tools and thereby determines the number and
+    order of steps.
+
+    A useful test: could you draw the control flow before seeing any input? If yes, it is a pipeline
+    or a workflow, even if every node calls a model. A workflow with an LLM classifier routing to
+    fixed branches is still a workflow, because the branches were written by a person.
+
+    The distinction is not cosmetic. Pipelines have predictable cost, reproducible paths, and
+    per-stage unit tests. Agents have long-tailed cost, non-deterministic paths, and require
+    trajectory evaluation. Calling a pipeline an agent usually means it gets agent-style
+    infrastructure — tracing, budgets, queues — without needing it, or gets agent-style evaluation
+    — none — when it needs pipeline tests.
+  tags: [pipeline, workflow, control-flow]
+
+- id: agent-basic-003
+  topic: design
+  difficulty: intermediate
+  question: When is an agent the wrong choice for a task?
+  answer: |
+    Choose a pipeline or a single retrieval call when the branch structure is knowable, when errors
+    are irreversible, when the tool menu is uncurated, or when nobody can evaluate the output.
+
+    Concretely: if eighty percent of requests take the same three steps, write those steps in code.
+    If the actions include refunding money, emailing customers, or mutating production data, an
+    autonomous loop is the wrong container for them — either the action sits behind an approval gate
+    or it should not be tool-callable. If the agent needs two hundred overlapping tools, selection
+    accuracy collapses; that is a tool-retrieval problem, not an agency problem. If the latency
+    budget is under a second, remember every step is a model round trip.
+
+    The subtler disqualifier is missing information rather than missing reasoning. Many "we need an
+    agent" requests are retrieval failures: the model needs the right document, not the right
+    sequence of actions. Fixing retrieval usually removes the need for the loop entirely.
+  tags: [design, decision, pipelines]
+
+- id: agent-basic-004
+  topic: planning
+  difficulty: beginner
+  question: How does ReAct work, and why interleave reasoning with actions?
+  answer: |
+    ReAct alternates a short reasoning trace with a tool call and its observation: the model writes
+    a thought, acts, reads the result, thinks again. The loop continues until it produces a final
+    answer. The published formulation (Yao et al., 2022) uses that interleaving to combine
+    chain-of-thought style reasoning with grounding in retrieved evidence.
+
+    Interleaving matters because each thought is conditioned on real observations instead of the
+    model's memory of the world. A plan made entirely before acting is a set of assumptions; a
+    thought made after reading a page is a conclusion. The trace also gives you a readable
+    explanation of the run and a cheap place to inject guidance ("check whether the value is a
+    percentage before comparing").
+
+    The costs are real: reasoning tokens are paid on every step, the transcript grows and buries
+    early observations, and the loop has no global view of coverage — it can answer the first
+    sub-question thoroughly and forget the third.
+  tags: [react, planning, grounding]
+
+- id: agent-basic-005
+  topic: planning
+  difficulty: intermediate
+  question: What does plan-and-execute buy over a single ReAct loop, and what is its characteristic failure?
+  answer: |
+    Plan-and-execute separates decomposition from action. A planner produces an ordered list of
+    steps with explicit inputs and outputs; an executor performs one step at a time with a smaller
+    context and a narrower tool set; a re-planner revises the list when a result contradicts an
+    assumption. Plan-and-Solve prompting is the cheap version — write a plan, then execute it in the
+    same call.
+
+    The gains are coverage and control. A plan is a checklist, so a missed sub-goal is visible. Each
+    executor call carries only its step, so it can use a cheaper model. The plan itself can be
+    shown to a user, capped in length, or approved before anything runs, and independent steps can
+    run in parallel.
+
+    The characteristic failure is a stale plan: step one discovers the account is closed, while
+    steps two through seven still assume it is open, and the executor obediently does nonsense.
+    Define an explicit re-plan trigger — a step failing twice, or an observation contradicting a
+    stated assumption — rather than re-planning every step, which doubles cost and produces churn.
+  tags: [plan-and-execute, decomposition, replanning]
+
+- id: agent-basic-006
+  topic: planning
+  difficulty: intermediate
+  question: When does self-reflection improve an agent, and when is it just cost?
+  answer: |
+    Reflection helps when the critique is grounded in an external signal: a failing test, a compiler
+    error, a schema validator, a 400 from an API, a diff against expected output. In that case the
+    model is not judging itself; it is reading evidence and revising, which is the loop that makes
+    coding agents work.
+
+    Reflection adds cost and little else when the model must evaluate its own output with no new
+    information. A model that just produced an answer has no independent basis for judging it, so it
+    tends either to approve ("looks good" on a wrong answer) or to generate plausible new objections
+    that are unrelated to the actual defect, causing the output to oscillate.
+
+    Practical rules: spend reflection budget only where a verifier exists; cap iterations at two or
+    three; keep the critique and the original attempt in the same context so the revision is a diff
+    rather than a rewrite; and log whether a round actually changed the output. If most rounds
+    change nothing, the mechanism is a ritual and should be removed from the prompt.
+  tags: [reflection, self-critique, verifiers]
+
+- id: agent-basic-007
+  topic: reliability
+  difficulty: advanced
+  question: Why does per-step reliability dominate agent design more than model capability?
+  answer: |
+    Because errors compound multiplicatively along a trajectory. If a step succeeds with
+    probability p, an n-step task succeeds at roughly p^n when steps must all be correct. At 0.95
+    per step, ten steps give about 0.60 and twenty steps about 0.36. Raising per-step reliability to
+    0.99 lifts a thirty-step task from roughly 0.21 to 0.74 — a change in per-step quality that
+    looks small in isolation and is decisive over a long run.
+
+    The design consequences follow directly. Shorten trajectories: fewer, higher-value steps beat
+    fine-grained decomposition. Make steps verifiable so a wrong step is caught at the next step
+    rather than at the end. Avoid gratuitous model calls for things code can do — formatting,
+    arithmetic, validation. Prefer one tool that answers a question over three that narrow it down.
+
+    This is also why evaluating only the final answer misleads: a longer trajectory that still
+    succeeds on the easy cases hides a reliability profile that will fail on the hard, long ones
+    where the agent is most valuable.
+  tags: [compounding, reliability, trajectory-length]
+
+- id: agent-basic-008
+  topic: memory
+  difficulty: beginner
+  question: What is in an agent's working set, and what should be evicted first?
+  answer: |
+    The working set is what the current step needs: the task statement, the current sub-goal, the
+    plan or the relevant slice of it, the last few observations, the tool definitions for this step,
+    and a compact summary of earlier history. It is assembled fresh before each model call, because
+    the model retains nothing between calls.
+
+    Evict in this order: old raw observations (keep two or three verbatim, compress the rest),
+    tool schemas the step cannot use, and verbose reasoning traces. Keep verbatim: the task
+    statement, identifiers and entities (order numbers, account ids, file paths), constraints, and
+    anything a later step will need to quote.
+
+    Two rules prevent the common failures. Pin the task at the top of every call instead of letting
+    summarisation paraphrase it, and put the current sub-goal immediately before the model's turn.
+    Also truncate at the tool boundary rather than in the context assembler: a tool that returns 200
+    KB and gets cut mid-sentence wastes the fetch, whereas a tool that returns a summary plus a
+    handle for the full text is both cheaper and recoverable.
+  tags: [working-set, context, eviction]
+
+- id: agent-basic-009
+  topic: memory
+  difficulty: intermediate
+  question: What goes wrong with rolling summaries of an agent's history?
+  answer: |
+    A rolling summary is lossy compression applied repeatedly. Each regeneration can drop a detail
+    that seemed unimportant at the time — an order id, a constraint the user mentioned once, a
+    caveat — and the loss is invisible because the summary still reads fluently. Over a long run the
+    agent becomes vaguer without ever erroring, which is the hardest kind of failure to notice.
+
+    Three mitigations help. Summarise each span once and never re-summarise an existing summary, so
+    loss does not compound. Extract identifiers and decisions into a structured state object
+    (task, constraints, entities touched, decisions, open questions, artefacts) and summarise only
+    the narrative around them; a missing field is a visible bug, a missing sentence is not. Keep the
+    dropped span retrievable behind a handle, so the agent can re-read it if it turns out to matter.
+
+    Compaction also costs latency, since it is itself a model call, and it can invalidate provider
+    prompt caching by changing the prompt prefix. Compact at natural boundaries — after a sub-goal —
+    rather than mid-investigation.
+  tags: [summarisation, compaction, context]
+
+- id: agent-basic-010
+  topic: memory
+  difficulty: advanced
+  question: What are the risks of giving an agent episodic memory of past runs?
+  answer: |
+    Episodic memory stores past tasks with their actions, outcome, and a short lesson, so later runs
+    can reuse what worked. Its risks are mostly about correctness of the lesson rather than retrieval
+    quality.
+
+    Staleness: the world changed and the stored lesson did not, so the agent confidently applies an
+    obsolete workaround. False generalisation: one incident becomes a rule ("this API always needs a
+    retry"). Poisoning: a bad or attacked run is stored as guidance and propagates into future
+    sessions — memory is an injection surface, not just a convenience. Privacy: episodes contain
+    customer data and get re-injected into prompts for other customers unless retrieval is scoped by
+    tenant.
+
+    Design rules that make it survivable: store the outcome with the lesson and promote only from
+    successful or explicitly verified runs; attach timestamp, environment and model version, and an
+    expiry; scope retrieval by tenant and entity, not only by embedding similarity; and label
+    injected episodes as prior experience that may be outdated rather than as fact.
+  tags: [episodic-memory, staleness, poisoning]
+
+- id: agent-basic-011
+  topic: tools
+  difficulty: intermediate
+  question: How would you design a tool schema for a model rather than for a human developer?
+  answer: |
+    Design for a client that cannot read documentation or ask a question. Use one verb per tool,
+    flat arguments, and enums wherever the value set is finite. Put units and formats in the names —
+    `amount_cents`, `deadline_iso8601`, `window_days` — because the model sees the schema, not your
+    type comments. Keep the number of required fields small: every required field is an opportunity
+    to guess, and anything derivable from session context should be derived server-side.
+
+    The description is part of the interface and is re-read on every step, so write what the tool
+    does, when to use it, when *not* to use it, and what each error means. It should change a
+    decision; delete anything that does not.
+
+    Avoid free-form execution surfaces. `run_sql(query)`, `run_shell(cmd)` and `fetch_any_url(url)`
+    are not tools, they are a shell with extra steps, and they belong behind an allowlist, a sandbox,
+    or nothing at all. Return compact structured results with the identifying keys you acted on, and
+    truncate with an explicit pointer rather than silently.
+  tags: [tool-schema, design, arguments]
+
+- id: agent-basic-012
+  topic: tools
+  difficulty: intermediate
+  question: Two tools look interchangeable to the model. What do you do?
+  answer: |
+    Tool misselection is usually a naming and description problem, not a reasoning failure. Start by
+    asking whether both tools need to exist: `search_docs` and `search_knowledge_base` often do the
+    same job over different indexes, and deleting one removes the error class entirely.
+
+    If both are needed, make the difference legible in the first two words of the name and in the
+    description. Add an explicit negative — "use `search_knowledge_base` only for internal policy,
+    never for product documentation" — because models follow prohibitions better than they infer
+    boundaries. Give each tool an example call and an example of a request it should not handle.
+
+    Then reduce the menu. Selection accuracy degrades as the number of similar options grows, so
+    scope tools per step: a node that needs three tools should be given three, not the platform's
+    forty. In a graph this is a reliability feature; in a free-form loop it is the argument for
+    splitting the agent.
+
+    Finally, test selection separately from execution: a set of realistic requests where you assert
+    which tool was chosen. That is a different bug from a tool returning the wrong thing.
+  tags: [tool-selection, disambiguation, naming]
+
+- id: agent-basic-013
+  topic: tools
+  difficulty: advanced
+  question: Why must write tools be idempotent in an agent system?
+  answer: |
+    Because duplicate calls are normal, from three independent sources: the model repeats a step it
+    believes failed, the orchestrator retries on a timeout, and a resumed run replays the node
+    containing the call. None of these is an error condition; all of them are expected behaviour in
+    a system with retries and checkpoints.
+
+    The standard mechanism is an idempotency key supplied with the call and enforced server-side:
+    on a repeat with the same key, return the original result instead of performing the effect
+    again. Derive the key from the intent rather than a random id — `refund:{order}:{amount}:{reason}`
+    — so a genuine second refund of the same amount for the same reason is distinguishable from a
+    retry of the first.
+
+    Two supporting rules matter. Separate reads from writes at the tool level, so retry policy can
+    differ. And never return an ambiguous result from a write: "it probably worked" guarantees a
+    duplicate, because the model's next move is to try again. For irreversible actions, prefer
+    prepare/commit pairs so the cheap part can be repeated and the expensive part happens once.
+  tags: [idempotency, retries, side-effects]
+
+- id: agent-basic-014
+  topic: tools
+  difficulty: intermediate
+  question: What makes a good error response for an agent's tool call?
+  answer: |
+    The model reads errors as instructions, so an error is a prompt you wrote under pressure. Return
+    a stable machine code, a one-line human message, a retryable flag, and a hint about what to
+    change. `{"code": "INVALID_DATE_RANGE", "message": "start_date must be on or before end_date",
+    "retryable": false, "hint": "Swap the dates and call again"}` lets the model fix the call in one
+    turn. `Error: 400` gives it nothing to work with and it will usually retry the same call.
+
+    Distinguish three classes. Retryable (timeout, 429, 503): say so and let the orchestrator back
+    off rather than letting the model burn steps deciding. Correctable (validation failure, unknown
+    enum value, missing field): state the constraint precisely. Terminal (not found, permission
+    denied, already shipped): say "do not retry" and name the escalation, or the agent will loop.
+
+    Never include stack traces or secrets. A traceback teaches the model to retry a deterministic
+    failure, and a connection string in an error message is a credential leak into logs and
+    transcripts.
+  tags: [errors, retryable, tool-contract]
+
+- id: agent-basic-015
+  topic: security
+  difficulty: advanced
+  question: What is a confused deputy attack in an agent system, and how do you prevent it?
+  answer: |
+    The agent becomes a deputy that acts on its own privileges while the request comes from someone
+    with fewer. If the model passes `account_id=8812` and the tool resolves it with a service
+    account that can read every account, a user who cannot see 8812 gets its data by asking
+    persuasively. The model is not compromised; the authorisation boundary is simply in the wrong
+    place.
+
+    Prevention is structural. Authenticate the request to the user, then have each tool act with
+    that user's scopes rather than the platform's. Never trust model-supplied identifiers as
+    authorisation: resolve the tenant and account from the session, and reject or ignore a mismatch
+    between the argument and the session scope. Scope tools by role so that an action the session
+    cannot perform is absent from the menu, not merely rejected when called — an absent tool cannot
+    be prompted into existence.
+
+    Add defence in depth: row-level filtering in the data layer, per-tool credentials instead of one
+    broad service account, and logging of every entity id a run touched so cross-tenant access is
+    detectable after the fact.
+  tags: [authorisation, confused-deputy, tenancy]
+
+- id: agent-basic-016
+  topic: orchestration
+  difficulty: intermediate
+  question: What does an explicit state machine give you that a free-form agent loop does not?
+  answer: |
+    Four things: invariants, resumption, bounded transitions, and a test surface. Invariants because
+    routing lives in code, so "authenticate before refund" is an edge rather than a sentence in a
+    prompt that the model may or may not follow. Resumption because a checkpointer persists state
+    after each node, so a crash is a read rather than a replay from zero. Bounded transitions
+    because some paths can be made illegal instead of merely expensive. A test surface because a
+    node is a function you can call with a fixture, while "the model" is not.
+
+    It also gives you per-node tool scoping, which is a reliability feature: a node that needs three
+    tools chooses better from three than from forty. And it produces a diagram a reviewer can audit,
+    which is often the deliverable that gets a regulated workflow approved.
+
+    The cost is code and a new abstraction to debug, plus a tendency to encode product logic as
+    topology until the graph is unreadable. Keep deterministic control in the graph and let
+    individual nodes be agentic, rather than turning every model decision into a node.
+  tags: [state-machine, langgraph, resumption]
+
+- id: agent-basic-017
+  topic: orchestration
+  difficulty: advanced
+  question: Why can resuming an agent from a checkpoint duplicate side effects?
+  answer: |
+    Because a checkpoint records state, not the outside world. If the run is resumed from the
+    checkpoint taken before a node that sent an email, that node executes again — the email was
+    never part of the checkpointed state, so nothing knows it happened. The same applies to
+    payments, ticket creation, and file writes.
+
+    Three fixes, used together. Checkpoint after the effect is confirmed rather than before, so the
+    resumed run starts past it. Make side-effecting nodes idempotent (chapter 4) with a key derived
+    from intent, so a replay returns the original result. And write the external effect's identifier
+    into state as soon as it exists, so a re-run can check "already done" before acting.
+
+    Decide checkpoint granularity deliberately: per node is the normal choice, per token is a
+    database write per token. Also version the state schema — a field renamed between deploys makes
+    old checkpoints either crash or, worse, resume with a default value, which is the failure mode
+    that quietly produces wrong behaviour instead of a visible error.
+  tags: [checkpointing, replay, side-effects]
+
+- id: agent-basic-018
+  topic: human-in-the-loop
+  difficulty: intermediate
+  question: Where exactly should a human approval gate sit in an agent workflow?
+  answer: |
+    Immediately before the effect, on the smallest unit that is still meaningful. Not before the
+    plan — "approve this seven-step plan" gives the reviewer an intention to approve, and the agent
+    then chooses all the details — and not after the effect, which is an incident review.
+
+    The reviewer must see the exact payload that will be executed: tool name, arguments, the plain
+    language effect with units and currency, and the evidence the agent relied on. They should not
+    see the model's reasoning as the primary artefact, because it is persuasive and unverified.
+
+    Bind the approval to the payload hash. If the state changes between approval and execution, the
+    approval is void and must be re-obtained; otherwise a reviewer approves one refund and the agent
+    executes another. An edit by the reviewer produces a new payload that must pass the same
+    validators as an agent-generated one.
+
+    Gate the first occurrence per class, or a batch with a sample, rather than every occurrence —
+    the fortieth prompt of the day gets approved without reading.
+  tags: [approval, payload-binding, review]
+
+- id: agent-basic-019
+  topic: human-in-the-loop
+  difficulty: advanced
+  question: How do you know whether an approval gate is actually working?
+  answer: |
+    Measure the reviewer's behaviour, not the gate's existence. Three metrics: override rate
+    (rejections and edits as a share of approvals), time to decide, and payload change rate. An
+    override rate near zero with sub-second decisions means the gate is being rubber-stamped, which
+    makes it latency rather than a control.
+
+    A sudden rise in edits is the most useful signal in the set: it usually means the agent's
+    context, prompt or tools changed and reviewers are silently compensating for a regression that
+    the eval suite missed. That is a quality alert arriving through the approval queue.
+
+    Also inspect coverage: which actions can reach the queue at all, and whether the executor
+    requires a signed approval token bound to the payload hash. If the agent's own service identity
+    can call the tool, the gate is advisory and any tool path bypasses it.
+
+    Finally, justify each gate explicitly — what it prevents, what it costs, and its catch rate —
+    and remove or automate the ones that cannot answer. An unread queue trains people to approve
+    without reading, and that habit spreads to the gates that matter.
+  tags: [approval-metrics, override-rate, review]
+
+- id: agent-basic-020
+  topic: evaluation
+  difficulty: intermediate
+  question: What is the difference between outcome and trajectory evaluation, and why do you need both?
+  answer: |
+    Outcome evaluation asks whether the task ended correctly. Its strongest form asserts on the
+    world rather than the text: exactly one refund of $84 exists for order 4471, the file compiles,
+    the query returns the expected rows. Trajectory evaluation asks whether the path was acceptable:
+    the right tools, no forbidden calls, within step and cost budgets, no gratuitous escalation.
+
+    Each hides a distinct failure. Outcome-only scoring rewards luck — a run that guessed the right
+    account passes, and a run that refunded twice and reversed once passes. Trajectory-only scoring
+    rewards ritual: the agent followed the documented procedure and produced a wrong answer.
+
+    Report them separately rather than averaging them into one number, because the aggregate hides
+    which axis moved. A release that improves outcome scores while tripling steps is a product
+    decision, not a win, and it needs the trajectory numbers to be visible at all.
+
+    Cheap trajectory assertions — required calls, forbidden calls, step ceiling, duplicate-write
+    detection — catch most regressions before a judge or a human sees the output.
+  tags: [evaluation, trajectory, outcome]
+
+- id: agent-basic-021
+  topic: evaluation
+  difficulty: advanced
+  question: What are the main pitfalls of using an LLM as a judge for agent outputs?
+  answer: |
+    A judge is a measurement instrument with known biases. Position bias: in pairwise comparison it
+    prefers the first or last option, so evaluate both orders or use pointwise rubrics. Verbosity
+    bias: longer answers score higher regardless of content. Self-preference: a judge favours its own
+    model family, so use a different model or calibrate per family. Rubric ambiguity: "is this
+    helpful?" is not a criterion; use a few binary, independently checkable ones ("does it state the
+    refund amount?", "does it cite a policy id?"). Gaming: an agent optimised against a judge learns
+    its tics, so keep the rubric out of the agent's context and hold out cases. Silent upgrades: a
+    judge endpoint changes under you, so pin and record the version with every score.
+
+    Calibrate before trusting. Label 50 to 100 examples by hand and measure judge–human agreement,
+    including the pattern of disagreements. Poor agreement is usually the rubric's fault, not the
+    model's. And never use the model under test as its own judge — a high score from a self-interested
+    grader is not a measurement.
+  tags: [llm-as-judge, bias, calibration]
+
+- id: agent-basic-022
+  topic: evaluation
+  difficulty: advanced
+  question: Why is a single pass over an eval set insufficient for an agent, and what should replace it?
+  answer: |
+    Because the agent is a sampler, not a function. One pass measures capability once, on one draw
+    of the trajectory; it does not measure the reliability a user experiences. A task that succeeds
+    seventy percent of the time is a task that fails several times a week, and a single-pass suite
+    will report it as working.
+
+    Run each case k times and report two numbers: succeeded at least once, and succeeded every time.
+    The second is the product metric. The `pass^k` formulation popularised by τ-bench (Sierra, 2024)
+    is exactly this reliability-under-repetition view, and it changes conclusions: systems can look
+    close on best-of-k while differing widely on consistency.
+
+    Practically, keep a fast suite at k=3 to 5 for every change and a larger one at k=10 for release
+    candidates, since cost scales linearly. Report variance alongside the mean — a three-point
+    difference on sixty tasks is not a difference — and separate infrastructure flakiness (a mocked
+    tool returned nothing) from genuine path variance (the model chose differently), because only the
+    second is a property of the agent.
+  tags: [pass-at-k, reliability, variance]
+
+- id: agent-basic-023
+  topic: operations
+  difficulty: intermediate
+  question: Where does an agent's cost actually go, and how do you control it?
+  answer: |
+    Mostly into input tokens, because every step resends the system prompt, tool schemas, task and
+    accumulated observations, and trajectories run to ten or twenty steps. Output tokens are priced
+    higher per token but are usually the smaller share; reasoning tokens, where reported, are billed
+    as output and can dominate a chatty trace.
+
+    Four levers, in order of impact. Reduce context: prune old observations, summarise, and stop
+    passing tool schemas the step cannot use. Keep the prompt prefix stable so provider prompt
+    caching works — a timestamp at the top of the system prompt silently disables it. Route by node:
+    a small model for classification and extraction, the large one only where reasoning is the
+    product. Cap output and reasoning length.
+
+    Then enforce budgets before the call rather than reporting them after: per step, per run, per
+    tenant, per tool. A budget checked after generation is a report. And measure cost per success
+    rather than cost per call, because a cheap call that fails twice is not cheap.
+  tags: [cost, tokens, budgets]
+
+- id: agent-basic-024
+  topic: security
+  difficulty: advanced
+  question: Why can't prompt instructions stop prompt injection, and what does work?
+  answer: |
+    Because the model has no reliable way to separate "data I was asked to read" from "instructions
+    I was asked to follow": both arrive as tokens in the same channel. Delimiters, "treat the
+    following as data", and instruction hierarchy reduce the success rate and are worth doing, but
+    they are probabilistic. A model trained to follow instructions will sometimes follow the wrong
+    one, particularly when the injected text is plausible and the legitimate instruction is far away.
+
+    What works is removing capability rather than persuading the model. Think in terms of three
+    ingredients — private data, untrusted content, and an outbound channel — and ensure no run has
+    all three without a control. Use per-user credentials so the agent cannot exceed the requester's
+    access; allowlist egress domains through a logging proxy so exfiltration has nowhere to go;
+    sandbox code execution with no network and a read-only filesystem; make destructive actions
+    absent from the tool menu or gated on human approval; keep secrets out of the context entirely.
+
+    Then instrument for the failure: alert on new outbound destinations, reads of sensitive
+    resources followed by external requests, and canary values leaving the system.
+  tags: [prompt-injection, exfiltration, least-privilege]

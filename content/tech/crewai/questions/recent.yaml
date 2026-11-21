@@ -1,0 +1,296 @@
+- id: crew-recent-001
+  topic: architecture
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: In a design interview, how do you decide between a Crew and a Flow?
+  answer: |
+    I start from control flow, not from the framework. If the work is a known sequence of
+    specialist steps, a crew is the shorter expression: roles, tasks, a process, done. If the next
+    step depends on a validated value, if a step may need to run twice, if the run must pause for
+    approval or resume after a restart, the control flow is the interesting part and it belongs in
+    a Flow — as Python I can read, test and log.
+
+    In practice most non-trivial systems use both: Flows own orchestration, validation, approvals
+    and persistence; crews own role-based work with a known internal sequence. That boundary is
+    also an operational one — `flow.usage_metrics` gives cost across every call, and a crew with a
+    typed input and output is replaceable.
+
+    I would also say what I would *not* do: encode branching as prose in a task description, or
+    wrap a two-step pipeline in a Flow class. And I would name the evidence that would change the
+    decision — a fixture set showing the crew variant is not better than a single agent.
+  tags: [crews, flows, architecture]
+
+- id: crew-recent-002
+  topic: delegation
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What is the difference between delegation, a handoff and task context in CrewAI?
+  answer: |
+    They are three different mechanisms that get called the same thing.
+
+    **Delegation** is a tool call. An agent with `allow_delegation=True` gains tools to delegate
+    work or ask a coworker a question; the coworker runs its own loop and returns text, and the
+    delegating agent continues. Control never transfers, so you get a nested loop with its own
+    prompt, tools and `max_iter`.
+
+    **Task context** is data flow you declared: `context=[research]` puts a prior task's output into
+    this task's prompt. The recipient, payload and ordering are explicit and inspectable.
+
+    **A handoff** in the general agent-framework sense — transfer of control with a typed payload —
+    is not a first-class CrewAI primitive. The closest equivalents are a sequential task boundary
+    with `output_pydantic` (plus a Flow router for what happens on rejection), or a manager
+    reassigning work in hierarchical mode.
+
+    I prefer the task boundary for anything with a known recipient, because it is testable and
+    auditable, and reserve delegation for genuinely unpredictable need for expertise.
+  tags: [delegation, handoffs, context]
+
+- id: crew-recent-003
+  topic: memory
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: CrewAI consolidated its memory types. What changed, and what does it change for design?
+  answer: |
+    Earlier releases documented four separate stores — short-term, long-term, entity and contextual —
+    backed by a vector store and SQLite, each with its own lifecycle and reset flags. Current
+    documentation describes one `Memory` class that replaces them: `remember`, `recall`, `forget`,
+    `extract_memories`, records organised into a hierarchical tree of scopes, and retrieval ranked
+    by a blend of semantic similarity, recency and importance with configurable weights.
+
+    Design consequences are mostly about isolation and cost, not API shape. Scopes become the
+    tenant boundary, so the scope must be derived from the authenticated request. Enabling memory
+    adds an extraction call and a recall call per task, plus embedding calls and a data-egress path
+    to the configured embedder — which is a privacy decision, not just a performance one.
+
+    The old four-type model is still worth knowing, because it explains why the feature exists and
+    it is what most tutorials and interviewers describe. But I would design against the unified
+    class and treat memory as retrieval, never as a system of record.
+  tags: [memory, scopes, architecture]
+
+- id: crew-recent-004
+  topic: validation
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How do you stop a crew from shipping invalid output — guardrails or an LLM judge?
+  answer: |
+    Guardrails first, and only for things code can decide. A guardrail runs after a task, receives
+    the output, and returns `(True, value)` or `(False, reason)`; a rejection retries the task with
+    the reason, up to `guardrail_max_retries` (default 3) before failing. That is a deterministic
+    boundary the model cannot negotiate with: does every cited URL resolve, do the line items sum,
+    is the date in range, is the entity on the allowlist, does the Pydantic model validate.
+
+    An LLM judge is a different tool with a different job: properties that are expensive to assert —
+    coverage, tone, whether the brief answers the question. It is biased toward longer answers,
+    toward its own phrasing, and toward agreeing with confident claims, so it needs calibration
+    against human labels and a short, checkable rubric.
+
+    The anti-pattern I would call out is a guardrail that asks a model "is this good?". It costs
+    another call, shares the original model's blind spots, and gives the appearance of validation
+    without the substance. Deterministic checks where possible, judge where necessary, human
+    approval where the action is irreversible.
+  tags: [guardrails, evaluation, validation]
+
+- id: crew-recent-005
+  topic: processes
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: When is a hierarchical crew worth its cost?
+  answer: |
+    Rarely, and for a specific reason: when task-to-agent assignment is genuinely uncertain. The
+    manager plans, delegates each step to whichever agent it judges suitable from their role and
+    goal text, reviews the output and can re-delegate. That is worth paying for when you have many
+    overlapping specialists, a heterogeneous queue of requests, or a review gate you cannot express
+    as a conditional.
+
+    The cost is structural. The manager adds planning and validation calls around each step, so it
+    is commonly several times the calls of the equivalent sequential crew, and re-delegation
+    multiplies that. It is also a context bottleneck: it must hold the accumulating outputs it
+    supervises, so `respect_context_window` starts summarising exactly the detail that made those
+    outputs worth reviewing. Ordered execution also becomes approximate — tasks you expected to run
+    may be merged or skipped.
+
+    What I would not accept is "hierarchy adds oversight". A manager model reads text, not tool
+    calls, and shares the workers' blind spots. If oversight is the requirement, a deterministic
+    guardrail or a human approval step is cheaper and stronger. For a known pipeline, hierarchical
+    is overhead with a rationale attached.
+  tags: [hierarchical, processes, cost]
+
+- id: crew-recent-006
+  topic: tasks
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: Where exactly do you enforce an output contract in CrewAI?
+  answer: |
+    There are three layers, and only two of them enforce anything.
+
+    The prompt layer is `expected_output`: prose describing what done looks like. It is the
+    strongest lever on *quality* because models optimise toward what they can see being checked,
+    but it is not validation. A model that omits a required field has produced a worse answer, not
+    a violation.
+
+    The parse layer is `output_pydantic` or `output_json` with a Pydantic model. CrewAI converts
+    the final message into the schema, so the task output exposes `.pydantic` or `.json_dict`.
+    Only declared fields are checked, and conversion happens on free text, so nested schemas fail
+    more often than flat ones.
+
+    The function layer is `guardrail` / `guardrails`: Python that runs after the task, returns a
+    success flag and either a value or a rejection reason, and retries up to
+    `guardrail_max_retries`.
+
+    My rule: shape in `output_pydantic`, facts and arithmetic in a guardrail, prose in
+    `expected_output`. Downstream code consumes the typed object, never re-parses `.raw`.
+  tags: [structured-output, guardrails, tasks]
+
+- id: crew-recent-007
+  topic: evaluation
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How do you evaluate a multi-agent crew when the output is non-deterministic?
+  answer: |
+    At three levels, because a single end-to-end check hides the failures that matter.
+
+    Task level: validate each `TaskOutput` against its schema, track guardrail pass rates, and
+    assert task-specific properties — every finding has a resolvable URL, every total reconciles.
+    Trajectory level: tool calls per task, wrong-tool rate, delegation depth, retry counts, latency,
+    and cost per successful run. Outcome level: human acceptance or a downstream correction rate,
+    sampled rather than exhaustive.
+
+    Then a fixture set of fifteen to forty cases covering happy path, empty input, ambiguity,
+    contradictory sources, adversarial content and tool failure. Assert properties, not strings:
+    temperature zero does not give reproducibility, because provider routing, model aliases and the
+    world all move. Report pass rates over several runs, and treat a drop from 98% to 90% as a
+    regression even if today's run passed.
+
+    Change one variable at a time — model, prompt, tool description, process — so a regression has
+    an owner. Use `crewai replay` to iterate on one step rather than paying for the whole crew.
+  tags: [evaluation, metrics, regression]
+
+- id: crew-recent-008
+  topic: operations
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: A crew's cost tripled week over week with no code change. How do you investigate?
+  answer: |
+    First, check the arithmetic, because cost is calls × tokens × price and all three can drift
+    independently. Pull per-run call counts and token totals from `usage_metrics` and the trace, and
+    split them by task and agent. A tripled bill is usually one of: more iterations per task, more
+    delegation, larger prompts, or a different model being served.
+
+    More iterations: a tool started failing or returning less useful results, so the agent retries
+    until `max_iter`. Look at tool error rates and result sizes per call. More delegation: an agent
+    began delegating work it used to do, which nests loops; the delegation tree in the trace shows
+    it. Larger prompts: task outputs grew — a longer report earlier in the crew inflates every later
+    prompt — or memory recall started injecting more context. Different model: a provider alias moved
+    under a pinned-looking identifier, which is why the served model belongs in the trace.
+
+    Then bound it: per-run token budgets, lower `max_iter`, timeouts inside tools, and alerting on
+    calls per successful run rather than on spend alone, which lags the cause by days.
+  tags: [cost, tracing, operations]
+
+- id: crew-recent-009
+  topic: architecture
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: CrewAI or LangGraph for a production multi-agent system — how do you argue it?
+  answer: |
+    By naming what each makes cheap. CrewAI makes a team-shaped pipeline cheap to author and cheap
+    to read: roles, tasks, a process, and a Flow when you need branching. LangGraph makes control
+    flow and state explicit: typed channels, conditional edges, cycles with a recursion limit, a
+    checkpointer per thread, and interrupts for approval and resume.
+
+    So the question is whether the control flow is the interesting part. A research-then-write
+    pipeline with a review gate is a crew, possibly inside a Flow. A system where each request takes
+    a different path, must pause mid-run for a human, and must resume after a deploy is a graph —
+    and trying to encode that in prompt text is where crews fail.
+
+    I would also flag the softer differences: CrewAI's implicit state passing (task outputs as text)
+    is fast to start and lossy at scale; LangGraph's explicitness costs more code up front and pays
+    back in debuggability. Neither makes a model reliable, and the migration cost in both directions
+    is real, so I would prototype behind a typed interface that lets me swap the orchestrator.
+  tags: [langgraph, architecture, trade-offs]
+
+- id: crew-recent-010
+  topic: safety
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How would you design human approval for a crew that can take real actions?
+  answer: |
+    Separate proposal from execution. The crew produces a structured proposal — action, target,
+    parameters, evidence, confidence — and a deterministic layer validates it against policy. Only
+    then does an authenticated human approve, and only then does an executor with narrow credentials
+    perform the action.
+
+    In CrewAI terms, that means write tools are not on the agents that draft. `human_input=True` on
+    a task is not the mechanism: it blocks a worker on stdin and cannot be approved by anyone who is
+    not at that terminal. A Flow's `@human_feedback` decorator is closer — it pauses, emits labels
+    such as approved or rejected, applies a `default_outcome` if nobody answers, and resumes — but
+    even that is an interface, not an identity system.
+
+    The parts interviewers usually want: the approval payload must show the exact action and target,
+    not a summary; the approval must be authenticated and recorded with who approved what and when;
+    a model's claim that a human approved is not evidence; the executor must be idempotent, so a
+    retry after an ambiguous timeout does not send twice; and every step must be traceable to the
+    run and flow ID.
+  tags: [human-in-the-loop, approvals, safety]
+
+- id: crew-recent-011
+  topic: tools
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What changes when a crew's tools come from MCP servers instead of local code?
+  answer: |
+    The invocation mechanics stay similar, but the trust boundary moves. With local tools, the
+    description, schema and implementation are all in your repository, reviewed with your code. With
+    an MCP server, the tool descriptions arrive at runtime from a service you may not control — and
+    descriptions are prompt text. A malicious or compromised server can describe tools in ways that
+    steer the agent, so the server becomes part of your prompt supply chain.
+
+    Practically: pin server versions, review the tool list and descriptions before enabling a
+    server, expose only the tools a task needs rather than the whole catalogue, and keep credentials
+    in the server rather than in the prompt. Treat results as untrusted content — they are another
+    injection channel — and keep write operations behind the same approval discipline as local
+    tools.
+
+    The operational upside is real: integrations become a standard interface with their own
+    lifecycle, so crews stop carrying bespoke wrappers. The cost is that capability discovery,
+    versioning and authorization now span two systems, and your trace needs the server identity and
+    tool version alongside the call.
+  tags: [mcp, tools, supply-chain]
+
+- id: crew-recent-012
+  topic: operations
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What does it take to run a crew as a service rather than a script?
+  answer: |
+    Four things the script does not need: a validated input contract, an execution boundary, durable
+    records, and a cost ceiling.
+
+    Input contract: `kickoff(inputs=...)` interpolates straight into prompts, so validate keys, types
+    and length before anything is sent to a model, and keep untrusted text out of `role` and `goal`
+    where it becomes instruction rather than data.
+
+    Execution boundary: `kickoff()` is synchronous and can run for minutes, so put it behind a queue
+    or job runner with a timeout, not inside a request handler. Flows add state and resumption, but
+    they are not a scheduler — no cron, no distributed workers, no durable timers, no compensation.
+    Put the Flow inside a real orchestrator and treat it as the LLM-shaped step.
+
+    Durable records: persist the run ID, each `TaskOutput`, the served model identifier and tool
+    calls, because the summary alone cannot be debugged or audited.
+
+    Cost ceiling: enforce tokens and calls per run and per tenant outside the framework, since
+    `max_iter` and `max_rpm` do not compose across agents, delegations or flows. Then alert on cost
+    per successful run.
+  tags: [deployment, operations, cost]

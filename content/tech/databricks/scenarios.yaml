@@ -1,0 +1,175 @@
+- id: dbx-scn-001
+  title: A nightly job got slower after someone raised the worker maximum
+  technologies: [databricks, pyspark, airflow]
+  difficulty: advanced
+  prompt: |
+    A nightly PySpark job used to finish in 20 minutes on an autoscaling job cluster with a maximum
+    of 8 workers. After a complaint about a slow backfill, an engineer raised the maximum to 40.
+    Since then the job takes 50–60 minutes. The run page shows tasks pending for long stretches,
+    no failed tasks, and stages that complete quickly once they start. The Airflow task that
+    triggers it now times out. What is happening, and what do you change?
+  approach: |
+    Separate waiting from working. Pending tasks with no active stages and fast stage execution
+    point at capacity acquisition, not at the query. Databricks job clusters use gang scheduling:
+    the run requests its executors together, and with a 40-worker maximum the cluster waits for
+    capacity it may not get, especially on spot. Cluster events and the run timeline show instance
+    acquisition delays, quota limits, subnet IP exhaustion or spot unavailability.
+
+    Restore a maximum the cloud can actually supply, allow several instance types, and use spot
+    with on-demand fallback. For latency-sensitive runs, a pool removes the acquisition wait. Then
+    confirm with evidence: compare the run's queue time before and after the change, and check
+    stage metrics to be sure nothing else regressed. If more parallelism is genuinely needed, raise
+    the minimum rather than a maximum the job never reaches.
+
+    The general lesson is that autoscaling limits are a capacity request, and an unreasonable
+    request makes startup slower, not faster.
+  red_flags:
+    - Raising the maximum again, or raising the driver size, without reading cluster events.
+    - Blaming the code because the job "used to work" and rewriting transformations.
+    - Restarting the cluster repeatedly as a fix for pending tasks.
+
+- id: dbx-scn-002
+  title: A dashboard degrades after a streaming job starts writing the same table
+  technologies: [databricks, delta-lake, sql]
+  difficulty: advanced
+  prompt: |
+    A gold table serves a SQL warehouse dashboard that used to render in two seconds. A new
+    streaming job now writes to the table every 30 seconds, and the dashboard takes 40 seconds.
+    The warehouse has not changed size, the query has not changed, and the table has 1.2 million
+    small files. Users report that a manual refresh sometimes returns instantly and sometimes
+    takes the full 40 seconds. Diagnose the cause and propose a fix that keeps the dashboard fresh.
+  approach: |
+    Two effects compound. Frequent commits invalidate the warehouse result cache, so the
+    "instant" refresh is a cache hit that disappears as soon as the stream commits. And 1.2 million
+    small files make every cache miss expensive: file listing, footer reads and task overhead
+    dominate a query that aggregates a small result.
+
+    Confirm with the query profile — files read versus files pruned, time in scan — and with table
+    detail for file count and average size. Then fix the layout and the freshness contract
+    separately. Compact the table and cluster it on the dashboard's filter columns so pruning
+    works; reduce write frequency by increasing the stream's trigger interval, or land the stream
+    in a bronze table and publish gold on a short schedule.
+
+    For freshness, decide what the dashboard actually needs. A materialized gold table refreshed
+    every five minutes gives a stable cache and predictable cost; a 30-second table gives freshness
+    nobody can perceive through a BI tool's own refresh. Do not disable caching or upsize the
+    warehouse to compensate for a layout problem.
+  red_flags:
+    - Upsizing the warehouse before reading the query profile.
+    - Turning off result caching and calling it a fix.
+    - Claiming Delta cannot serve BI because the table has many small files.
+
+- id: dbx-scn-003
+  title: An analyst has SELECT but still gets permission denied
+  technologies: [databricks, sql]
+  difficulty: intermediate
+  prompt: |
+    An analyst was granted `SELECT` on `prod.gold.orders` and still receives a permission error
+    when querying it from a SQL warehouse. A colleague in the same team can query it from a
+    notebook. A second query on a different table returns zero rows instead of an error. The
+    analyst is in the right account group, and `SHOW GRANTS` on the table lists the group. Walk
+    through the diagnosis.
+  approach: |
+    Treat the two symptoms separately. The permission error is usually a missing parent privilege:
+    `SELECT` on a table requires `USAGE` on the catalog and `USE SCHEMA` on the schema, and the
+    error names the table rather than the missing grant. Check group membership as the platform
+    sees it, not as the IdP lists it — nested groups and service principals are common gaps. Then
+    confirm the warehouse or cluster is Unity Catalog-enabled and that the query uses the
+    three-part name rather than resolving to a legacy `hive_metastore` table.
+
+    The zero-row result is not a permissions failure at all. It is the expected behaviour of a row
+    filter, which removes rows silently. Inspect the table's row filter and column masks, and check
+    whether the analyst's group satisfies the predicate.
+
+    Fix by granting the prerequisites to the group, not the user, and by documenting filters so
+    the next "missing data" report is not investigated as an outage.
+  red_flags:
+    - Granting `ALL PRIVILEGES` on the catalog to make the error go away.
+    - Asking for account admin or workspace admin as the first step.
+    - Concluding the data is missing when a row filter is doing its job.
+
+- id: dbx-scn-004
+  title: Revenue is 2 percent high after retries were enabled
+  technologies: [databricks, delta-lake, pyspark]
+  difficulty: advanced
+  prompt: |
+    A gold revenue table is 2% higher than the finance system for the last three weeks. The job that
+    builds it has `max_retries: 3` on its load task and `max_concurrent_runs: 5`, and writes with
+    `INSERT INTO`. Two runs overlapped on several nights after a slow upstream extract. Nobody
+    changed the transformation. How do you find the cause, quantify it, and make the pipeline safe?
+  approach: |
+    Start with the write semantics, not the SQL. Retries re-execute the task, and overlapping runs
+    both append: `INSERT INTO` is not idempotent, so every retry and every overlap adds a second
+    copy of the batch. Duplicate rates of a few percent are exactly what partial overlap produces.
+
+    Quantify by grouping the target on the business key and the batch identifier, then compare
+    against the source for the affected dates. Check the run history for overlapping runs and
+    retried tasks, and the table history for commits close together with similar row counts.
+
+    Then fix the design: make the write a `MERGE` on a stable key plus an event or batch id, or an
+    overwrite scoped with `replaceWhere` to the run's date range; set `max_concurrent_runs` to one
+    for a job that rewrites the same table; and add a post-write check on row counts and key
+    uniqueness. Repair the affected dates from bronze rather than deleting rows by hand. Retries
+    are safe only after the write converges.
+  red_flags:
+    - Disabling retries and declaring the problem solved.
+    - Truncating and reloading without finding which dates and keys are affected.
+    - Blaming Delta for duplicates that the write pattern created.
+
+- id: dbx-scn-005
+  title: File ingestion is six hours behind and the stream looks healthy
+  technologies: [databricks, delta-lake, kafka]
+  difficulty: advanced
+  prompt: |
+    An Auto Loader pipeline ingests JSON drops into bronze. It has no failed batches and the
+    streaming query is running, but the backlog is six hours and growing. The landing prefix holds
+    about two million files accumulated over years. The stream runs with directory listing, a
+    one-minute trigger and `maxFilesPerTrigger` set to 100. The cluster is a fixed four-worker
+    job cluster. What do you check, and what do you change?
+  approach: |
+    Read the progress metrics first: input rows per batch, processing rate, batch duration and
+    backlog. A healthy-looking query with a growing backlog means the input rate exceeds the
+    processing rate, so the question is which side to change.
+
+    On the input side, directory listing over two million files is the likely bottleneck: each
+    batch paginates the store, and the cost grows with the prefix. Switch to file notifications
+    where the cloud supports it, and scope the landing path so new files are not mixed with
+    history. On the processing side, 100 files per one-minute batch is a throttle; raise it and
+    align the trigger interval with the file sizes you want in bronze. Size the cluster from the
+    observed batch duration, and consider enhanced autoscaling if the load is bursty.
+
+    Then deal with the accumulated small files: compact bronze, and make the ingestion cadence
+    produce files of a sane size. Do not delete the checkpoint to "start clean" — that reprocesses
+    or loses data, and it does not fix the rate.
+  red_flags:
+    - Deleting and recreating the checkpoint as a first response.
+    - Adding workers without checking whether listing or the file cap is the limit.
+    - Switching to continuous trigger and calling it lower latency.
+
+- id: dbx-scn-006
+  title: The bill tripled after a new team onboarded
+  technologies: [databricks, airflow]
+  difficulty: intermediate
+  prompt: |
+    Monthly Databricks spend tripled after a new analytics team joined. There are no complaints
+    about performance, and no obvious outage. You have one week to find the cause and reduce spend
+    without breaking SLAs. What do you look at, in what order, and what do you change?
+  approach: |
+    Attribute before cutting. Query the billing system table by date, SKU, workspace and custom
+    tags, and join compute system tables to see which clusters existed and for how long. The
+    pattern is usually visible in a handful of rows: an all-purpose cluster running continuously,
+    a warehouse sized for a quarterly peak, or a nightly full refresh that could be incremental.
+
+    Then address shape, lifetime, size and efficiency in that order. Move scheduled work from
+    all-purpose clusters to job clusters, set auto-stop on interactive clusters, cap autoscaling
+    and warehouse cluster counts, and check whether Photon is enabled on UDF-heavy jobs where its
+    rate premium buys nothing. For the new team specifically, check whether their notebooks are
+    running on a shared always-on cluster because nobody gave them a job definition.
+
+    Add controls so it does not recur: cluster policies with tag requirements and worker caps,
+    budget alerts, and a monthly review of the top ten workloads. Confirm the reduction in the next
+    billing cycle rather than trusting the change.
+  red_flags:
+    - Cutting every cluster or pausing jobs before knowing what they serve.
+    - Opening a discount negotiation as the first move.
+    - Deleting clusters that other teams are using without checking ownership.

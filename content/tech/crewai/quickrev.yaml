@@ -1,0 +1,86 @@
+concepts:
+  - title: Agent
+    detail: "A configured persona — role, goal, backstory, llm, tools, max_iter — that becomes prompt text plus a bounded tool loop."
+  - title: Task
+    detail: "A unit of work with a description, an expected_output, an assigned agent and optional context, schema and guardrails."
+  - title: Crew
+    detail: "A binding of agents to tasks plus a process; kickoff() runs it and returns a CrewOutput with per-task results."
+  - title: Process
+    detail: "Two values only — sequential (list order) and hierarchical (a manager assigns and reviews). No parallel or cyclic process exists."
+  - title: Manager agent
+    detail: "Supplied as manager_llm (constructed) or manager_agent (defined by you); in hierarchical mode tasks are allocated by the manager, not pre-assigned."
+  - title: Expected output
+    detail: "The definition of done, injected into the prompt. Strong lever on quality, but prompt text — it enforces nothing."
+  - title: Structured output
+    detail: "output_pydantic or output_json converts the final message into a schema; only declared fields are checked."
+  - title: Guardrail
+    detail: "A callable run after a task returning (True, value) or (False, reason); rejection retries up to guardrail_max_retries, default 3."
+  - title: Task context
+    detail: "context=[other_tasks] adds specific prior outputs to a prompt. It shapes data flow, never execution order."
+  - title: Tool description
+    detail: "The only part of a tool the model sees; naming the neighbouring tool it should not use is the highest-value sentence."
+  - title: Delegation
+    detail: "allow_delegation adds coworker tools that run a nested agent loop; control stays with the delegator, so cost and depth compound."
+  - title: Memory
+    detail: "One Memory class with remember, recall, forget and extract_memories; records live in scoped trees and rank by similarity, recency and importance."
+  - title: Memory scopes
+    detail: "Hierarchical paths such as /tenant/123 that bound reads and writes — the isolation boundary, and it must come from the authenticated request."
+  - title: Knowledge sources
+    detail: "Curated reference material chunked and embedded for retrieval; a snapshot, not live data, and rebuilt when the source changes."
+  - title: Flow
+    detail: "Event-driven orchestration with @start, @listen and @router over typed self.state; the place for branching, approvals and resumption."
+  - title: Flow persistence
+    detail: "@persist snapshots state (SQLite by default). kickoff with an existing id resumes; restore_from_state_id forks a new run from that snapshot."
+traps:
+  - Believing a richer role or backstory adds capability — it changes framing and cost, not permissions or tools.
+  - Treating expected_output as a schema; only output_pydantic, output_json and guardrails reject anything.
+  - Using crew memory as a system of record, then discovering it returns superseded facts with no ordering.
+  - Choosing hierarchical because it sounds like oversight, when a deterministic guardrail or human approval is the real check.
+  - Reading verbose console output as an audit trail, or the final .raw as evidence of who did the work.
+  - Calling delegation a handoff — it is a nested call, so the delegator keeps ownership and the cost.
+advanced:
+  - Cost is superlinear in task count, because each task's prompt carries every earlier output; the last task is the most expensive.
+  - Nested limits do not compose; max_iter is per agent, so delegation and hierarchy multiply rather than cap total calls.
+  - Guardrails run on text after the fact; they cannot undo an email already sent, so write tools still need idempotency keys.
+  - Memory is an injection channel — content a crew reads can be stored as a "fact" and retrieved into later prompts.
+  - Resume and fork differ materially; resuming a run whose side effects already happened requires reconciliation, not just state.
+  - A provider-side model alias change is a behaviour change with no code diff, so the served model belongs in every trace.
+comparisons:
+  - a: Agent
+    b: Task
+    difference: An agent is a reusable capability and persona; a task is one contract with a description, expected output and context.
+  - a: Sequential
+    b: Hierarchical
+    difference: Sequential follows list order at roughly one call per task; hierarchical lets a manager assign and review, costing several calls per step and making order approximate.
+  - a: Crew
+    b: Flow
+    difference: A crew is a linear team process; a Flow is code-driven orchestration with branching, typed state, approvals and persistence.
+  - a: CrewAI
+    b: LangGraph
+    difference: CrewAI optimises for fast authoring of role-based pipelines; LangGraph optimises for explicit state, edges, cycles and checkpointed resumption.
+  - a: Delegation
+    b: Task context
+    difference: Delegation is a model-chosen nested call with its own loop; context is data flow you declared, with an explicit recipient and payload.
+  - a: Memory
+    b: Knowledge sources
+    difference: Memory is written by runs and retrieved by relevance; knowledge sources are curated, read-only reference material you rebuild.
+  - a: Guardrail
+    b: LLM judge
+    difference: A guardrail is deterministic code that can reject and retry; a judge is another model with the same blind spots and a soft spot for verbosity.
+commands:
+  - label: Scaffold a crew project
+    code: "crewai create crew research_crew"
+  - label: Scaffold with the classic YAML layout
+    code: "crewai create crew research_crew --classic"
+  - label: Run the crew
+    code: "crewai run"
+  - label: Smoke-test repeatability across runs
+    code: "crewai test -n 5 -m gpt-4o-mini"
+  - label: Iterate on prompts and settings with feedback
+    code: "crewai train -n 5"
+  - label: Re-run from a recorded task
+    code: "crewai replay -t <task_id>"
+  - label: Clear local memory stores
+    code: "crewai reset-memories --all"
+  - label: Validate this content package
+    code: ".venv/bin/python -m backend.app.content"

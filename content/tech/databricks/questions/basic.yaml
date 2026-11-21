@@ -1,0 +1,516 @@
+- id: dbx-basic-001
+  topic: workspace model
+  difficulty: beginner
+  question: What is the difference between a Databricks account, a workspace and a metastore?
+  answer: |
+    The **account** is the top-level container: billing, users and groups, the list of workspaces,
+    and the Unity Catalog metastore. The **workspace** is a working environment — a UI deployment
+    with its own notebooks, clusters, jobs and workspace-level permissions. The **metastore** is
+    the metadata and grants container for Unity Catalog, and it is regional.
+
+    The distinction matters because a workspace is not a security boundary. Two workspaces
+    attached to the same metastore see the same catalogs and the same grants, so a user in both
+    can read the same tables from either. Isolation comes from catalogs and grants, not from
+    creating more workspaces. Teams that build "one workspace per squad" and expect data
+    separation are surprised by exactly this.
+
+    The metastore constraint is geographic: one metastore per region, attachable to many
+    workspaces in that region. Cross-region access needs replication or Delta Sharing. Legacy
+    workspaces may still carry a workspace-local `hive_metastore`, which is outside all of this
+    and should be treated as migration debt.
+  tags: [account, workspace, metastore, unity-catalog]
+
+- id: dbx-basic-002
+  topic: architecture
+  difficulty: beginner
+  question: What is the difference between the control plane and the compute plane, and does table data pass through Databricks?
+  answer: |
+    The control plane is Databricks-managed: the web UI, notebook storage, job definitions and run
+    state, cluster management APIs, query history and Unity Catalog metadata. The compute plane is
+    where Spark runs — VMs in your cloud account for classic compute, or Databricks-managed
+    capacity for serverless.
+
+    Table data does not pass through the control plane. Executors read and write object storage
+    directly using a storage credential or instance profile; the control plane sees metadata,
+    logs, query plans and whatever results you display. That is why a security review should
+    distinguish "bytes" from "metadata": notebook output, query results and table statistics do
+    leave the account.
+
+    The split also explains failure modes. If the control plane is unavailable you may be unable
+    to start clusters or open the UI while running classic clusters keep writing data. If storage
+    credentials expire, healthy clusters fail every task with a 403. Those are different incidents
+    with different escalation paths.
+  tags: [control-plane, compute-plane, security]
+
+- id: dbx-basic-003
+  topic: serverless
+  difficulty: intermediate
+  question: When would you choose serverless compute over a classic cluster, and what do you give up?
+  answer: |
+    Serverless is the right default for short, bursty work: notebooks, scheduled jobs and
+    declarative pipelines where startup time dominates. There is no VM to boot and no init script
+    to run, so a run starts in seconds instead of minutes, and there is no cluster to size or
+    leave idle.
+
+    What you give up is control. Serverless restricts cluster-level Spark configuration, init
+    scripts and library installation to supported mechanisms, and diagnostics come from the run
+    page and query profile rather than a Spark UI you can browse freely. Networking is also
+    different: your VPC peering, private endpoints and route tables do not apply the same way, so a
+    serverless job reaching an on-premise database may fail where a classic cluster in an injected
+    VNet succeeds.
+
+    Choose classic compute when you need custom JVM flags, GPU instance families, specific
+    libraries at cluster scope, or a private network path. Choose serverless when the workload is
+    ordinary Spark or SQL and the operational simplicity is worth more than the knobs.
+  tags: [serverless, classic-compute, trade-offs]
+
+- id: dbx-basic-004
+  topic: clusters
+  difficulty: beginner
+  question: Why are job clusters cheaper than all-purpose clusters, and when should each be used?
+  answer: |
+    An all-purpose cluster is interactive: people attach notebooks, share it, and keep it alive
+    across sessions. That interactivity is priced in — the all-purpose SKU carries a higher DBU
+    rate than the jobs SKU for the same hardware. A job cluster exists for one run, is owned by the
+    job, accepts no interactive attachment, and is terminated when the run finishes.
+
+    Use all-purpose clusters for exploration, ad-hoc analysis and collaborative development, with a
+    short auto-stop. Use job clusters for anything scheduled: a nightly pipeline does not need a UI,
+    and paying the interactive premium for it is pure waste. A single job cluster can be shared by
+    all tasks in a job, so you pay one startup rather than one per task.
+
+    There is a subtlety: a job cluster cannot be kept warm between runs, so a workload that runs
+    every few minutes may be better served by a pool or a shared cluster than by repeated cold
+    starts. For hourly or daily schedules, job clusters are almost always the cheaper shape.
+  tags: [clusters, job-clusters, cost]
+
+- id: dbx-basic-005
+  topic: sql warehouses
+  difficulty: intermediate
+  question: A dashboard is slow with twenty concurrent users. Do you increase the warehouse size or the number of clusters?
+  answer: |
+    Increase the number of clusters. Warehouse **size** controls the compute a single query gets —
+    it is roughly vertical scaling. **Cluster count** controls how many queries run concurrently;
+    beyond that limit, queries queue, and queue time becomes the user-visible latency.
+
+    So the diagnostic is queue time versus execution time. If queries wait before starting, add
+    clusters (or use a serverless warehouse that scales them). If each query executes slowly and
+    the profile shows a large scan or shuffle, a bigger size may help. Adding size for a
+    concurrency problem buys a faster engine that still has nowhere to run the twenty-first query.
+
+    Also check the cheaper explanations first: result caching disabled or invalidated by a
+    frequently committed table, missing clustering so each query scans far more files than it
+    needs, and dashboards issuing many small queries that each pay overhead. Those fixes often
+    remove the need for more compute entirely.
+  tags: [sql-warehouse, concurrency, sizing]
+
+- id: dbx-basic-006
+  topic: access modes
+  difficulty: intermediate
+  question: What are cluster access modes, and how does shared mode change what a notebook can do?
+  answer: |
+    Access mode determines who can use a cluster and how users are isolated on it. **Single user**
+    binds the cluster to one principal and supports the full language and library surface — the
+    normal choice for job clusters and personal work. **Shared** allows multiple users with
+    isolation between them, but restricts features: Scala is not supported, and some RDD, library
+    and configuration patterns are unavailable. **Custom** covers workloads that need capabilities
+    shared mode does not expose, with isolation you configure.
+
+    Access mode also interacts with Unity Catalog: a cluster must be configured for Unity Catalog
+    to resolve three-part names and enforce grants. A table that "does not exist" on one cluster
+    and exists on another is often an access-mode or catalog-binding difference, not a data
+    problem.
+
+    The practical consequence is that a notebook written on a single-user cluster may simply not
+    run when moved to a shared production cluster. Test on the access mode you will deploy to, and
+    prefer Python or SQL for shared workloads.
+  tags: [access-modes, unity-catalog, shared-clusters]
+
+- id: dbx-basic-007
+  topic: spot instances
+  difficulty: intermediate
+  question: How should spot instances be used on a Databricks cluster?
+  answer: |
+    Put workers on spot with fallback to on-demand, and the driver on on-demand. A reclaimed
+    worker loses its task, which Spark retries elsewhere; a reclaimed driver loses the run. The
+    saving on the driver is small compared with the cost of restarting a multi-hour job.
+
+    Spot with fallback means the cluster asks for spot capacity first and pays the on-demand price
+    only when spot is unavailable, so a capacity crunch slows the job rather than failing it. That
+    is the right trade for batch. For streaming, be more careful: a lost executor can force a
+    micro-batch reprocess, and a stateful query may need to restore state, so many teams keep
+    streaming clusters on on-demand.
+
+    Two side effects are worth planning for. Spot reclamation shows up as `FetchFailedException` or
+    missing shuffle output, so a run that "fails randomly" may be a capacity event rather than a
+    bug. And shuffle data lives on the executor's local disk, so losing several executors at once
+    can invalidate a large fraction of a stage's intermediate data.
+  tags: [spot, capacity, cost]
+
+- id: dbx-basic-008
+  topic: cluster sizing
+  difficulty: intermediate
+  question: What does autoscaling actually solve, and what does it not solve?
+  answer: |
+    Autoscaling adds and removes workers between a minimum and maximum based on pending tasks. It
+    solves variable total load: a cluster that is busy for two hours and idle for twenty-two can
+    shrink instead of paying for peak capacity all day. It reduces cost and, within limits,
+    improves throughput when the work is evenly spread across many tasks.
+
+    It does not solve skew. A hot partition is one task on one core; adding workers adds idle
+    cores around it. It does not solve driver pressure from `collect()`, broadcasts or hundreds of
+    concurrent queries. It does not fix a shuffle that moves ten times the data it needs. And it
+    reacts in minutes, so a demand spike that lasts seconds finishes before the cluster grows.
+
+    It also has a startup cost of its own: every new worker must be acquired, and gang scheduling
+    means a job may wait for all requested executors before starting. For a predictable nightly
+    batch, a fixed cluster sized from the previous run's stage metrics is often cheaper and more
+    stable than a wide autoscaling range.
+  tags: [autoscaling, sizing, skew]
+
+- id: dbx-basic-009
+  topic: notebooks and repos
+  difficulty: beginner
+  question: What does a notebook look like in a Git repository, and why does that matter?
+  answer: |
+    Databricks stores a notebook in a Repo as a text source file, not as a binary JSON document.
+    It starts with `# Databricks notebook source`, marks notebook-specific lines with `# MAGIC`
+    (so the file stays valid Python), and separates cells with `# COMMAND ----------`.
+
+    That matters for everything a team does around code. A pull request shows a readable diff
+    instead of a JSON blob, `grep` and linting work, blame attributes lines to people, and merge
+    conflicts are resolvable. A notebook in a Repo is reviewable in the same way as a Python
+    module.
+
+    Repos also provide a per-user checkout: each user clones the repository into their own
+    workspace folder and works on a branch. The corollary is that production jobs should not run
+    from someone's checkout — a merge would become a silent deployment. Deploy from a bundle or a
+    tagged release so the production definition is explicit and reproducible.
+  tags: [notebooks, repos, git]
+
+- id: dbx-basic-010
+  topic: deployment
+  difficulty: intermediate
+  question: What problem do Databricks Asset Bundles solve?
+  answer: |
+    A bundle is a YAML description of the resources a project needs — jobs, pipelines, schemas,
+    dashboards — plus targets for each environment. `databricks bundle validate` checks the
+    definition and referenced files, `bundle deploy` creates or updates the resources, and
+    `bundle run` triggers a run. Variables and target overrides handle the difference between dev
+    and prod, such as catalog name or workspace host.
+
+    The problem it solves is drift. Without a deployment artefact, job definitions live in the UI
+    and are edited by hand: nobody knows who changed the schedule, code paths point at a personal
+    Repo checkout, and recreating an environment is manual archaeology. With a bundle, the job
+    definition is generated from version-controlled text, reviewed in a pull request and deployed
+    identically to every environment.
+
+    Bundles sit alongside the Terraform provider rather than replacing it. Terraform is usually
+    better for account-level objects and long-lived infrastructure; bundles are better for the
+    application-shaped resources a data team changes weekly.
+  tags: [bundles, cicd, deployment]
+
+- id: dbx-basic-011
+  topic: jobs
+  difficulty: beginner
+  question: How does a multi-task Databricks job decide what runs in parallel?
+  answer: |
+    From the dependency graph, not from the order of the task list. Each task declares
+    `depends_on` entries; tasks with no dependency between them are eligible to run at the same
+    time, and a task starts only when the tasks it depends on satisfy its `run_if` condition.
+
+    `run_if` is the part people miss. The default, `ALL_SUCCESS`, means all upstream tasks must
+    have succeeded. `AT_LEAST_ONE_SUCCESS` is for a task that can proceed if any branch worked;
+    `ALL_DONE` runs a cleanup task regardless of outcome; `NONE_FAILED` is a looser success
+    condition. A condition task goes further and branches on a value, so the DAG can skip gold when
+    silver loaded zero rows.
+
+    Concurrency is bounded by compute, not by the graph: all runnable tasks compete for slots on
+    the cluster. A job cluster shared by every task starts once and runs independent branches in
+    parallel; task-level clusters let a GPU task or a SQL task use different compute, at the cost
+    of extra startup.
+  tags: [jobs, dag, dependencies]
+
+- id: dbx-basic-012
+  topic: retries and idempotency
+  difficulty: intermediate
+  question: Why can enabling task retries cause duplicate data, and how do you prevent it?
+  answer: |
+    A retry re-executes the task from the beginning, against a table that may already contain the
+    first attempt's output. If the write is `INSERT INTO`, the second attempt appends the same rows
+    again. The job reports success, and the duplication is discovered days later by a dashboard
+    that is quietly 2% high.
+
+    The fix is to make the write idempotent before enabling retries. Options: `MERGE` on a stable
+    natural key plus a sequence or event id; `INSERT OVERWRITE` scoped with `replaceWhere` to the
+    batch's partition or date range; or write to a staging table and swap. Each converges to the
+    same result no matter how many times the task runs.
+
+    Two related mechanisms are worth knowing. A **repair run** re-executes only the failed and
+    downstream tasks of a finished run, reusing successful upstream output — cheaper than a full
+    rerun, but still subject to the same idempotency requirement. And retries should be paired with
+    a timeout, because a hung task otherwise holds the cluster and the run slot indefinitely.
+  tags: [retries, idempotency, merge]
+
+- id: dbx-basic-013
+  topic: triggers
+  difficulty: intermediate
+  question: What trigger types does a Databricks job support, and when is each appropriate?
+  answer: |
+    **Scheduled** triggers use a Quartz cron expression with an explicit timezone — the right
+    choice for a pipeline with a known cadence. Set the timezone deliberately; a UTC expression
+    interpreted in local time shifts twice a year.
+
+    **File arrival** fires when new files appear at a path, waiting a configurable interval after
+    the last change so a multi-file drop becomes one run. It suits landing-zone ingestion where
+    the upstream system does not call an API. **Table update** fires when specified Unity Catalog
+    tables receive a commit, which is useful for chaining jobs but can produce a trigger storm if
+    the upstream writes in small increments.
+
+    **Continuous** keeps one run alive and is meant for streaming, not batch. **Manual** is the
+    default and the right setting while a DAG is being tested.
+
+    Pause a trigger during a freeze rather than deleting it: the definition and history survive,
+    and resuming is one click instead of a rebuild.
+  tags: [triggers, scheduling, file-arrival]
+
+- id: dbx-basic-014
+  topic: unity catalog
+  difficulty: beginner
+  question: Explain the Unity Catalog namespace and what a catalog is for.
+  answer: |
+    Unity Catalog uses three levels: `catalog.schema.table`. The metastore sits above them and
+    holds metadata and grants. A catalog is the main isolation boundary; a schema groups objects
+    by zone or subject; the third level is the table, view, volume, function or model.
+
+    Because the name is fully qualified, the same table resolves identically from any workspace
+    attached to the metastore, from a SQL warehouse, a job or a BI tool. That is the core
+    improvement over the old workspace-local Hive metastore, where the same name meant different
+    data depending on where you ran the query.
+
+    In practice, teams use one catalog per environment (`dev`, `prod`) and, where regulation
+    demands it, one per sensitive domain so a grant mistake cannot cross the boundary. Names are
+    case-insensitive, and the two-part names people remember from Hive only resolve inside the
+    workspace's default catalog — which is why an old query can fail after migration with a
+    confusing "table not found".
+  tags: [unity-catalog, namespace, catalogs]
+
+- id: dbx-basic-015
+  topic: managed tables
+  difficulty: intermediate
+  question: What is the difference between a managed and an external table in Unity Catalog?
+  answer: |
+    A managed table's data lives under the catalog's or schema's managed location, and Databricks
+    owns the lifecycle: `DROP TABLE` deletes the data as well as the metadata. An external table
+    points at a path you registered; `DROP TABLE` removes only the metadata, and the files remain
+    exactly where they were.
+
+    Default to managed. Managed tables get predictable layout, automatic maintenance through
+    predictive optimization, and no orphaned directories when a table is dropped. Use external
+    tables when the path is contractual — data landed by another system, a shared zone, a
+    migration in progress — and accept that you now own compaction, vacuum and cleanup.
+
+    Both require a governed path: either the catalog's managed location or an external location
+    created from a storage credential. The external location is validated for read, write, list
+    and delete at creation time. That validation is worth watching: a credential that can read but
+    not delete produces a table that queries fine and fails later in `OPTIMIZE` or `VACUUM`.
+  tags: [managed-tables, external-tables, storage]
+
+- id: dbx-basic-016
+  topic: grants
+  difficulty: intermediate
+  question: How do Unity Catalog grants inherit, and why is there no DENY?
+  answer: |
+    Privileges are granted on securables and inherit downward: a grant on a catalog applies to its
+    schemas and their objects, and a grant on a schema applies to its tables and views. Classic
+    `DENY` is not supported, so there is no subtraction: access is the union of all grants that
+    reach an object, plus ownership.
+
+    The practical consequence is that you cannot carve an exception out of a broad grant. If a
+    group has `SELECT` on a schema, revoking it on one table is not how you hide that table —
+    you move it to a different schema or catalog, or apply a row filter. Teams arriving from
+    databases with `DENY` semantics design themselves into a corner trying to subtract what
+    inheritance keeps adding.
+
+    Two prerequisites catch people: `SELECT` on a table is useless without `USE SCHEMA` on its
+    schema and `USAGE` on its catalog, and the resulting error names the table rather than the
+    missing parent grant. Grant to groups, not users, so offboarding is one membership change
+    rather than an audit of every object.
+  tags: [grants, inheritance, access-control]
+
+- id: dbx-basic-017
+  topic: fine-grained access
+  difficulty: advanced
+  question: How do row filters and column masks work in Unity Catalog?
+  answer: |
+    Both are SQL functions attached to a table and evaluated by the engine at query time. A
+    **column mask** replaces the value of a column for users who fail a condition; a **row filter**
+    returns a boolean that decides whether a row is visible. Group membership is usually the
+    condition, via `is_account_group_member`.
+
+    ```sql
+    CREATE FUNCTION prod.gold.mask_email(email STRING)
+    RETURNS STRING
+    RETURN CASE WHEN is_account_group_member('pii_readers') THEN email ELSE '***' END;
+
+    ALTER TABLE prod.gold.customers ALTER COLUMN email SET MASK prod.gold.mask_email;
+    ```
+
+    The behaviour to internalise is that a filter removes rows silently rather than raising an
+    error: `SELECT *` simply returns fewer rows. A dashboard that suddenly shows zero records is
+    more often a filter than an outage, so record which filters are attached to which tables and
+    check them first during triage.
+
+    Because the function runs for every query, it must be deterministic and cheap. A slow filter
+    becomes a platform-wide performance problem; a non-deterministic one becomes a correctness
+    problem that is very hard to reproduce.
+  tags: [row-filters, column-masks, pii]
+
+- id: dbx-basic-018
+  topic: lineage
+  difficulty: beginner
+  question: What does Unity Catalog lineage capture, and what are its limits?
+  answer: |
+    Lineage is captured automatically when queries, notebooks, jobs, pipelines or SQL warehouses
+    read and write Unity Catalog tables. It is available at table level and column level, which
+    answers two different questions: "what breaks if I drop or change this table" and "where did
+    this column's value come from".
+
+    It is derived from executed queries, not from source code. That has consequences. A table read
+    through a dynamically constructed path, a Python UDF that builds SQL internally, or an
+    external engine writing outside the platform may not appear. A job that has not run since a
+    change shows the lineage of the last execution, not of the code in the repository.
+
+    So treat lineage as high-coverage evidence rather than proof. It is excellent for impact
+    analysis before a deprecation, for finding the consumers of a table nobody owns, and for
+    auditing a metric's ancestry. It is not a substitute for a data contract, and it does not tell
+    you whether a pipeline is correct — only what it touched.
+  tags: [lineage, impact-analysis, governance]
+
+- id: dbx-basic-019
+  topic: table layout
+  difficulty: intermediate
+  question: When should you use Z-ORDER, and when is liquid clustering the better choice?
+  answer: |
+    Both aim at the same thing: co-locating similar values so file statistics can skip files. With
+    `Z-ORDER`, the clustering is applied by each `OPTIMIZE` statement over the columns you name,
+    and every run rewrites the affected files. It works well on existing partitioned tables and
+    for a fixed, known set of filter columns.
+
+    **Liquid clustering** declares keys on the table (`CLUSTER BY (a, b)`) as metadata. `OPTIMIZE`
+    then clusters incrementally, and you can change the keys later with `ALTER TABLE ... CLUSTER
+    BY` without rewriting history. For new tables it is the better default, and it replaces both
+    partitioning and Z-ORDER.
+
+    Choose Z-ORDER when you are maintaining an existing table whose layout you cannot change
+    cheaply. Choose liquid clustering for anything new. Neither helps if the clustering column is
+    not used in selective predicates, and neither beats simply filtering less data: clustering a
+    table you always scan in full is a rewrite with no reader benefit.
+  tags: [z-order, liquid-clustering, optimize]
+
+- id: dbx-basic-020
+  topic: time travel
+  difficulty: intermediate
+  question: How do time travel and VACUUM interact, and what does RESTORE actually do?
+  answer: |
+    Time travel reads a previous table version, either by number (`VERSION AS OF 42`) or by
+    timestamp (`TIMESTAMP AS OF ...`), without changing current state. It needs two things: the
+    log entry describing that version and the data files it references. `VACUUM` deletes files that
+    are no longer referenced by a retained version and are older than the retention threshold, so
+    it is what ultimately makes old versions unreadable.
+
+    `RESTORE TABLE ... TO VERSION AS OF 42` is different from reading history. It commits a **new**
+    version whose contents match the old one, so current readers see the restored state and the
+    fix is itself in the history and reversible. Reading an old version gives you a query result;
+    restoring changes the table.
+
+    Two clocks matter. Data-file retention defaults to seven days and can be shortened, at the
+    cost of rollback and long-running readers. Log retention is separate and typically longer, so
+    `DESCRIBE HISTORY` can still list a version whose files have already been vacuumed. History is
+    not a backup.
+  tags: [time-travel, vacuum, restore]
+
+- id: dbx-basic-021
+  topic: photon
+  difficulty: intermediate
+  question: What does Photon accelerate, and what still runs outside it?
+  answer: |
+    Photon is a vectorised, native execution engine inside Databricks Runtime. It implements scans,
+    filters, projections, joins, aggregations, shuffles and writes over columnar batches, with the
+    same SQL and DataFrame surface as Spark. You do not rewrite queries; you enable it on a cluster
+    or use a SQL warehouse, where it is the engine.
+
+    It does not cover everything. Python UDFs and `mapPartitions` still cross into a Python worker,
+    RDD code leaves the vectorised path, and Spark ML or arbitrary libraries run as before. Some
+    operators and types fall back to the JVM. In an `EXPLAIN` plan, Photon operators carry a
+    `Photon` prefix; a scan or aggregate without one is running elsewhere, which is the first thing
+    to check when "Photon is enabled" but the query is not faster.
+
+    Photon also costs more per DBU-hour. The trade is only good when the speed-up exceeds the rate
+    premium on the work you actually run — a UDF-heavy job can pay the premium for a plan that
+    spends its time in Python.
+  tags: [photon, execution-engine, explain]
+
+- id: dbx-basic-022
+  topic: medallion architecture
+  difficulty: beginner
+  question: What are the bronze, silver and gold layers actually promising?
+  answer: |
+    Bronze promises fidelity: one row per source record, as received, append-only, with ingestion
+    metadata and unparseable fields captured rather than dropped. Its job is replayability, so it
+    should be schema-tolerant and free of business validation — a strict schema on bronze means a
+    new upstream column becomes an outage and the raw evidence is lost.
+
+    Silver promises trust: typed, deduplicated, conformed to a stable grain, with invalid rows
+    quarantined rather than silently dropped. It is where a natural key and a source sequence
+    resolve late and out-of-order events, and where PII policy is first applied.
+
+    Gold promises usability: a declared grain, documented columns, aggregation to the level a
+    consumer asks for. A gold table that requires the BI developer to join four tables and filter
+    `__is_current` is not gold; it is silver with a nicer name.
+
+    The layers are contracts, not folders. Three layers of ceremony around 50 MB of data is worse
+    than one well-documented table, and the naming does not excuse a missing deduplication key.
+  tags: [medallion, bronze, silver, gold]
+
+- id: dbx-basic-023
+  topic: auto loader
+  difficulty: intermediate
+  question: What does Auto Loader track, and why is the checkpoint the critical object?
+  answer: |
+    Auto Loader (`cloudFiles`) ingests new files from object storage, tracking which files have
+    already been processed so a restart does not reprocess the directory. It also infers a schema,
+    stores it at `cloudFiles.schemaLocation`, and can evolve it — adding new columns and routing
+    unparseable fields to `_rescued_data` instead of failing the load.
+
+    File detection has two modes. Directory listing asks the store what is new on each batch: simple
+    but increasingly expensive as the directory grows. File notifications use a queue (SQS/SNS or
+    Event Grid) so the stream is told about new files: cheaper at scale, more setup, and the queue
+    itself needs monitoring.
+
+    The checkpoint is the other half of the state: offsets, commit log, and state store for
+    stateful queries. It is what makes the Delta sink exactly-once — a restart resumes rather than
+    replays. Never delete it to "reset" a stream; that is a decision to reprocess or lose data and
+    should be made explicitly, with the target truncated or deduplicated first.
+  tags: [auto-loader, checkpoint, schema-evolution]
+
+- id: dbx-basic-024
+  topic: cost control
+  difficulty: intermediate
+  question: What are the main levers for reducing a Databricks bill without breaking SLAs?
+  answer: |
+    Start with shape, because it has the largest effect. Scheduled work belongs on job clusters,
+    BI on SQL warehouses, exploration on all-purpose clusters with short auto-stop. Paying the
+    interactive SKU premium for a nightly pipeline is structural waste that no amount of tuning
+    recovers.
+
+    Then lifetime: auto-stop, job clusters, serverless for bursty work. Then size: right-size from
+    measured shuffle and CPU rather than from a guess, and cap autoscaling. Then efficiency: read
+    fewer bytes through clustering and compaction, avoid Python UDFs where a built-in exists, and
+    enable Photon only where the speed-up justifies its higher per-hour rate.
+
+    Visibility is what makes the rest stick. Enforce tags through cluster policies so usage can be
+    attributed, review the billing system table monthly by SKU and team, and alert on budget
+    thresholds. Most bill surprises are one workload with a bad shape, not a broad drift — and
+    without tags you cannot find it.
+  tags: [cost, dbu, cluster-policies]

@@ -1,0 +1,142 @@
+slug: llm-agents
+title: LLM Agents
+category: ai-llm
+summary: Systems where a language model chooses actions in a loop — with tools, memory, state, and the operational discipline that keeps that loop safe and affordable.
+level: advanced
+relations:
+  - to: tool-calling
+    type: uses
+    note: An agent's only way to affect the world is the tool interface; schema quality bounds agent quality.
+  - to: mcp
+    type: uses
+    note: MCP standardises how tools and resources are exposed to an agent, replacing bespoke glue per integration.
+  - to: rag
+    type: uses
+    note: Retrieval is usually the agent's first tool, and the same grounding discipline applies to what the agent reads.
+  - to: langgraph
+    type: uses
+    note: LangGraph expresses an agent as an explicit state graph with checkpoints, interrupts, and resumable runs.
+  - to: crewai
+    type: alternative
+    note: CrewAI packages role-based multi-agent collaboration; a single-agent state machine is often the simpler answer.
+intro:
+  what: |
+    An LLM agent is a program in which a language model decides what to do next, observes the
+    result, and repeats until it stops. The model is not the system: the system is a loop with a
+    model inside it, plus a state object, a tool interface, a stopping rule, and a budget. Strip
+    any of those away and you have a prompt, not an agent.
+
+    The loop is the defining property. A single model call that returns text is a function. A
+    fixed sequence of model calls — extract, then classify, then summarise — is a pipeline, even
+    if every step uses an LLM. An agent is different because the *number and order* of steps is
+    decided at runtime, by the model, from what it has seen so far. That is the source of its
+    flexibility and the source of nearly every operational problem it has: unbounded cost,
+    non-deterministic behaviour, silent loops, and failures that are hard to reproduce.
+
+    Most production "agents" are hybrids. The skeleton is a deterministic workflow; two or three
+    nodes inside it are agentic — a research step that may search five times or not at all, a
+    triage step that may need to read three records before it can classify. Treating agentic
+    behaviour as a property of a *step* rather than of the *application* is the single most useful
+    design move available, because it confines non-determinism to places where you can measure it.
+  why: |
+    The appeal is that many real tasks cannot be decomposed in advance. Whether a support ticket
+    needs a refund, a policy lookup, or an escalation depends on what the first lookup returns.
+    Hard-coding every branch produces a decision tree that grows faster than the business does,
+    and each new branch needs an engineer. Letting the model choose the branch moves that
+    maintenance into the prompt and the tool descriptions — cheaper to change, harder to verify.
+
+    The second reason is tool leverage. Once a model can call a function, one integration gives
+    it access to a database, a ticketing system, a shell, or a browser. The same loop generalises
+    across tasks that look unrelated at the product level, which is why agent frameworks spread
+    so quickly.
+
+    The honest counterweight: agents trade determinism for coverage, and that trade is often
+    bad. You get a system whose behaviour is a distribution rather than a contract, whose cost
+    has a long tail, and whose failures are conversational rather than exceptional. Adopting one
+    is justified when the task genuinely has unbounded branch structure *and* the cost of a wrong
+    action is low or reversible *and* you have the evaluation and tracing infrastructure to see
+    what it did. Without those three, a workflow with a couple of LLM calls is almost always the
+    better engineering choice.
+  problems:
+    - Tasks whose next step depends on the result of the previous one, where the branch structure is unknown at design time.
+    - Wide tool surfaces where the right integration differs per request — search, SQL, ticketing, files.
+    - Long-running work that must survive partial failure and resume from where it stopped.
+    - Repetitive investigative work — triage, root-cause hints, data reconciliation — that consumes analyst hours.
+  where_used:
+    - Customer support automation with refund, lookup, and escalation tools behind approval gates.
+    - Coding assistants that read a repository, edit files, run tests, and iterate on failures.
+    - Data and ops copilots that query warehouses, inspect dashboards, and open tickets.
+    - Research and monitoring agents that gather sources and produce a cited brief.
+    - Internal workflow automation where a human previously copy-pasted between three systems.
+  ecosystem: |
+    An agent sits above three layers. The model provider supplies tool calling, structured output,
+    and the context window; the tool layer supplies typed functions, often exposed through MCP so
+    the same server works across clients; the orchestration layer supplies the loop, state,
+    persistence, and interrupts — LangGraph is the most explicit about this, CrewAI and the
+    OpenAI Agents SDK package more of it as convention. Retrieval (RAG) is usually one tool among
+    many rather than a separate pipeline, and observability tooling (traces of every model call
+    and tool result) is not optional infrastructure; it is how the system is debugged at all.
+  alternatives:
+    - name: Deterministic workflow with LLM steps
+      note: Fixed graph, typed handoffs, no runtime branching. Cheaper, testable, and the right default until proven otherwise.
+    - name: Single-shot prompt with retrieval
+      note: One model call over retrieved context. Handles a surprising share of "agent" use cases at a fraction of the complexity.
+    - name: CrewAI
+      note: Role-based multi-agent framework; fast to prototype, harder to constrain and evaluate precisely.
+related: [tool-calling, mcp, rag, langgraph, crewai]
+chapters:
+  - id: what-an-agent-is
+    title: What an Agent Is — Loop, State, Tools
+    file: chapters/01-what-an-agent-is.md
+    minutes: 13
+    level: advanced
+  - id: planning-patterns
+    title: Planning Patterns and How They Fail
+    file: chapters/02-planning-patterns.md
+    minutes: 14
+    level: advanced
+  - id: memory
+    title: Memory — Context, Summaries, and Stores
+    file: chapters/03-memory.md
+    minutes: 13
+    level: advanced
+  - id: tool-design
+    title: Designing Tools an Agent Can Use
+    file: chapters/04-tool-design.md
+    minutes: 14
+    level: advanced
+  - id: state-machines
+    title: State Machines Versus Free-Form Loops
+    file: chapters/05-state-machines.md
+    minutes: 13
+    level: advanced
+  - id: human-in-the-loop
+    title: Human-in-the-Loop and Approval Gates
+    file: chapters/06-human-in-the-loop.md
+    minutes: 12
+    level: advanced
+  - id: evaluation
+    title: Evaluating Agents
+    file: chapters/07-evaluation.md
+    minutes: 14
+    level: advanced
+  - id: observability-cost
+    title: Observability and Cost Control
+    file: chapters/08-observability-cost.md
+    minutes: 13
+    level: advanced
+  - id: safety
+    title: Safety — Injection, Tool Abuse, Sandboxing
+    file: chapters/09-safety.md
+    minutes: 14
+    level: advanced
+  - id: production-operations
+    title: Running Agents in Production
+    file: chapters/10-production-operations.md
+    minutes: 14
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

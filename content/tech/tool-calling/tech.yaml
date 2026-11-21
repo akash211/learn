@@ -1,0 +1,113 @@
+slug: tool-calling
+title: Tool Calling & Function Calling
+category: ai-llm
+summary: Give language models a typed, permissioned interface to real systems — schemas, validation, orchestration loops, and the failure modes that decide whether an agent is safe to ship.
+level: advanced
+relations:
+  - to: llm-agents
+    type: uses
+    note: Agents are loops built on tool calling; the loop, budgets, and state handling are the agent layer, the call mechanics are this layer.
+  - to: mcp
+    type: complements
+    note: MCP standardises how tool servers are discovered and invoked across clients; tool design, validation, and security still live in the tool itself.
+  - to: rest-apis
+    type: uses
+    note: Most tools are thin wrappers over HTTP APIs, so status codes, idempotency, pagination, and error contracts carry over directly.
+  - to: pydanticai
+    type: uses
+    note: Typed agent frameworks generate tool schemas from Python signatures and validate arguments, but the design decisions remain yours.
+intro:
+  what: |
+    Tool calling — also called function calling — is a model interface where the application declares a set of named operations with typed arguments, and the model responds not with prose but with a structured request to invoke one of them. The model never executes anything. It emits a name and an argument object; your code validates that object, decides whether the caller is allowed to do it, performs the operation, and returns a result the model can read on the next turn. The loop of "model requests a call, application executes, result goes back into the conversation" is what people mean by an agent.
+
+    The interface is deliberately narrow: a name, a natural-language description, and a JSON Schema for the arguments. That narrowness is the whole point. Everything the model knows about a tool comes from text you wrote — so description quality, argument shape, and return format are engineering decisions with measurable consequences, not documentation chores.
+
+    This module covers the wire mechanics across providers, how to design tools a model can actually choose and fill correctly, validation and error contracts, orchestration loops with retries and duplicate-effect prevention, the security boundary that tool execution creates, the relationship between structured outputs and tool calls, streaming, testing and evaluation, the special case of data and SQL tools, and — importantly — when to skip model-driven tool use and write ordinary code.
+  why: |
+    A model with tools can act on systems of record: read a customer's orders, open a ticket, issue a refund, run a query. That is a large increase in capability and an equally large increase in blast radius. The failure modes are not the ones teams expect. The model rarely "hacks" anything; it more often calls a plausible tool with a plausible argument that is wrong — the wrong customer because two records share a name, a refund for the wrong amount because a unit was not specified, a retry that charges twice because a timeout was ambiguous. It also faithfully follows instructions found in data it was asked to read, which turns every tool result into a potential input channel for an attacker.
+
+    Getting this right is mostly ordinary backend engineering applied to an unusual caller: a non-deterministic client that cannot be trusted, cannot be unit-tested by inspection, and will do exactly what your schema and descriptions make easy. Teams that treat tool definitions as prompt text rather than as an API contract end up with tools that are ambiguous, over-privileged, and impossible to evaluate.
+  problems:
+    - Let a model act on external systems without giving it credentials or free-form code execution.
+    - Turn ambiguous natural-language requests into typed, validated operations with known failure modes.
+    - Bound cost, latency, and side effects in a loop whose step count is decided at runtime.
+    - Keep irreversible actions behind human approval and object-level authorization.
+    - Make agent behavior testable and auditable when the planner is non-deterministic.
+    - Prevent untrusted content in tool results from becoming instructions the model obeys.
+  where_used:
+    - Customer-support assistants that look up orders, apply policy, and escalate with a ticket.
+    - Coding assistants that read files, run tests, and open pull requests inside a sandbox.
+    - Data assistants that translate questions into constrained, read-only SQL.
+    - Back-office automation over CRM, billing, and ticketing APIs with approval gates.
+    - Retrieval and browsing tools that fetch external content into a reasoning loop.
+    - Multi-step research or operations agents that sequence several heterogeneous services.
+  ecosystem: |
+    Tool calling sits between a model API and your application. The provider supplies the schema-carrying request format, the decoding behaviour that makes arguments usually parse, and the turn structure that carries results back. Your application supplies the tools themselves — usually thin adapters over REST APIs, databases, or internal services — plus authentication, authorization, validation, idempotency, logging, and the loop that decides when to stop. Agent frameworks and typed SDKs (Pydantic AI, LangGraph, the OpenAI and Anthropic SDK helpers) generate schemas from function signatures and manage the message plumbing, which removes boilerplate but not design responsibility: a badly described tool is badly described in every framework.
+
+    MCP (Model Context Protocol) standardises discovery and invocation so one tool server can serve many clients. It changes transport and packaging, not the security model: an MCP tool still runs with whatever privileges its process has, and its output is still untrusted input to the model. Structured outputs are the sibling feature — same schema machinery, different intent — and the two are frequently confused.
+  alternatives:
+    - name: Deterministic code paths
+      note: For known request shapes, a fixed pipeline or a classifier plus a switch is cheaper, faster, and testable; keep the model out of routing.
+    - name: Structured output extraction
+      note: When you only need data out of text and will decide the action yourself, a response schema is simpler than a tool call.
+    - name: Workflow engines
+      note: Durable execution platforms handle long-running, retryable, multi-step processes better than a model-driven loop.
+    - name: Human-operated UI
+      note: A form with validation beats an agent for anything a user does once a week with high stakes.
+  related: [llm-agents, mcp, rest-apis, pydanticai]
+chapters:
+  - id: mechanics
+    title: "How Tool Calling Works: Schemas, Selection, and Parallel Calls"
+    file: chapters/01-mechanics.md
+    minutes: 13
+    level: advanced
+  - id: designing-tools
+    title: Designing Tools the Model Can Use
+    file: chapters/02-designing-tools.md
+    minutes: 13
+    level: advanced
+  - id: validation-errors
+    title: "Validation and Error Contracts"
+    file: chapters/03-validation-and-error-contracts.md
+    minutes: 12
+    level: advanced
+  - id: orchestration-loops
+    title: "Orchestration Loops, Retries, and Duplicate Side Effects"
+    file: chapters/04-orchestration-and-idempotency.md
+    minutes: 14
+    level: advanced
+  - id: security-boundaries
+    title: Security Boundaries for Tool-Using Agents
+    file: chapters/05-security-boundaries.md
+    minutes: 14
+    level: advanced
+  - id: structured-outputs
+    title: Structured Outputs vs Tool Calls
+    file: chapters/06-structured-outputs-vs-tools.md
+    minutes: 11
+    level: advanced
+  - id: streaming
+    title: Streaming Tool Arguments and Results
+    file: chapters/07-streaming.md
+    minutes: 12
+    level: advanced
+  - id: testing-evals
+    title: "Testing and Evaluating Tools"
+    file: chapters/08-testing-and-evals.md
+    minutes: 13
+    level: advanced
+  - id: data-and-sql-tools
+    title: "Data Tools: Text-to-SQL and Read-Only Query Paths"
+    file: chapters/09-data-and-sql-tools.md
+    minutes: 13
+    level: advanced
+  - id: when-not-to
+    title: When Not to Use Model-Driven Tool Calling
+    file: chapters/10-when-not-to-use.md
+    minutes: 12
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

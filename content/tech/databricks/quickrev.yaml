@@ -1,0 +1,106 @@
+concepts:
+  - title: Account, workspace, metastore
+    detail: >-
+      Account owns billing and identity; workspace is an environment; metastore holds Unity Catalog metadata, one per region and shared by many workspaces.
+  - title: Control plane vs compute plane
+    detail: >-
+      The control plane runs the UI, scheduler and catalog metadata; the compute plane runs Spark and reaches storage directly, so table bytes do not transit Databricks.
+  - title: Serverless compute
+    detail: >-
+      Databricks-managed capacity in the same region. Seconds to start, no init scripts or JVM tuning, restricted networking and diagnostics.
+  - title: Cluster shapes
+    detail: >-
+      All-purpose for interactive work, job clusters for scheduled runs, SQL warehouses for concurrent SQL, serverless for bursty work. Shape is the biggest cost lever.
+  - title: Access modes
+    detail: >-
+      Single user supports everything; shared isolates users but drops Scala and some libraries; Unity Catalog requires a configured access mode.
+  - title: Autoscaling
+    detail: >-
+      Adjusts workers between min and max for total load. Does not fix skew, driver pressure, or a demand spike shorter than the scaling latency.
+  - title: Multi-task job
+    detail: >-
+      Tasks with `depends_on` form a DAG; independent tasks run in parallel and `run_if` decides whether a task runs given upstream outcomes.
+  - title: Idempotent writes
+    detail: >-
+      Retries and repair runs re-execute tasks. `MERGE` on a stable key or `replaceWhere` converges; `INSERT INTO` duplicates.
+  - title: Three-level namespace
+    detail: >-
+      `catalog.schema.table`, resolved identically from any workspace, warehouse or BI tool attached to the metastore.
+  - title: Managed vs external tables
+    detail: >-
+      Managed tables own their data and are dropped with it; external tables register a path and survive `DROP TABLE`. Managed gets automatic maintenance.
+  - title: Grant inheritance
+    detail: >-
+      Privileges flow downward from catalog to schema to object, with no classic DENY. Hiding one table means moving it or filtering rows.
+  - title: Row filters and masks
+    detail: >-
+      SQL functions attached to a table, evaluated per query. Filters remove rows silently; masks replace values. Both must be cheap and deterministic.
+  - title: Table layout
+    detail: >-
+      `OPTIMIZE` compacts small files; liquid clustering declares keys as metadata and applies incrementally; Z-ORDER rewrites on each statement.
+  - title: Vacuum and time travel
+    detail: >-
+      Time travel needs log entries and data files. `VACUUM` deletes unreferenced files past retention; `RESTORE` commits a new version matching an old one.
+  - title: Photon
+    detail: >-
+      Vectorised native engine for SQL and DataFrame operators. Python UDFs, RDDs and some libraries stay outside it; it carries a higher per-hour rate.
+  - title: Auto Loader and checkpoints
+    detail: >-
+      `cloudFiles` tracks ingested files and evolves schema; the checkpoint holds offsets and state and is what makes the Delta sink exactly-once.
+
+traps:
+  - Treating a workspace as a security boundary when isolation actually comes from catalogs and grants.
+  - Running scheduled pipelines on an always-on all-purpose cluster because it was already there.
+  - Enabling task retries on an `INSERT INTO` write and discovering duplicates weeks later.
+  - Assuming `DELETE` freed storage, when deletion vectors keep the rows until purge and vacuum.
+  - Upsizing a SQL warehouse to fix query queueing, which is a concurrency problem.
+  - Deleting a streaming checkpoint to "reset" a pipeline, which reprocesses or loses data.
+
+advanced:
+  - Gang scheduling means a larger `max_workers` can make a job start later, not faster, when the cloud cannot supply every executor at once.
+  - Liquid clustering replaces partitioning only when no partition-level operation (replaceWhere, drop-partition retention) is required.
+  - Unity Catalog lineage is derived from executed queries, so dynamic paths and external engines can leave gaps.
+  - Exactly-once holds for the Delta sink commit. A `foreachBatch` that calls an API or writes a second table needs its own idempotency.
+  - Predictive optimization maintains managed tables but cannot infer clustering keys, and skips external tables entirely.
+  - A row filter returning zero rows is indistinguishable from an outage unless the filter is documented and checked during triage.
+
+comparisons:
+  - a: All-purpose cluster
+    b: Job cluster
+    difference: Interactive attach and a higher DBU rate vs one run and a lower rate; scheduled work belongs on job clusters.
+  - a: SQL warehouse
+    b: All-purpose cluster
+    difference: SQL-only, concurrency-tuned, Photon by default vs general compute with notebooks, Python and custom libraries.
+  - a: Managed table
+    b: External table
+    difference: Databricks owns the location and drops the data vs a registered path that survives `DROP TABLE`.
+  - a: Z-ORDER
+    b: Liquid clustering
+    difference: Rewritten by each `OPTIMIZE` with fixed columns vs keys stored as metadata, changeable and applied incrementally.
+  - a: OPTIMIZE
+    b: VACUUM
+    difference: Rewrites active files into larger ones vs deletes unreferenced files past the retention threshold.
+  - a: Time travel
+    b: RESTORE
+    difference: Reads an old snapshot without changing the table vs commits a new version matching the old state.
+  - a: Databricks Jobs
+    b: Airflow
+    difference: Native Spark and SQL tasks with built-in retries vs cross-system orchestration, backfills and richer SLA tooling.
+
+commands:
+  - label: Validate and deploy a bundle
+    code: databricks bundle validate -t prod && databricks bundle deploy -t prod
+  - label: Grant the full prerequisite chain
+    code: GRANT USAGE ON CATALOG prod TO `analysts`; GRANT USE SCHEMA ON SCHEMA prod.gold TO `analysts`; GRANT SELECT ON TABLE prod.gold.orders TO `analysts`;
+  - label: Declare liquid clustering on a new table
+    code: CREATE TABLE prod.silver.orders (...) CLUSTER BY (customer_id, order_date);
+  - label: Compact and inspect the layout
+    code: OPTIMIZE prod.silver.orders; DESCRIBE DETAIL prod.silver.orders;
+  - label: Check what vacuum would delete
+    code: VACUUM prod.silver.orders DRY RUN;
+  - label: Restore a table and review history
+    code: DESCRIBE HISTORY prod.silver.orders; RESTORE TABLE prod.silver.orders TO VERSION AS OF 42;
+  - label: Repair only the failed tasks of a run
+    code: databricks jobs repair-run --run-id 12345 --rerun-failed-tasks
+  - label: Attribute spend by SKU and tag
+    code: SELECT usage_date, sku_name, custom_tags['team'] AS team, sum(usage_quantity) AS dbus FROM system.billing.usage GROUP BY ALL ORDER BY usage_date DESC;

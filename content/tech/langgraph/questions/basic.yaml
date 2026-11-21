@@ -1,0 +1,191 @@
+- id: lg-basic-001
+  topic: graph fundamentals
+  difficulty: beginner
+  question: What are the three core parts of a LangGraph workflow?
+  answer: |
+    A LangGraph workflow is described by **state**, **nodes**, and **edges**. State is the data available to the workflow, usually defined with a typed schema. Nodes are steps that read state and return updates; a node can be ordinary Python, a model call, a tool, or a compiled subgraph. Edges decide which nodes run next, either unconditionally or through a routing function. `StateGraph` is used to assemble these pieces, and `compile()` creates the runnable graph. `START` identifies where execution begins and `END` is a terminal marker. This separation is useful because work, data, and control flow are explicit and independently testable. LangGraph does not itself guarantee that a model is correct or a tool call is authorized; those remain application responsibilities.
+  tags: [state, nodes, edges]
+
+- id: lg-basic-002
+  topic: graph fundamentals
+  difficulty: beginner
+  question: When is a graph more appropriate than a simple chain?
+  answer: |
+    A chain is a natural choice when each request follows the same short sequence of steps. A graph becomes more valuable when a workflow branches, loops, pauses for a person, resumes from persisted state, or needs explicit inspection of its route. For example, a classifier might choose between retrieval, clarification, and direct response, while a tool-use cycle may return to a model after executing a tool. A graph makes those possible transitions visible and provides state channels to carry progress between nodes. It also adds concepts and operational overhead: state schemas, reducers, checkpointing, and graph versioning. Do not introduce LangGraph solely because an application uses an LLM. Compare the complexity of the workflow against plain functions or a chain, and adopt the graph when control-flow or durability requirements justify its structure.
+  tags: [chains, graph-design, workflow]
+
+- id: lg-basic-003
+  topic: state
+  difficulty: beginner
+  question: What does a node return, and what happens to state keys it omits?
+  answer: |
+    A node ordinarily returns a partial mapping containing the state keys it wants to update. It does not need to construct a replacement object containing every field. With the default behavior, a returned value replaces the current value for that key, while keys omitted from the mapping keep their existing values. For instance, a classifier can return `{"intent": "retrieve"}` without repeating the user's question or other state. This reduces boilerplate and makes ownership clearer. However, key names are part of the application's state contract; misspellings or meaning changes can cause errors or incorrect behavior. Use a typed schema, static checks, and tests that assert updates. If a key should accumulate rather than replace, define a reducer explicitly instead of assuming list values are appended automatically.
+  tags: [state-updates, schema]
+
+- id: lg-basic-004
+  topic: reducers
+  difficulty: intermediate
+  question: What is a reducer in LangGraph, and when should one be used?
+  answer: |
+    A reducer defines how a channel combines its existing value with an update returned by a node. Without a reducer, the default is replacement. A reducer is useful when updates should accumulate, such as appending evidence snippets or merging results from parallel workers. It is attached to a state field, commonly with `Annotated`; `operator.add` can concatenate lists, while a custom function can deduplicate or merge keyed results. Reducer behavior is a correctness choice: parallel nodes may write in the same super-step, so their values need a defined merge rule. Avoid assuming an incidental completion order. Prefer reducers that are deterministic and safe for repeated or concurrent updates, and test conflicts and duplicates. Accumulation also creates state growth, so add limits or summarize data when histories can become large.
+  tags: [reducers, parallelism]
+
+- id: lg-basic-005
+  topic: message state
+  difficulty: intermediate
+  question: Why use `add_messages` for message history instead of a plain list reducer?
+  answer: |
+    A plain list concatenation reducer treats every message update as a new list item. In conversational workflows, messages can have identities and may be updated or replaced, so blind concatenation can duplicate or preserve stale content. LangGraph's `add_messages` reducer is message-aware: it appends new messages and can update an existing message based on its ID. This is often the right merge behavior for a message channel such as `MessagesState`. It also keeps the message history in the structure expected by message-based tools and model integrations. The reducer does not solve every context-management problem; history can still grow, contain sensitive data, and overwhelm a model context window. Define how old messages are summarized or pruned and preserve only the history needed for the next decision.
+  tags: [messages, reducers, memory]
+
+- id: lg-basic-006
+  topic: routing
+  difficulty: intermediate
+  question: How do conditional edges choose the next node?
+  answer: |
+    `add_conditional_edges(source, router, path_map)` registers a routing function to run after a source node. The router receives the current state and returns a destination label or node name; an optional path map translates labels into registered nodes. It can also return `END`, multiple targets, or `Send` objects for dynamic fan-out. This separates the decision about what happens next from the work performed by the destination node. Keep routes constrained to a known set, especially when a model produces the label. Validate the label and define a safe fallback for missing or unexpected values. Use an ordinary fixed edge when the next node is always the same. Tests should exercise each route and confirm that every branch eventually reaches a valid terminal state or deliberate pause.
+  tags: [conditional-edges, routing]
+
+- id: lg-basic-007
+  topic: routing
+  difficulty: intermediate
+  question: When is `Command` preferable to a conditional edge?
+  answer: |
+    `Command` is useful when a node should update state and select its next destination as one operation. Its `update` contains the partial state change, and `goto` identifies the next node. For route-only logic, a conditional edge is usually easier to inspect because the route is separate from node work. `Command` is appropriate when the route depends on an operation the node just performed or when a tool needs to update and redirect control. Annotating a node's return as `Command[Literal[...]]` documents allowed destinations. Do not combine dynamic `Command` routing with a static outgoing edge from the same node unless both transitions are intentionally desired; the static edge can still run. `Command(resume=...)` is a different use: it is input to continue after an interrupt.
+  tags: [command, control-flow]
+
+- id: lg-basic-008
+  topic: cycles
+  difficulty: intermediate
+  question: Why should an agent loop have an explicit bound?
+  answer: |
+    A loop can repeatedly call a model or tool without making progress. That can consume time and provider quota, grow state and checkpoints, or repeat side effects. A model's statement that it is finished is not a reliable resource limit. Track a task-level iteration or tool-call budget and define what happens when it is exhausted: return a marked partial result, ask a person, or fail with a clear status. The graph's recursion limit is an additional runtime guard on super-steps, not a substitute for product logic. Bound other resources independently when needed, including wall-clock time and tokens. Keep progress measurable, such as a new evidence identifier or reduced set of unresolved issues, rather than counting model calls as progress. Test the zero-budget and exhausted routes.
+  tags: [loops, budgets, safety]
+
+- id: lg-basic-009
+  topic: recursion limits
+  difficulty: intermediate
+  question: What does the `recursion_limit` configuration protect against?
+  answer: |
+    `recursion_limit` caps the number of graph super-steps allowed in a run and helps prevent a faulty or unintended cycle from running indefinitely. It is passed as a top-level invocation config key, not nested under `configurable`. If the limit is exceeded, execution raises a graph recursion error rather than continuing forever. The setting is a last-resort guard, not a task-specific iteration counter: it does not explain to a user why the workflow stopped or ensure that a loop was progressing. Use application state to implement a meaningful maximum number of reviews, tool cycles, or delegations, and route exhaustion to a defined outcome. Also set deadlines and provider/tool budgets as needed. Choose a limit based on actual graph topology and test the behavior when it is reached.
+  tags: [recursion-limit, loops]
+
+- id: lg-basic-010
+  topic: retries
+  difficulty: intermediate
+  question: How does a node retry differ from a graph loop?
+  answer: |
+    A node retry repeats a node because it raised a retryable exception, often due to a transient dependency failure. A graph loop is a normal control-flow transition after a successful node result; for example, a model may call a tool and then receive the tool result in another model step. Retries should be configured for specific transient conditions and bounded by the request deadline. Loops need business-level stopping criteria and budgets. Neither mechanism is safe for external side effects by default: a timed-out write may have succeeded even when its response was lost. Use idempotency keys and reconciliation for effectful operations. Do not retry permanent errors such as invalid input or authorization denial. Keep the distinction clear so error recovery does not become an uncontrolled reasoning cycle.
+  tags: [retry-policy, loops, errors]
+
+- id: lg-basic-011
+  topic: checkpointing
+  difficulty: intermediate
+  question: What does a checkpointer save, and what does it enable?
+  answer: |
+    A LangGraph checkpointer saves graph state snapshots organized by thread as execution advances. That saved execution state can support continuing a conversation, recovering after a failure, pausing for human input, and inspecting or replaying earlier steps. Compile the graph with a checkpointer, then provide a thread ID in the invocation config. A checkpointer is distinct from a long-term knowledge store: it tracks the workflow state for a thread, while a store can hold application-defined data shared across threads. The saver does not automatically make external API effects exactly once, nor does it provide authorization. Use idempotency for effects and enforce access to each thread in the application. An in-memory saver is useful for tests but loses data when the process exits; production needs appropriate durable persistence and retention.
+  tags: [checkpointer, persistence]
+
+- id: lg-basic-012
+  topic: threads
+  difficulty: intermediate
+  question: What is a `thread_id`, and how should an application use it?
+  answer: |
+    A `thread_id` identifies the collection of checkpoints for one LangGraph execution history. It is passed under `configurable`, for example `{"configurable": {"thread_id": "case-123"}}`. Reusing it connects work to that thread's saved state; a new ID starts an independent history. It is therefore a persistence pointer, not a user identity or security token. The application must authenticate the caller and verify that the caller can access or resume the associated thread. Use IDs that are unique within the relevant persistence namespace and compatible with the selected checkpointer's constraints. Avoid embedding sensitive information in them. For concurrent updates to the same thread, define ordering or conflict behavior; the identifier alone does not serialize application requests or prevent two clients from racing. Coordinate serialization across API and worker processes too.
+  tags: [thread-id, security]
+
+- id: lg-basic-013
+  topic: persistence
+  difficulty: intermediate
+  question: How does a checkpointer differ from a LangGraph store?
+  answer: |
+    A checkpointer saves graph state snapshots for a particular thread. It is used for thread-scoped continuation, interrupts, recovery, and inspection of execution history. A LangGraph store holds application-defined information that may be shared across threads, such as a preference or durable fact. A checkpointer answers “where is this workflow and what state did it have?” A store answers “what information should be available beyond this one thread?” Applications may use both, but should decide which data belongs in each and apply appropriate access and retention controls. A checkpointer is not automatically a searchable long-term memory system, and a store does not necessarily capture the exact execution point required to resume a paused graph. In-memory implementations are convenient for development but have different durability from database-backed production options.
+  tags: [store, checkpointer, memory]
+
+- id: lg-basic-014
+  topic: interrupts
+  difficulty: intermediate
+  question: What is the purpose of `interrupt()` in LangGraph?
+  answer: |
+    `interrupt()` pauses graph execution from inside a node and surfaces a JSON-serializable payload to the caller. It is used for human-in-the-loop decisions, such as approving a proposed action or supplying missing information. The graph must be compiled with a checkpointer and invoked with a thread ID so the paused state can be resumed. The caller presents the payload to an authorized person and later invokes the same thread with `Command(resume=value)`. The resume value becomes the return value of the interrupt call. The API does not establish who the reviewer is or whether that person has authority; the surrounding service must authenticate and authorize them. On resume, the node begins again from its start, so code before the interrupt may execute again and should be repeatable.
+  tags: [interrupt, human-in-the-loop]
+
+- id: lg-basic-015
+  topic: interrupts
+  difficulty: advanced
+  question: Why should code before an interrupt be safe to repeat?
+  answer: |
+    When an interrupted run resumes, LangGraph restarts the node containing the `interrupt()` call from the beginning. That means calculations or reads performed before the interrupt can happen again. If those steps are nondeterministic or perform side effects, they may produce duplicate or inconsistent behavior. Place the interrupt before external actions, keep pre-interrupt work read-only and repeatable, and revalidate important preconditions after approval. A payment or message should not be sent before the reviewer has answered. Even after approval, use an idempotency key because a later retry or process failure can still create ambiguity about whether the effect happened. Bind the approval to the exact action proposal so changed arguments require renewed approval. The application should also expire or cancel stale approvals rather than assuming they remain valid forever.
+  tags: [interrupt, idempotency, side-effects]
+
+- id: lg-basic-016
+  topic: tools
+  difficulty: intermediate
+  question: What is the difference between a model tool call and executing a tool?
+  answer: |
+    A model tool call is a structured proposal that identifies a tool and supplies arguments. It does not, by itself, execute the external operation. The graph must route the model response to an execution node such as `ToolNode` or to application code that validates and runs the tool. This separation is a security boundary: application code must authorize the caller, validate arguments, and limit data and network access. Tool descriptions and schemas help the model form calls but do not enforce user permissions. Effectful tools need idempotency, audit, and possibly human approval. Treat tool output as untrusted input to later model steps and avoid returning secrets or raw internal stack traces. Keep tool result size bounded and retain identifiers for provenance.
+  tags: [tools, authorization, tool-node]
+
+- id: lg-basic-017
+  topic: tools
+  difficulty: advanced
+  question: What responsibilities does LangGraph's `ToolNode` provide?
+  answer: |
+    `ToolNode` is a prebuilt graph node for executing tool calls represented in model messages. In a common agent loop, a model node produces a message; a conditional edge checks whether it contains tool calls; `ToolNode` executes the configured tools; and an edge returns control to the model with tool results. The node handles the tool execution integration, but it does not replace application security or business rules. The tool itself and its surrounding service must validate arguments, enforce authorization and tenant boundaries, set timeouts, and handle side effects. The graph should also bound model-tool cycles and decide what to do when a tool fails. Do not assume that binding tools to a model executes them automatically or that a well-formed schema makes every proposed operation safe.
+  tags: [tool-node, tools]
+
+- id: lg-basic-018
+  topic: multi-agent
+  difficulty: intermediate
+  question: Describe a supervisor pattern for a multi-agent graph.
+  answer: |
+    In a supervisor pattern, a coordinating node receives the task and chooses a specialist, then may inspect results and decide whether to delegate again or finish. In LangGraph, specialists can be nodes or compiled subgraphs, and conditional edges can route to the selected one. Define structured inputs and outputs so each specialist has a clear responsibility and the supervisor can check completeness. Bound the number of delegations and keep a shared budget; otherwise the supervisor may loop or repeatedly select the same worker. The supervisor is also a potential bottleneck and can misjudge specialist quality. Add explicit error and stop paths, preserve source provenance, and do not grant specialists permissions beyond the user's authorization. Use multiple agents only when decomposition improves measurable outcomes over a simpler workflow.
+  tags: [supervisor, multi-agent]
+
+- id: lg-basic-019
+  topic: subgraphs
+  difficulty: advanced
+  question: When should a compiled graph be used as a subgraph?
+  answer: |
+    A compiled graph can be added as a node in a parent graph when a workflow component has a reusable or independently owned responsibility. If parent and subgraph share state keys, the compiled child may be added directly. If the state schemas differ, call the subgraph inside a wrapper node that maps parent input to child input and validates the child output before updating parent state. Subgraphs help isolate specialist histories and let teams evolve implementation behind an interface. They also add nested state and trace complexity, so define which data is shared, what persists, and how checkpoint namespaces behave. Do not pass the entire parent state to every child by default. A subgraph is an architectural boundary, not automatically a separate agent or security boundary; tool permissions must still be enforced.
+  tags: [subgraphs, state-interface]
+
+- id: lg-basic-020
+  topic: parallel execution
+  difficulty: advanced
+  question: What should be considered when parallel nodes update the same state key?
+  answer: |
+    Parallel nodes may run in the same super-step, so any shared key they both update needs explicit merge semantics. Without a reducer, the default behavior is replacement and concurrent writes can conflict or fail rather than representing the intended accumulation. Attach a reducer that combines updates, such as concatenating evidence lists or merging results by stable identifier. Do not assume a deterministic order based on node registration or completion time; encode source IDs and sort later if order matters. Reducers should be deterministic and handle duplicates or conflicting keys deliberately. Also define what happens when one worker fails or returns no result. A reducer merges graph state, not data across external databases, so it does not provide transaction guarantees for side effects.
+  tags: [parallelism, reducers]
+
+- id: lg-basic-021
+  topic: runtime context
+  difficulty: advanced
+  question: What belongs in graph state versus runtime context?
+  answer: |
+    Put workflow data in state when nodes compute or update it and it may need to be carried forward or checkpointed. Runtime context is better for invocation-time configuration and dependencies, such as a model selection, tenant-scoped service object, or database client. Context is not part of the evolving state history in the same way, and it avoids serializing runtime-only objects into checkpoints. Do not put connections, file handles, credentials, callbacks, or model instances into state. Conversely, do not put a result in context if the graph must persist it to resume later. Keep secrets outside traces and logs, and validate request-derived configuration before a node uses it. The distinction makes persistence, tests, and security boundaries easier to reason about, and keeps test dependencies easy to replace.
+  tags: [runtime-context, state-design]
+
+- id: lg-basic-022
+  topic: observability
+  difficulty: intermediate
+  question: What does LangSmith tracing add to LangGraph development?
+  answer: |
+    LangSmith tracing can expose a graph run as a trajectory of nested executions, making it easier to see which nodes ran, which model or tool calls occurred, and where errors or unexpected routes appeared. This is useful when a final response hides the cause of failure. Tracing can also support debugging and evaluation workflows with datasets and experiments. It is not a substitute for application metrics, access controls, or tests. A trace may contain prompts, outputs, retrieved documents, and tool arguments, so configure redaction, retention, and access policy before collecting broadly. Associate runs with workflow and prompt versions, and use safe correlation identifiers. For production, monitor operational signals such as errors and pending threads alongside quality evaluation; tracing shows execution but does not by itself prove that the answer is correct.
+  tags: [LangSmith, tracing, observability]
+
+- id: lg-basic-023
+  topic: evaluation
+  difficulty: advanced
+  question: Why evaluate a trajectory instead of only the final answer?
+  answer: |
+    Similar final text can be produced by a correct workflow or by a broken route that happened to reach plausible prose. Trajectory evaluation checks whether the graph took the intended branch, used appropriate tools, preserved evidence, respected call and iteration budgets, and stopped safely. Outcome evaluation still matters: correctness, usefulness, grounding, and abstention should be measured. A useful test set includes ordinary cases, ambiguity, missing evidence, malformed tool results, and expected failures. Deterministic checks can validate route labels, schema, and call counts; model-based evaluators can judge semantic quality but need calibration against human review. Keep datasets versioned and compare changes per case, because aggregate scores may hide safety regressions. No finite evaluation set establishes correctness for arbitrary user inputs. Keep quality and control checks separately visible.
+  tags: [evaluation, trajectories]
+
+- id: lg-basic-024
+  topic: production reliability
+  difficulty: advanced
+  question: Why do checkpointing and retry policies not guarantee exactly-once effects?
+  answer: |
+    A graph checkpoint records graph state, while an external service may have its own transaction and durability boundary. A node can send a request that succeeds remotely, then lose the response or fail before saving the result. On retry or resume, the graph may not know whether to repeat the operation. The checkpointer and external API generally do not participate in one distributed transaction, so their combined behavior is not automatically exactly once. Use a stable idempotency key at the effectful service, persist an operation record, or query the external system before retrying. Make node retries selective and bounded, and distinguish transient errors from permanent failures. Test process interruption between request and checkpoint. Checkpointing supports recovery, but side-effect semantics must be designed at the application boundary.
+  tags: [checkpointing, retries, idempotency]

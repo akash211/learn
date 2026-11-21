@@ -1,0 +1,119 @@
+- id: lg-recent-001
+  topic: current graph API
+  difficulty: intermediate
+  question: In a current LangGraph Python application, what does `StateGraph` build and why must it be compiled?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    `StateGraph` is the builder for a graph whose state schema defines the channels available to nodes. The application registers nodes and edges, including a path from `START` to its work and routes to terminal nodes or `END`. Calling `compile()` produces the runnable graph that can be invoked or streamed. Compilation also checks graph structure and is where runtime options such as a checkpointer can be attached. This separation allows an application to construct a graph once and invoke it many times with different inputs and configs. A graph does not have to be an LLM-only structure; ordinary Python functions can be nodes. In a review, distinguish building a graph definition from executing a compiled graph, and explain how state updates and edge choices determine behavior.
+  tags: [StateGraph, compile, graph-api]
+
+- id: lg-recent-002
+  topic: durable execution
+  difficulty: advanced
+  question: How would you make an agent run resumable across requests and worker restarts?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Compile the graph with an appropriate durable checkpointer and invoke it with a stable `thread_id` under the `configurable` config key. The thread associates checkpoints with the workflow so later requests can continue the same execution or answer an interrupt. Use an in-memory saver only for tests and local examples because it is lost with the process. In production, choose a supported durable implementation, configure its setup, connection management, access controls, backups, and retention. The API must authorize every thread read and resume; an ID is a pointer, not proof of identity. Also make effectful nodes idempotent because a saved checkpoint does not create a distributed transaction with an external tool. Test recovery by restarting workers and resuming real saved state.
+  tags: [persistence, checkpointer, thread-id]
+
+- id: lg-recent-003
+  topic: human approval
+  difficulty: advanced
+  question: What is the correct resume pattern after a node calls `interrupt()`?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Use a graph compiled with a checkpointer and a `thread_id` in the invocation config. The first invocation pauses at `interrupt()` and exposes its JSON-serializable payload, often under `__interrupt__` for `invoke()`. The application presents that payload to an authorized reviewer and validates the response. Resume the same thread with `graph.invoke(Command(resume=value), config)`. The value becomes the return value of the interrupted call. Do not use `Command(update=...)` alone as a generic way to submit a new user turn; use the graph's normal input schema for new work. On resume, the node restarts from its beginning, so pre-interrupt code can run again. Keep that code repeatable and put effectful actions after validated approval with idempotency protection. Persist reviewer identity separately for audit and authorization.
+  tags: [interrupt, Command, resume]
+
+- id: lg-recent-004
+  topic: control flow
+  difficulty: advanced
+  question: When should a graph use `Command` rather than a conditional edge?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Use a conditional edge when a node has completed and a routing function should choose the next step based on state. Use `Command` when a node's result should update state and route in one operation, or when a tool needs to redirect control. For route-only logic, a conditional edge usually makes the graph's topology more apparent. Annotate `Command` return values with the permitted destinations when possible so tooling can inspect them. Avoid combining `Command` routing with a static edge leaving the same node unless both are intentionally meant to execute: static edges are not silently disabled by a dynamic route. `Command(resume=...)` is a separate input pattern used to continue after an interrupt. Explain the distinction between node-returned commands and resume input during design review.
+  tags: [Command, conditional-edges, routing]
+
+- id: lg-recent-005
+  topic: dynamic fan-out
+  difficulty: advanced
+  question: How does `Send` support a map-reduce pattern in LangGraph?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A conditional routing function can return a list of `Send` objects, each targeting a worker node with a custom input. This lets a graph invoke the same node once per item when the number of tasks is known only at runtime. The worker results can be merged into shared state using an appropriate reducer, then a later node can aggregate them. A fixed edge chooses nodes in the graph's declared topology and normally passes shared state; `Send` supplies per-invocation worker input for dynamic fan-out. Design stable identifiers for work items, handle empty input and partial failure, and do not assume result ordering based on completion. Bound the fan-out and its concurrency so a large user request cannot trigger unbounded tool or model work.
+  tags: [Send, map-reduce, fan-out]
+
+- id: lg-recent-006
+  topic: node resilience
+  difficulty: advanced
+  question: How should a node retry policy be selected for a dependency call?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Attach a retry policy to nodes whose dependency calls can fail transiently, and limit it to the relevant error conditions and a bounded delay/count. Retry may be suitable for a temporary connection reset or transient service failure, but is usually wrong for validation errors, permission denial, or a permanent missing record. Keep retry timing within the end-to-end deadline and coordinate with the provider's rate-limit behavior. Consider the node's side effects: if a write could have succeeded remotely before the response was lost, retry can duplicate it. Use a stable idempotency key or query for the existing operation before repeating. A retry policy is distinct from a graph loop that responds to successful results. Test the actual exception classes raised by the integration and report exhausted retries clearly.
+  tags: [RetryPolicy, errors, idempotency]
+
+- id: lg-recent-007
+  topic: runtime context
+  difficulty: advanced
+  question: What is runtime context used for, and how is it different from graph state?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Runtime context supplies invocation-time configuration and dependencies to nodes without making them part of the graph's evolving checkpoint state. Examples include a selected model provider, a tenant-scoped repository, or a policy version. State holds values that the workflow computes and updates, such as an intent, retrieved evidence, or approval result. Keeping the distinction clear prevents non-serializable objects such as database connections and credentials from being stored in checkpoints. It also helps tests inject alternate dependencies without changing graph state. Context is not a security boundary on its own: validate inputs and authorize the tenant or user before nodes use a dependency. If a value must survive a pause and be available after process restart, store an appropriate reference or value in state rather than assuming ephemeral runtime context will be restored.
+  tags: [runtime-context, state-schema]
+
+- id: lg-recent-008
+  topic: state schemas
+  difficulty: advanced
+  question: How should a graph state schema be designed for a workflow that may be paused for days?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Treat checkpointed state as a durable interface. Give fields stable names and meanings, define reducers explicitly, and include enough identifiers and compact data to resume without copying large documents or runtime objects. Store references to large source records where possible, and avoid credentials or unnecessary personal data. Use explicit status values and version metadata so new code can tell which workflow semantics produced an old checkpoint. Additive optional fields are usually easier to evolve than renaming keys or changing their meaning. A paused thread may later execute a node that has been renamed or removed, so preserve compatible code or migrate threads deliberately. Test serialization and resume using old sample checkpoints. Apply access controls, retention, deletion, and backup policies to state just as you would to other user data.
+  tags: [state, versioning, persistence]
+
+- id: lg-recent-009
+  topic: subgraphs
+  difficulty: advanced
+  question: What determines whether a subgraph should be added directly or invoked inside a wrapper node?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    If parent and subgraph share state keys and compatible state semantics, the compiled subgraph can often be registered directly as a parent node. If the schemas differ, or if the parent needs to transform the child interface, invoke the subgraph inside a wrapper node. The wrapper maps a focused parent input into child state, calls the child, validates its output, and returns a small parent update. This isolates private agent history and creates a clear component contract. Decide how checkpoint namespaces, shared keys, and child persistence work; do not assume every child update is immediately visible to the parent in every configuration. Subgraphs support reuse and team ownership, but increase trace depth and state complexity. Use them when a boundary is real, not merely to split a short function across files.
+  tags: [subgraphs, schema, architecture]
+
+- id: lg-recent-010
+  topic: observability and evaluation
+  difficulty: advanced
+  question: How can LangSmith help evaluate a LangGraph change beyond comparing final text?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    LangSmith can collect traces of graph and model execution and support datasets and experiments for comparing versions. Use traces to inspect nodes, routes, tool calls, errors, and state progression; use evaluators to assess both outcome quality and control-flow requirements. A regression suite can check that a request selected the right path, used acceptable tools, respected call limits, preserved citations, and produced a grounded result. Deterministic assertions are preferable for simple constraints, while model-based evaluators can help assess semantic quality if calibrated against human review. Version prompts, tools, graph code, and datasets so a comparison is interpretable. Traces may include sensitive prompts and tool arguments, so configure access, redaction, and retention. LangSmith provides evidence for debugging and comparison; it does not prove the system is safe for all inputs.
+  tags: [LangSmith, evaluation, trajectories]
+
+- id: lg-recent-011
+  topic: persistence architecture
+  difficulty: intermediate
+  question: Why might an application use both a checkpointer and a long-term store?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A checkpointer tracks graph state and execution history for one thread, which supports resuming, interrupts, and time-travel inspection. A store holds application-defined information that should be accessible across threads, such as user preferences or reusable facts. A multi-session assistant may use a checkpointer to preserve the current conversation and a store to retain a consented preference that applies in a later conversation. The two systems serve different access patterns and retention needs. Avoid treating the checkpoint history as a shared knowledge base, or the store as the execution cursor for a paused graph. Scope stored data by user or tenant, enforce authorization, and define how updates, deletion, and conflicting facts work. Use both abstractions only when the product requires both kinds of persistence.
+  tags: [checkpointer, store, memory]
+
+- id: lg-recent-012
+  topic: deployment and migration
+  difficulty: advanced
+  question: What compatibility risks arise when deploying a new graph version while threads are paused?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A paused thread may resume by looking up a saved next node name and by reading state written by earlier code. Renaming or removing that node can make the thread impossible to continue, while changing a state key's meaning or type can misinterpret an old checkpoint. Prompt or tool behavior can also change even if the Python schema is unchanged. Use additive, backward-compatible changes where practical, keep old nodes or route old threads to compatible graph versions, and record workflow/schema versions. For breaking changes, inventory affected threads and choose a migration, restart, or manual resolution plan. Test resuming representative old checkpoints under the new deployment before rollout. Maintain a rollback path that accounts for state already written by the new version, and do not assume a successful graph compilation upgrades saved threads.
+  tags: [versioning, migrations, threads]

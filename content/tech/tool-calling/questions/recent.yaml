@@ -1,0 +1,166 @@
+- id: tool-recent-001
+  topic: mechanics
+  difficulty: advanced
+  question: How do OpenAI and Anthropic tool-calling formats differ, and what does that mean for your
+    code?
+  answer: |-
+    The information is the same; the envelope is not. OpenAI wraps each definition in a typed object with name, description, and `parameters`, returns calls in an assistant `tool_calls` array where `function.arguments` is a JSON **string**, and expects results as `role: "tool"` messages carrying `tool_call_id`. Anthropic uses `input_schema` for the schema, returns `tool_use` content blocks whose `input` is already a parsed object, and expects a user message of `tool_result` blocks referencing `tool_use_id`, with an `is_error` flag you can set.
+
+    The practical consequences are three. Keep one internal tool definition and render it per provider at the edge, rather than letting provider shapes leak into your handlers. Parse arguments defensively rather than assuming a dict, because the string-versus-object difference bites the moment you add a provider or a fallback model. And carry the call ID as your correlation key through validation, execution, logs, and the idempotency store, since it is the only identifier both formats agree on. Also expect divergence in forced-choice options and in how parallel calls are disabled.
+  tags:
+  - mechanics
+  - providers
+  period: 2024-2026
+  type: representative
+- id: tool-recent-002
+  topic: mechanics
+  difficulty: advanced
+  question: What do strict or constrained tool-calling modes actually guarantee?
+  answer: |-
+    They constrain decoding so the emitted arguments conform to the schema's grammar. That removes the syntactic class of failures: missing braces, unquoted strings, trailing commas, wrong types. It does not make the call correct. The model can still choose a nonexistent record, an amount outside policy, or a plausible but wrong interpretation of the request, and those are the failures that reach production.
+
+    Two practical caveats. Support for JSON Schema keywords is a subset, and unsupported keywords are sometimes ignored rather than rejected, so a value can pass the provider's grammar and fail your validator. And strictness is provider- and model-specific: a fallback model may not support the same mode, so the code path must work without it. That is why the answer is to keep server-side validation regardless, treat strict mode as a quality improvement rather than a security control, and test the schema against the provider at startup so a rejected schema fails the deploy instead of the request.
+  tags:
+  - mechanics
+  - strict-mode
+  period: 2024-2026
+  type: representative
+- id: tool-recent-003
+  topic: orchestration
+  difficulty: advanced
+  question: How would you guarantee an agent never charges a customer twice?
+  answer: |-
+    Start from the assumption that the effect will be attempted twice, then make the second attempt harmless. Derive an idempotency key from stable inputs: the conversation or intent slot plus the tool name plus canonicalised arguments. Do not use the model's call ID, which changes on re-issue, or a timestamp, which makes every attempt unique. Store the key with a reservation under a unique constraint, in the same transaction boundary as the effect or with a durable operation record that a worker completes and marks done.
+
+    Then remove the amplification paths: bounded retries in exactly one layer, retries that reuse the key unchanged, a step ledger so a resumed run skips effects already committed, and duplicate-call detection for the model repeating itself. Reconcile anything left in-progress past a threshold rather than blindly retrying. Finally, cap writes per run and require approval above a threshold. The honest framing is at-most-once effect plus at-least-once reads; exactly-once across a network boundary is a story, not a guarantee.
+  tags:
+  - orchestration
+  - idempotency
+  - payments
+  period: 2024-2026
+  type: representative
+- id: tool-recent-004
+  topic: security
+  difficulty: advanced
+  question: An agent reads support tickets and can also send email. What is your design review finding?
+  answer: |-
+    That combination is the classic exfiltration path: untrusted content, private data, and an external communication channel in one context. A ticket body can contain instructions addressed to the model, and the model cannot reliably tell data from instructions. So the finding is architectural, not a prompt-tuning issue.
+
+    The fix is to separate capabilities by trust level. The agent that reads untrusted content gets read-only tools and no egress; the agent that can send email never ingests untrusted text, and sends from templates with server-side recipients. Where both are unavoidable, constrain what crosses the boundary — extract the specific fields you need with deterministic code and pass only those — and require human approval on outbound messages, bound to the resolved recipient rather than the model's summary. Add audit logging on every send, with the source of the content that motivated it. Delimiters and a system-prompt warning help with naive payloads but are not a control; assume a determined payload gets through and design so the blast radius is survivable.
+  tags:
+  - security
+  - prompt-injection
+  - architecture
+  period: 2024-2026
+  type: representative
+- id: tool-recent-005
+  topic: orchestration
+  difficulty: advanced
+  question: How do you bound the cost and latency of an agent loop in production?
+  answer: |-
+    Treat the loop as a budgeted system with four limits enforced in code: steps, wall clock, tokens, and side effects. Steps at eight to twenty depending on task shape; a deadline derived from the user-facing SLA and propagated into every tool call; token budgets per call and cumulative, since each turn resends the whole transcript; and a cap on writes.
+
+    Then attack the multipliers. Keep tool definitions and system prompts stable so provider prefix caching applies, and keep results small — a tool returning 4 KB of HTML costs more than one returning four fields. Trim the tool list, because every definition is billed every turn. Enable parallel calls for independent reads to collapse round trips. Measure time-to-first-token and time-to-first-tool-result separately, and track tokens per resolved request rather than per call. When the budget trips, return a truthful incomplete status instead of truncated prose. If most runs hit the step limit, the architecture is wrong, not the limit.
+  tags:
+  - orchestration
+  - cost
+  - latency
+  period: 2024-2026
+  type: representative
+- id: tool-recent-006
+  topic: structured outputs
+  difficulty: intermediate
+  question: You need to classify 200,000 support emails a day into ten categories with a summary. Tools
+    or structured outputs?
+  answer: |-
+    Structured outputs, without much doubt. The job ends with data: a label and a summary. Nothing is executed, the cardinality is one document per email, and there is no sequence to discover. A response schema gives you one request per email, no loop, no transcript growth, and a result you can validate, store, and evaluate with an equality check against a labelled set.
+
+    Tool calling would work mechanically but buys nothing and costs clarity: a dispatcher handling a tool that is never really executed, logs full of fake invocations, and error paths that confuse a parse failure with an action failure. At that volume, also test a smaller model with a tight enum schema against your current model — classification into ten labels is often within the smaller model's ability, and the cost difference pays for the evaluation work many times over. Keep the schema flat, put the allowed labels in an enum, and validate on the way out.
+  tags:
+  - structured-outputs
+  - classification
+  - cost
+  period: 2024-2026
+  type: representative
+- id: tool-recent-007
+  topic: testing
+  difficulty: advanced
+  question: How do you know whether your tool descriptions are any good?
+  answer: |-
+    By measuring selection, not by reading them. Build a scenario set from real requests, each labelled with the tool that should be chosen and the arguments that matter. Run it several times per scenario against a pinned model version, and report selection accuracy, argument validity, task success, and unnecessary calls. Then look at the confusion matrix: if two tools are swapped for each other, their descriptions overlap and the fix is a negative trigger line or a merge, not a longer prompt.
+
+    The signals that descriptions are failing are specific: high rates of sibling confusion, a validation-failure spike on one field, calls whose results are never used, and repairs that repeat the same error. Track them per tool in production too. Descriptions are code: changing one should trigger the eval, and the diff should be reviewed like a schema change. And keep a human-reviewed sample, because the failure that matters most is often one your rubric was never written to catch.
+  tags:
+  - testing
+  - evals
+  - descriptions
+  period: 2024-2026
+  type: representative
+- id: tool-recent-008
+  topic: data tools
+  difficulty: advanced
+  question: Beyond a read-only database user, how do you harden a text-to-SQL tool?
+  answer: |-
+    Layer independent controls, because each can fail. The role should be read-only at the session level, granted on an explicit list of relations rather than a schema, with dangerous functions revoked. A separate connection pool enforces that the tool cannot reach the writing path. The database enforces a statement timeout and a row cap, not the prompt.
+
+    Then parse the SQL rather than pattern-matching it: reject anything that is not exactly one SELECT, allow-list the relations and columns, block functions like sleep, file readers, and outbound connection helpers, and wrap the query in an outer limited select so an existing LIMIT or UNION cannot bypass the cap. Expose a curated schema view with units and join keys instead of dumping the catalog. Handle results in a typed envelope with a truncation flag, and allow one repair attempt on error. Finally, watch correctness: fan-out joins inflate sums, inner joins drop rows, and timezones shift month boundaries — so define canonical metrics in views and show the SQL for consequential numbers.
+  tags:
+  - data-tools
+  - sql
+  - security
+  period: 2024-2026
+  type: representative
+- id: tool-recent-009
+  topic: streaming
+  difficulty: advanced
+  question: What breaks when you stream tool calls, and how do you handle it?
+  answer: |-
+    Three things. Arguments arrive in fragments, so nothing can be executed until the block closes; the first complete-looking brace usually closes a nested object. Parallel calls interleave in one stream, so buffers must be keyed by index and the call ID kept from the first fragment, or results get misattributed. And fragmentation is arbitrary, including inside escape sequences and multi-byte characters, so decoding fragments as bytes corrupts non-ASCII arguments for some users only.
+
+    Handle it by accumulating per index, parsing nothing until the turn ends, then validating and executing. Design the client protocol with typed events, a sequence number, and a run ID so a reconnect can replay from the last event rather than render a half-missing tool result. Send heartbeats during long tools so proxies do not close the connection. For long-running tools, return an operation handle and stream progress on a separate channel instead of holding the model turn open, and make cancellation propagate to real work while recording what was already committed.
+  tags:
+  - streaming
+  - protocol
+  period: 2024-2026
+  type: representative
+- id: tool-recent-010
+  topic: tool design
+  difficulty: advanced
+  question: Your agent takes six round trips to answer a simple question. How do you fix it?
+  answer: |-
+    Diagnose before redesigning. Log the trajectories and look at what each step contributes: if the same sequence appears in most runs, the problem is granularity — the tools mirror internal service methods, and one user-meaningful action is spread across four calls. If the model is calling both of two similar tools, the problem is overlapping descriptions. If it re-fetches the same record, the problem is that results are being discarded or truncated.
+
+    The usual fix is to compose: one tool that returns the customer with their recent orders in a single bounded result, one write tool per user-meaningful action. That trades a little flexibility for latency and reliability, and it is almost always the right trade for conversational use. Then re-measure steps per request and p95 latency. If the sequence is still fixed after merging, the honest answer is that you have a workflow, and a deterministic path with a parameter extraction step will beat the loop on every axis.
+  tags:
+  - tool-design
+  - granularity
+  - latency
+  period: 2024-2026
+  type: representative
+- id: tool-recent-011
+  topic: ecosystem
+  difficulty: advanced
+  question: What changes when tools are exposed through MCP rather than as local functions?
+  answer: |-
+    The mechanics of discovery and invocation change; the design and security questions do not. MCP standardises how a client lists a server's tools, reads their name, description, and input schema, and calls them over a defined transport, so one server can serve several clients and hosts. That is a packaging and distribution win: you stop re-implementing the same integrations per framework.
+
+    But an MCP server runs with its own process privileges and its own credentials, so the trust boundary moves outward rather than disappearing. The model's arguments are still untrusted input, the server's output is still untrusted content coming back into the context, and object-level authorisation still has to be enforced somewhere. Two practical consequences: audit which servers a client connects to as you would audit dependencies, because adding a server adds capabilities to every session that mounts it; and keep descriptions and schemas under your control where the server is third-party, since their wording now steers your agent's routing.
+  tags:
+  - mcp
+  - ecosystem
+  - security
+  period: 2024-2026
+  type: representative
+- id: tool-recent-012
+  topic: architecture
+  difficulty: advanced
+  question: When would you argue against model-driven tool calling in a design review?
+  answer: |-
+    When the mapping from request to action is deterministic, the action space is small, and errors are expensive. If most requests follow one route, you have a workflow: a classifier or parameter extractor plus ordinary code is cheaper, faster, testable, and auditable, and it does not need an eval suite to tell you whether it works.
+
+    The specific objections worth raising are cost per request, p95 latency from multiple round trips, variance that makes bugs unreproducible, and a security surface that grows with every tool. Ask for the modal trajectory: if eighty percent of runs take the same three calls, the loop is expensive routing. Ask what a wrong action costs, because that decides whether approval, allow-lists, and audit are mandatory. And ask for a non-agent baseline, since without one nobody can show the agent is better. Keep the agent where the sequence genuinely depends on intermediate findings, and write the rest down as code.
+  tags:
+  - architecture
+  - trade-offs
+  period: 2024-2026
+  type: representative

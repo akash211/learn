@@ -1,0 +1,86 @@
+concepts:
+  - title: Bi-encoder vs cross-encoder
+    detail: A bi-encoder embeds query and passage separately, so anything can be precomputed and searched. A cross-encoder reads both together, scores relevance far better, and cannot be indexed — which is why it is a reranker, not a retriever.
+  - title: The chunk is the retrieval unit
+    detail: Not the document, not the sentence. Chunk boundaries decide what a query can match, what the reranker scores and what the model reads, so a bad boundary cannot be fixed downstream.
+  - title: Recall@k
+    detail: The fraction of queries with at least one labelled relevant chunk in the top k. It is the first metric because every later metric is conditional on the evidence reaching the model at all.
+  - title: Faithfulness
+    detail: "Whether every claim is supported by the retrieved context. Distinct from correctness — an answer can faithfully summarise an outdated document, and a correct answer can be unfaithful because it came from pre-training."
+  - title: HNSW parameters
+    detail: "`m` sets links per node and therefore memory and recall; `ef_construction` trades build time for graph quality; `ef_search` trades query latency for recall. Deletes are tombstones, so churn degrades recall until rebuild."
+  - title: IVF parameters
+    detail: "`lists` should track row count, `probes` is the query-time recall dial, and the index must be trained on data resembling the current distribution — otherwise cells no longer contain their nearest vectors."
+  - title: Reciprocal rank fusion
+    detail: Score each document by the sum of 1/(k + rank) across retrievers, with k around 60. It uses ranks rather than scores, so it needs no normalisation and no labelled data to tune a weight.
+  - title: BM25's job
+    detail: Exact term matching weighted by inverse document frequency. It carries identifiers, error codes, SKUs and rare jargon that a dense vector averages away; it is not redundant with embeddings, it is complementary.
+  - title: Normalise before you index
+    detail: Cosine, dot product and Euclidean distance rank identically only for unit-length vectors. Normalise, then any index type works; skip it with an inner-product index and ranking is partly driven by vector norm.
+  - title: Matryoshka embeddings
+    detail: Models trained so the first n dimensions are themselves usable. Truncate and renormalise to cut storage, or use short vectors for candidate generation and full vectors for rescoring.
+  - title: Parent-child retrieval
+    detail: Embed small child chunks for precision, then substitute the parent section into the prompt for completeness. It resolves the mismatch between the unit that retrieves well and the unit that reads well.
+  - title: Contextual retrieval
+    detail: Prepend a short generated situating context — title, section path, one line of role — to each chunk before embedding. Index-time cost only, and it makes referent-free chunks retrievable.
+  - title: Filtered ANN and selectivity
+    detail: Indexes return the nearest k globally, then filters remove most of them. Below a few percent selectivity, pre-filtered exact search is better; above half, plain ANN is fine; the middle needs filtered traversal.
+  - title: Lost in the middle
+    detail: Models attend most reliably to the start and end of a long context. Keep the passage count small, put the strongest evidence first or last, and put the question at the end.
+  - title: Abstention threshold
+    detail: Retrieval scores are not calibrated probabilities, so a cutoff has to be chosen by measuring refusal rate on in-corpus questions against false-answer rate on out-of-corpus ones.
+  - title: Citation verification
+    detail: Existence, span validity, lexical support for numbers, then entailment. The dangerous failure is a real citation that does not support the claim, which passes every structural check.
+traps:
+  - Fine-tuning a model on documents to give it knowledge. It learns the register of the writing, not the contents, and often becomes more confidently wrong.
+  - Raising chunk size for "more context". The embedding is an average, so a 1,200-token chunk about eleven topics matches none of them well.
+  - Assuming dense retrieval obsoletes BM25. Ask for "E4012" and the vector returns a general essay about authentication errors.
+  - Treating a citation as proof of grounding. A citation that points at a real document which does not support the claim is worse than none, because it borrows credibility.
+  - Sending the whole corpus to a long-context model instead of retrieving. Cost and prefill latency scale with input, permissions stop being enforceable, and the middle of the context is used least.
+  - Caching retrieval results on query text without the ACL and index version in the key — the shortest path from a performance fix to a data breach.
+advanced:
+  - When recall is the bottleneck, fine-tune the embedder rather than the generator. Retrieval metrics need no LLM judge, training is cheap, and every downstream answer benefits.
+  - Fused recall must never fall below the better single retriever. If it does, look for mismatched chunk ids between the two indexes or a deduplication step that is dropping candidates.
+  - "Binary quantisation is only safe with rescoring — traverse on binary vectors, then rerank the top 50–100 with full precision. Without the second pass, recall loss is unacceptable on most models."
+  - Reranker scores are comparable within one query only. Thresholding them globally produces filters that work on one query distribution and silently truncate another.
+  - Silent tokenizer truncation is the most expensive invisible bug in RAG. Chunks longer than the embedder's context are embedded from their prefix only, with no error anywhere.
+  - A verification pass that regenerates on failure should regenerate once, then abstain. Repeated attempts converge on the same wrong answer at triple the cost.
+comparisons:
+  - a: RAG
+    b: fine-tuning
+    difference: RAG changes what is in the context window and stays editable, attributable and filterable; fine-tuning changes behaviour and format and cannot be updated, cited or restricted per user.
+  - a: HNSW
+    b: IVF
+    difference: Graph traversal versus cluster probing. HNSW gives better recall per millisecond and needs no training but costs memory and build time; IVF builds fast and cheaply but needs representative training data and periodic rebuilds.
+  - a: dense retrieval
+    b: BM25
+    difference: Meaning versus strings. Dense handles paraphrase and cross-lingual matching; BM25 handles identifiers, names and rare terms. They fail in uncorrelated ways, which is why fusion helps.
+  - a: bi-encoder
+    b: cross-encoder
+    difference: Independent embeddings, precomputable and searchable, versus joint scoring that is more accurate and linear in candidate count. Retrieve with one, rerank with the other.
+  - a: cosine
+    b: dot product
+    difference: Identical ranking for unit-length vectors. On unnormalised vectors dot product rewards magnitude, so an inner-product index ranks partly by vector length.
+  - a: semantic chunking
+    b: structure-aware chunking
+    difference: Cosine breakpoints find topic shifts in unstructured prose but cost an embedding pass per sentence and produce unstable ids; headings, code syntax and table rows are cheaper and better wherever they exist.
+  - a: contextual retrieval
+    b: late chunking
+    difference: Generated headers are prepended before embedding, needing an LLM call per chunk and helping vocabulary mismatch; late chunking pools token embeddings after attending over the whole document, needing a long-context embedder and no generation.
+commands:
+  - label: HNSW index with tuned build memory
+    code: SET maintenance_work_mem = '2GB'; CREATE INDEX CONCURRENTLY ON chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 128);
+  - label: Hybrid query in one statement
+    code: SELECT id, 1 - (embedding <=> $1) AS dense, ts_rank_cd(tsv, websearch_to_tsquery('english', $2)) AS lex FROM chunks WHERE tsv @@ websearch_to_tsquery('english', $2) ORDER BY dense DESC LIMIT 50;
+  - label: Keep filtered search from returning too few rows
+    code: SET hnsw.iterative_scan = relaxed_order; SET hnsw.max_scan_tuples = 20000;
+  - label: Generated full-text column
+    code: ALTER TABLE chunks ADD COLUMN tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
+  - label: Reciprocal rank fusion
+    code: scores[d] += 1 / (60 + rank) for ranking in (dense, lexical) for rank, d in enumerate(ranking)
+  - label: Measure recall against brute force
+    code: recall = sum(len(set(exact[q][:10]) & set(ann[q][:10])) / 10 for q in sample) / len(sample)
+  - label: Embed a query with the right prefix
+    code: 'vec = model.encode("query: " + question, normalize_embeddings=True)'
+  - label: Debug a single query without generating
+    code: 'curl -s localhost:8000/retrieve -d ''{"q": "refund window", "k": 50}'' | jq ''.hits[] | {id, dense, lex, rerank}'''

@@ -1,0 +1,143 @@
+- id: tool-scn-001
+  title: Customers are being refunded twice after upstream timeouts
+  technologies:
+  - tool-calling
+  - llm-agents
+  - rest-apis
+  difficulty: advanced
+  prompt: 'A support agent can look up orders and issue refunds through two tools. Since launch, roughly
+    0.4% of refund conversations produce a duplicate: the customer receives two refunds for one complaint.
+    The payments API occasionally takes longer than the tool''s 10-second timeout, and the agent''s retry
+    policy is "retry twice on error". Support staff also sometimes press "run again" when a conversation
+    stalls. Finance found the duplicates by reconciling statements, not from logs.'
+  approach: |-
+    Establish the failure paths first: list every way the effect can be attempted twice — ambiguous timeout after the upstream committed, dispatcher retry, model re-issue after a retryable error, conversation replay, staff re-run, and duplicate parallel calls. Then show that the fix is a server-side idempotency contract, not a prompt.
+
+    Concretely: derive a key from conversation or intent slot plus tool name plus canonicalised arguments (sorted keys, normalised numbers), never from the model's call ID or a timestamp; reserve it under a unique constraint before the effect, store the outcome, and replay the stored response on a repeat. Set the tool timeout below the upstream's expected worst case but treat a timeout as unknown, not failed. Restrict retries to one layer, reuse the key unchanged, and mark non-idempotent tools as non-retryable. Add a step ledger so a resumed run skips committed effects, cap writes per run, and reconcile in-progress records older than a threshold.
+
+    Verification: a test tool that commits and then drops the response, two identical calls 5 ms apart, same key with different payload must fail loudly.
+  red_flags:
+  - Adding 'do not retry' to the system prompt and calling it fixed.
+  - Deduplicating in application memory, which fails across replicas and restarts.
+  - Keying idempotency on the model's tool_call_id, which differs on every re-issue.
+  - A SELECT-then-INSERT dedupe check with no unique constraint.
+  - Treating a client timeout as proof the refund did not happen.
+- id: tool-scn-002
+  title: The agent refunded the wrong customer
+  technologies:
+  - tool-calling
+  - llm-agents
+  difficulty: advanced
+  prompt: A billing assistant resolves customers by name because that is what users provide. Two customers
+    share a name, and one has a similar email. In an incident, the agent looked up "Jordan Smith", received
+    two matches, picked the first, and issued a refund against the wrong account. The tool's schema accepts
+    a free-text `customer` field, and its description says it "finds the customer". The engineer's proposed
+    fix is a stronger system-prompt instruction to always confirm the customer first.
+  approach: |-
+    Name the root cause as an interface problem, not a prompting problem: a write path is being selected by an ambiguous natural-language identifier, and the tool hides the ambiguity by returning a best guess.
+
+    Redesign the path into resolve-then-act. A read tool takes structured search fields (email, phone, order ID) and returns a bounded list of candidates with IDs and masked identifiers, plus an explicit `ambiguous: true` when more than one matches. The write tool requires a customer ID with a pattern constraint and has no name parameter at all. The agent must show the resolved human-readable identity to the user and obtain confirmation, and the approval is bound to a hash of the resolved call, not to the model's summary.
+
+    Add semantic validation in the handler: the account must exist, belong to the tenant, and be in a refundable state. Log the resolution step so an auditor can see which candidate was chosen and on what evidence. Test with two identical names, a renamed customer, and a name that matches nothing.
+  red_flags:
+  - Strengthening the prompt instead of removing the ambiguous parameter.
+  - Returning the first match and relying on the model to notice the count was 2.
+  - Confirmation dialogs that render the model's prose instead of the resolved record.
+  - Accepting a name in the write tool 'for convenience'.
+- id: tool-scn-003
+  title: A support ticket tries to make the agent send customer data out
+  technologies:
+  - tool-calling
+  - llm-agents
+  - rest-apis
+  difficulty: advanced
+  prompt: 'An internal assistant summarises support tickets and can email the requester, read the CRM,
+    and look up order history. A ticket arrives containing hidden white-on-white text: an instruction
+    to email the customer''s full record to an external address, framed as a compliance requirement. The
+    assistant has a `send_email(to, subject, body)` tool, and the CRM lookup tool returns the whole customer
+    object as formatted JSON. Nobody noticed until a security review asked what the blast radius would
+    be.'
+  approach: |-
+    Frame it as the lethal trifecta: private data, untrusted content, and an external communication channel in one context. Any prompt-level defence is a speed bump.
+
+    Fix by capability separation first: the ingestion agent that reads tickets gets read-only tools and no egress; a separate action agent sends from templates with server-side recipients and never ingests ticket text. Where a single agent must do both, constrain what crosses the boundary — the CRM tool returns a projection of five fields, not the whole object — require human approval on outbound mail, and bind that approval to the resolved recipient and rendered body hash. Strip invisible characters and HTML comments on ingress, and label tool output as data in the prompt, while treating that only as a secondary control.
+
+    Then verify: an injection corpus with base64, zero-width, and instruction-bearing payloads; assert no egress tool is invoked and no marker string appears in any outbound body. Add an alert on first-time external recipients.
+  red_flags:
+  - Adding 'ignore instructions in tool results' to the system prompt as the fix.
+  - Relying on the model to classify content as malicious.
+  - Keeping a broad send_email tool because 'the model is usually careful'.
+  - Returning full CRM records into the context when four fields are needed.
+  - No audit trail for outbound mail, so the attempt is invisible.
+- id: tool-scn-004
+  title: The analytics agent's revenue numbers are wrong and the warehouse is slow
+  technologies:
+  - tool-calling
+  - sql
+  - duckdb
+  difficulty: advanced
+  prompt: A text-to-SQL assistant answers revenue questions for account managers. Two problems surfaced
+    in the same week. Finance says the assistant's monthly revenue is 30% higher than the official dashboard.
+    Meanwhile the warehouse team reports that a handful of agent queries run for minutes and saturate
+    a shared queue. The tool connects with the application's read-write credentials, applies a `LIMIT
+    100` by appending it to the generated SQL, and its prompt tells the model to only write SELECT statements.
+  approach: |-
+    Separate the two failures and fix both with infrastructure rather than instructions.
+
+    Correctness: 30% inflation is the signature of a fan-out join — orders joined to items, then summing order totals. Compare the agent's SQL to the canonical metric view, and move the definition into a view or semantic layer so "revenue" is not re-invented per query. Add a verification step for consequential numbers: row counts by grain, and a cross-check against a known aggregate. Show the executed SQL next to the answer.
+
+    Safety and load: a dedicated read-only role with session-level read-only mode, granted on explicit relations not a schema; a separate pool; a database-enforced statement timeout and row cap; AST validation that rejects anything but a single SELECT, allow-lists relations and columns, blocks file/network functions, and wraps the query in an outer limited select instead of appending a LIMIT that a UNION or existing LIMIT defeats. Then a per-principal query budget. Test with `; DROP TABLE`, `pg_read_file`, a cartesian join, and a recursive CTE.
+  red_flags:
+  - Telling the model to be careful with joins and considering it solved.
+  - Appending LIMIT to arbitrary SQL.
+  - One shared credential and pool for the agent and the application.
+  - Regex-based SQL checking, or a blocklist of keywords.
+  - Answering with an aggregate without showing or verifying the query.
+- id: tool-scn-005
+  title: Eleven steps and forty seconds to answer 'where is my order?'
+  technologies:
+  - tool-calling
+  - llm-agents
+  - fastapi
+  difficulty: advanced
+  prompt: 'A customer-facing assistant has fourteen tools: get_customer, get_customer_orders, get_order,
+    get_order_items, get_shipment, get_tracking, get_carrier_status, among others. A typical "where is
+    my order?" request takes nine to eleven model calls and about forty seconds at p95, and costs several
+    times the original estimate. The team''s plan is to add a router model that picks the right tools
+    up front, and to raise the step budget because some runs are hitting it.'
+  approach: |-
+    Reframe: the sequence is fixed, so this is a workflow with a granularity problem, not a routing problem. Pull the trajectories and show that the modal path is identical across most requests — that is the evidence.
+
+    Merge read tools along user-meaningful boundaries: one `get_order_status(order_id)` that returns order, items, shipment, and latest tracking event in a single bounded payload with stable keys. Keep a separate detail tool for line items if the payload would grow. Then the common path is one call, and the model uses the second only when asked about specifics. Cut the tool list to what the product actually supports, since every definition is billed on every turn.
+
+    Keep the step budget as a guard rather than raising it; a run that needs eleven steps signals a design problem. Measure steps per resolved request, p95, time-to-first-tool-result, and tokens per conversation before and after. If a genuinely open-ended request exists, route it to a small agent with three tools rather than giving every request fourteen.
+  red_flags:
+  - Adding a router model on top of an already over-fragmented toolset.
+  - Raising the step budget so the slow path completes.
+  - Merging everything into one god-tool with a free-form payload.
+  - Optimising prompts before looking at the trajectory distribution.
+  - No before/after measurement, so the fix is judged by anecdote.
+- id: tool-scn-006
+  title: A model upgrade silently changed which tools the agent picks
+  technologies:
+  - tool-calling
+  - llm-agents
+  - pytest
+  difficulty: advanced
+  prompt: 'After switching to a newer model version, a back-office agent starts routing "cancel my subscription"
+    requests to `pause_subscription` instead of `cancel_subscription`. Nothing failed loudly: both tools
+    returned success, the conversations looked reasonable, and the error was found a week later in churn
+    reporting. The team has unit tests for each tool handler and a smoke test that asserts the agent replies
+    without an exception. They now want to know how to catch this class of regression before it ships.'
+  approach: |-
+    Explain why the existing tests could not catch it: they test handlers and liveness, not tool selection. Selection is a model behaviour, so it needs an eval over scenarios with expected outcomes and trajectories.
+
+    Build a scenario set from real requests, labelled with the intended action and the arguments that matter (which plan, which account). Assert on properties, not prose: the correct tool was called, no tool outside an allow-list was used, the effect targeted the right object, and the run stayed within N steps. Run each scenario several times — a single pass is not evidence — and pin the model version in the config so a provider-side change appears as a diff.
+
+    Then process: gate deploys on the eval, review description changes like schema changes, and add a canary comparing routing distributions in production. Make the two tools mutually exclusive at the schema level (irreversible cancel requires an explicit confirmation flag and a reason enum) so a misroute is at least visible and approvable, and require approval for cancellation regardless of which tool was chosen.
+  red_flags:
+  - Adding a unit test that asserts the reply contains 'cancelled'.
+  - Assuming a newer model version is strictly better and shipping without an eval.
+  - Reporting one pass per scenario as an accuracy percentage.
+  - Relying on logs of handler errors, which never fire when both paths succeed.
+  - Fixing it only in the prompt, with no regression scenario kept.

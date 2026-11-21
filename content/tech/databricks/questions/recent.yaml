@@ -1,0 +1,293 @@
+- id: dbx-recent-001
+  topic: open source unity catalog
+  difficulty: advanced
+  question: Databricks open-sourced Unity Catalog. What does that change for a team evaluating lock-in, and what does it not change?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Databricks announced in June 2024 that it was open-sourcing Unity Catalog and contributing it
+    to the LF AI & Data Foundation. The intent is a vendor-neutral catalog and governance layer
+    that other engines can implement, rather than a metadata service that only exists inside one
+    platform.
+
+    What changes is the exit option. A team can argue that its catalog model, grants and lineage
+    metadata have an open specification behind them, and that a future engine could read the same
+    objects. What does not change is the operated service: the hosted metastore, the UI, the
+    integration with Databricks compute, and the account-level identity model are still a managed
+    product. Open source is not the same as a drop-in self-hosted replacement, and feature coverage
+    across implementers varies by release.
+
+    The practical evaluation is to separate the data — Delta or Iceberg files plus a catalog
+    protocol — from the platform's conveniences. Ask which features your pipelines depend on, and
+    whether those are in the open specification or only in the managed runtime.
+  tags: [unity-catalog, open-source, lock-in]
+
+- id: dbx-recent-002
+  topic: lakebase
+  difficulty: advanced
+  question: Why would a lakehouse platform ship a managed Postgres, and when is Lakebase the wrong choice?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Databricks announced Lakebase in June 2025 as a managed, serverless Postgres aimed at the
+    operational side of data applications: low-latency reads and writes for an app or an agent,
+    rather than analytical scans. It entered general availability in early 2026. The motivation is
+    that a lakehouse is excellent at storing and training on data and poor at serving a few
+    hundred row-level lookups per second with transactional guarantees.
+
+    It is the wrong choice when the workload is analytical: large aggregations, wide scans, bulk
+    history. That is what Delta tables and SQL warehouses are for, and Postgres will be slower and
+    more expensive at it. It is also a poor fit if you need a database engine's full operational
+    maturity today — extensions, replication topology, tuning knobs — because a managed service
+    trades control for operations.
+
+    The interesting architectural question is the boundary: which tables belong in the operational
+    store, which in the lakehouse, and how changes propagate between them. Treating Lakebase as a
+    cache in front of gold tables is a sound pattern; treating it as a second system of record is
+    how teams create reconciliation work.
+  tags: [lakebase, postgres, oltp]
+
+- id: dbx-recent-003
+  topic: declarative pipelines
+  difficulty: intermediate
+  question: Delta Live Tables has been renamed and re-scoped more than once. What is the current picture, and why does the naming matter?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    The product formerly called Delta Live Tables became **Lakeflow pipelines** (also described as
+    Lakeflow Declarative Pipelines), part of the broader Lakeflow family alongside ingestion and
+    orchestration. In late 2025 the declarative pipeline engine was contributed to Apache Spark as
+    **Spark Declarative Pipelines**, first released in Spark 4.1. The concepts survived the
+    renames: you declare streaming tables and materialized views, the platform builds the DAG,
+    manages checkpoints and refresh, and expectations record data-quality rules.
+
+    The naming matters for two reasons. First, documentation, job task types and API names lag the
+    marketing name, so a search for "DLT" still finds current material. Second, the open-sourcing
+    changes the portability argument: a pipeline defined declaratively has a path outside the
+    managed runtime, whereas a notebook full of imperative `MERGE` logic does not.
+
+    Before adopting, check which task type your runtime exposes and whether the pipeline's features
+    — expectations, SCD2, real-time mode — are supported on the channel you deploy. The label on
+    the product is less important than the semantics you depend on.
+  tags: [lakeflow, dlt, declarative-pipelines]
+
+- id: dbx-recent-004
+  topic: serverless compute
+  difficulty: intermediate
+  question: Serverless compute is now generally available for notebooks, jobs and pipelines. What does that make easier, and what still pushes a team to classic clusters?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Serverless compute for notebooks, workflows and declarative pipelines reached general
+    availability in mid-2024 on Azure and AWS and in early 2025 on Google Cloud. It removes cluster
+    management from the common case: no instance types, no init scripts, no idle cluster, and
+    startup measured in seconds because there is no VM to provision.
+
+    That makes it the right default for scheduled jobs, ad-hoc notebooks and pipelines whose
+    runtime is ordinary Spark or SQL. It also simplifies cost attribution at the workload level,
+    although serverless usage needs its own tagging mechanism — usage policies for serverless
+    workloads have been in preview.
+
+    Teams still choose classic clusters when they need control the serverless runtime does not
+    offer: custom JVM configuration, cluster-scoped libraries or init scripts, GPU families, RDD
+    code, or a private network path to an on-premise system. Debugging also differs, since you get
+    the run page and query profile rather than a browsable Spark UI.
+
+    The decision is therefore per workload, not per organisation. A sensible estate runs most
+    scheduled work on serverless and keeps classic clusters for the exceptions, with a policy that
+    makes the exception explicit.
+  tags: [serverless, compute, ga]
+
+- id: dbx-recent-005
+  topic: liquid clustering
+  difficulty: intermediate
+  question: Liquid clustering has been GA since 2024 and automatic clustering arrived in 2025. How would you migrate a partitioned table, and what would you check first?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Liquid clustering became generally available in May 2024, and automatic liquid clustering —
+    `CLUSTER BY AUTO`, where predictive optimization chooses keys from workload — followed in
+    March 2025. Together they change the default advice: declare clustering keys as metadata
+    rather than partitioning the table up front, and let `OPTIMIZE` maintain the layout
+    incrementally.
+
+    Before migrating, check what the partitioning is actually doing. If it exists only to prune a
+    date filter, clustering on that date plus the main entity key is likely better. If it exists
+    for partition-level operations — `replaceWhere` backfills, dropping old data by partition,
+    regulatory deletion — those operations are a reason to keep partitioning, because liquid
+    clustering does not give you partition-level DDL.
+
+    The migration itself is a rewrite: create the new table with `CLUSTER BY`, copy or `DEEP CLONE`
+    the data, run `OPTIMIZE`, compare `DESCRIBE DETAIL` file counts and query profiles, then swap
+    consumers. Do it on one representative table first; the payoff depends on selective predicates
+    on the clustering columns, and a table always scanned in full will not improve.
+  tags: [liquid-clustering, partitioning, migration]
+
+- id: dbx-recent-006
+  topic: variant type
+  difficulty: advanced
+  question: Delta Lake 4.0 introduced VARIANT and an open semi-structured standard. What problem does it solve, and what should a team verify before relying on it?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Delta Lake 4.0, released in 2025, included the `VARIANT` type for semi-structured data: JSON-
+    like payloads stored in a binary, columnar-friendly encoding that can be queried without
+    declaring a schema per field. In October 2025 Databricks and partners proposed it as an open
+    standard across Parquet, Delta and Iceberg.
+
+    The problem it solves is the bronze-layer schema treadmill. Today a webhook or event payload
+    either gets flattened into dozens of nullable columns that change every quarter, or is stored
+    as a JSON string and parsed on every query. `VARIANT` keeps the payload queryable while
+    avoiding both, and pairs naturally with Auto Loader's rescued-data handling.
+
+    Before relying on it, verify three things. Reader and writer support across every engine that
+    touches the table — a protocol feature is a compatibility contract, not just a column type.
+    Query performance for the access patterns you have, since extracting deeply nested fields is
+    not free. And governance: a schemaless column can hide PII from column-level lineage and
+    masks, so the payload needs its own classification and access policy.
+  tags: [variant, delta-4, semi-structured]
+
+- id: dbx-recent-007
+  topic: predictive optimization
+  difficulty: intermediate
+  question: Predictive optimization is on by default for many Unity Catalog managed tables. What does it actually run, and where can it fall short?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Predictive optimization became generally available in 2024. For Unity Catalog managed tables it
+    schedules `OPTIMIZE`, `VACUUM` and `ANALYZE` based on the table's observed workload, removing
+    the cron jobs most teams used to hand-maintain. It is enabled at the account, catalog or schema
+    level and applies to managed Delta and, in current releases, managed Iceberg tables.
+
+    It falls short in three places. External tables are out of scope, so a table registered at a
+    fixed path still needs your own maintenance. It cannot infer a layout you never declared: it
+    will compact files, but it will not know that dashboards filter on `customer_id` if the
+    clustering key is `region`. And its operations cost compute, which appears in the bill — an
+    aggressive maintenance policy on a rarely read table is spend without benefit.
+
+    The right posture is to enable it broadly, then verify with the operations history and the
+    table's file statistics that it is doing something useful, and exclude the tables where it is
+    not. "Automatic" is a default, not an abdication; someone still owns the table's layout.
+  tags: [predictive-optimization, maintenance, managed-tables]
+
+- id: dbx-recent-008
+  topic: metric views
+  difficulty: intermediate
+  question: What are Unity Catalog metric views, and what governance problem do they solve?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Metric views are Unity Catalog objects that define business metrics — measures, dimensions,
+    joins, filters — in a governed definition rather than in each dashboard's SQL. They are part of
+    Unity Catalog semantics, defined in YAML or through Catalog Explorer, and queried like a view.
+
+    The problem is metric drift. "Active customer" defined in four dashboards becomes four numbers
+    in a steering meeting, and nobody can say which is right. A metric view makes the definition a
+    single versioned object with an owner, grants and lineage, so a change is reviewed once and
+    every consumer sees the same result.
+
+    The trade-offs are real. It is another layer to learn, its SQL surface is intentionally
+    narrower than hand-written queries, and BI tool support for the object type varies, so some
+    consumers will still query a materialized table built from it. Adoption also depends on
+    organisational discipline: a metric view that anyone can fork reintroduces the problem it was
+    meant to solve. Start with the three metrics that have caused the most arguments, not with an
+    enterprise-wide catalogue.
+  tags: [metric-views, semantics, bi]
+
+- id: dbx-recent-009
+  topic: databricks apps
+  difficulty: intermediate
+  question: Databricks Apps reached GA in 2025. When is it the right place to host an internal application, and when is it not?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Databricks Apps, generally available in June 2025, hosts internal applications — Streamlit,
+    Dash, FastAPI, React front ends — inside the workspace, on serverless infrastructure, with
+    single sign-on and Unity Catalog permissions available to the app. Deployment is from source,
+    and the app runs under an identity you configure rather than a shared personal token.
+
+    It is the right place for the long tail of internal tools that read governed tables: a review
+    queue, an operations dashboard with write actions, a small approval workflow, a model demo. The
+    alternative is usually a VM or container platform where the team must rebuild SSO, secrets and
+    data access, and where the app slowly accumulates a service account with broad grants.
+
+    It is not the right place for public, high-scale customer-facing services, for workloads that
+    need a persistent background worker or a specialised runtime, or for an app whose latency
+    budget cannot tolerate a serverless cold path. Those belong on the cloud's application platform.
+
+    The governance win is the point: the app is another principal with grants, and its data access
+    appears in the same lineage and audit trail as everything else.
+  tags: [databricks-apps, internal-tools, governance]
+
+- id: dbx-recent-010
+  topic: agent platform
+  difficulty: advanced
+  question: Agent Bricks and the Mosaic AI stack are Databricks' answer to enterprise agents. What is the architectural claim, and how would you evaluate it sceptically?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Agent Bricks, launched at Data + AI Summit 2025, packages agent construction around three
+    claims: agents grounded in governed enterprise data, automatic optimisation of prompts, models
+    and retrieval against evaluation sets, and governance of the tools and data an agent may use.
+    It sits on the Mosaic AI stack — model serving, vector search, evaluation and Unity Catalog.
+
+    The architectural claim is that the hard part of an enterprise agent is not the prompt but the
+    context and the guardrails: which tables, documents and functions the agent can reach, under
+    whose permissions, with what evaluation evidence. That is a reasonable claim, and it is where
+    the platform's existing strengths — catalog, lineage, grants — actually apply.
+
+    Evaluate it sceptically on three axes. Does the evaluation harness measure the business task,
+    or a proxy that a demo can pass? Are the agent's tool calls auditable and revocable per user,
+    or does the agent run as an over-privileged service principal? And what is the cost per
+    successful task, including retrieval and retries? A framework that answers those questions is
+    useful; one that only shortens the demo is not.
+  tags: [agents, agent-bricks, governance]
+
+- id: dbx-recent-011
+  topic: real-time streaming
+  difficulty: advanced
+  question: Real-time mode promises millisecond latency for Structured Streaming on Databricks. What does it change, and which workloads should stay on micro-batch?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Real-time mode replaces micro-batch scheduling with long-running tasks that process data as it
+    arrives, cutting latency from seconds to milliseconds. It is available for Structured Streaming
+    queries and for managed pipelines, and it is the right tool for serving use cases — fraud
+    checks, personalisation, operational alerting — where a two-second batch is too slow.
+
+    It is not a free upgrade. Real-time mode supports a subset of operators: arbitrary stateful
+    operations are not supported, and some sources and sinks have specific requirements — Kinesis,
+    for example, is recommended with enhanced fan-out. Running many real-time flows on one cluster
+    also creates competition for task slots, which raises latency unless the compute is sized for
+    it. The cost model changes too: the cluster runs continuously rather than in bursts.
+
+    Most pipelines should stay on `availableNow` micro-batch. It processes the backlog and stops,
+    which is cheaper, easier to reason about and perfectly adequate for data that is consumed by a
+    dashboard or a nightly model. Choose real-time only when a downstream action has a latency
+    requirement you can state in milliseconds, and measure the end-to-end path, not just the
+    streaming query.
+  tags: [real-time-mode, streaming, latency]
+
+- id: dbx-recent-012
+  topic: serverless cost attribution
+  difficulty: intermediate
+  question: Serverless compute removes the cluster, and with it the usual cost-attribution handle. How do you attribute serverless spend to teams?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    The billing system table is the foundation: `system.billing.usage` records usage by date, SKU,
+    workspace and custom tags, and can be joined to a price list to convert DBUs into currency.
+    For classic compute, cluster tags carry the attribution. For serverless, there is no cluster to
+    tag, which is exactly the gap that appeared as serverless became the default.
+
+    Databricks has been closing it with serverless usage policies — tag-like policies attached to
+    serverless workloads, in public preview — and with job- and pipeline-level tags that propagate
+    into billing records. The design pattern is the same as for clusters: require a team and
+    project tag at the policy or job level, and reconcile monthly against the usage table rather
+    than trusting that the tag was applied.
+
+    The other half is unit economics. Serverless makes it easy to run many small workloads whose
+    individual cost is invisible; a per-job cost view, computed from usage rows joined to job run
+    history, is what turns "serverless is expensive" into "these three pipelines are expensive".
+    Without that, cost debates stay at the level of the invoice.
+  tags: [serverless, cost-attribution, finops]

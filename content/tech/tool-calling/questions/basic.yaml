@@ -1,0 +1,266 @@
+- id: tool-basic-001
+  topic: mechanics
+  difficulty: beginner
+  question: What is tool calling, and who actually executes the tool?
+  answer: |-
+    Tool calling is an interface where the application declares named operations with typed arguments, and the model replies with a structured request instead of prose. The model emits a tool name and an argument object; it does not run anything. Your code receives that request, validates the arguments against the schema and against reality, checks that the caller is allowed to perform the operation, executes it against the real system, and returns a result. The model then reads that result on the next turn and either answers or requests another call.
+
+    This split matters: the model is an untrusted planner and the application is the executor that holds credentials, enforces policy, and records what happened. Every security property of a tool-using system follows from that division. If you ever find that the model appears to have authority of its own, it is because your executor handed it over — for example by exposing a shell or a general SQL tool with a privileged credential.
+  tags:
+  - mechanics
+  - architecture
+- id: tool-basic-002
+  topic: mechanics
+  difficulty: beginner
+  question: What does the model actually see when you send it a tool definition?
+  answer: |-
+    It sees three things per tool: the name, the description, and the JSON Schema for the arguments, all rendered as text in the request. There is no hidden registry and no memory of tools from previous requests — the definitions are part of the prompt and are billed as input tokens on every turn.
+
+    That is why the description is the real interface: the model cannot read your source, ask a colleague, or infer that an amount field is in cents. It decides whether to call a tool from the description, and fills the arguments from the schema's types, enums, and per-property descriptions. Names matter too, because selection is a classification over that text, and two tools with overlapping descriptions produce unstable routing. Removing the tools from the request means the model has nothing to call; it will answer in prose or invent a plausible-sounding action in text, which is worse than failing.
+  tags:
+  - mechanics
+  - prompting
+- id: tool-basic-003
+  topic: mechanics
+  difficulty: beginner
+  question: Why do tools take JSON Schema arguments instead of a free-text instruction?
+  answer: |-
+    Because a schema turns an open-ended request into something a program can validate, log, authorise, and test. Free text would force your handler to parse natural language, and every ambiguity in that parse becomes a production incident: was five five units or five hundred? A schema declares types, required fields, allowed enum members, and bounds, so the model's output can be checked mechanically before anything happens. It also gives providers something to constrain decoding against, which is why arguments usually parse even without a repair loop.
+
+    The schema is not a validation strategy on its own: it constrains shape, not truth. A perfectly formed order ID can refer to an order that does not exist, and a well-typed amount can exceed the refundable balance. Treat the schema as the first of two gates, with semantic and authorisation checks behind it.
+  tags:
+  - mechanics
+  - json-schema
+- id: tool-basic-004
+  topic: mechanics
+  difficulty: intermediate
+  question: How is a tool result returned to the model, and why does the exact format matter?
+  answer: |-
+    You append the assistant message containing the call exactly as the provider returned it, then add one result message per call, then request the next completion. On OpenAI the result is a message with role tool carrying the matching tool_call_id; on Anthropic it is a user message containing tool_result blocks that reference tool_use_id, with an optional is_error flag.
+
+    The format matters because both APIs are stateless: the transcript you resend is the model's entire view of what happened. A missing result, a mismatched ID, or a result in the wrong role produces a malformed conversation that providers reject or, worse, silently misinterpret. It also matters for attribution: when a turn contains three parallel calls, the IDs are the only thing tying each result to its request. Keep the ID with the result through queues, retries, and logs, and set the error flag when a call failed rather than returning an error string as if it were data.
+  tags:
+  - mechanics
+  - message-format
+- id: tool-basic-005
+  topic: mechanics
+  difficulty: intermediate
+  question: What does tool_choice control, and when should you force a specific tool?
+  answer: |-
+    It controls whether the model may answer in prose, must call some tool, or must call one named tool. The modes are broadly automatic, none, required-or-any, and a specific tool; providers spell the forced variants differently and some offer extra options such as disabling parallel calls.
+
+    Forcing is useful when the workflow genuinely requires an action before any answer can be produced — a first turn that must retrieve a record, or an extraction step implemented as a single emit tool. It is not a correctness mechanism. A forced call guarantees the name, not the arguments, and it removes the model's ability to say it cannot help or to ask a clarifying question, which is often the right answer. Forcing also produces confident nonsense when the request does not match the tool: the model must call something, so it calls with invented arguments. Prefer crisp descriptions and automatic choice, and reserve forced calls for steps where a call is structurally mandatory.
+  tags:
+  - mechanics
+  - tool-choice
+- id: tool-basic-006
+  topic: mechanics
+  difficulty: intermediate
+  question: What are parallel tool calls, and what can go wrong when you handle them?
+  answer: |-
+    Parallel calls are multiple tool requests emitted in a single assistant turn — three lookups at once, or a write the model believes is independent of a read. Both major providers support them and both let you disable them. The performance win is real: one model round trip instead of three.
+
+    The hazards are attribution and dependency. If you key results by arrival order rather than by call ID, you attach the wrong result to the wrong call, and the model reasons confidently from mismatched data. If you return only some results, the next request is malformed. If you run everything concurrently, a call whose arguments depend on another's output acts on stale assumptions. Decide a failure policy per batch: best-effort for reads, all-or-nothing for writes that must be consistent. And treat parallel writes as a duplicate-side-effect source, because a model unsure whether the first call succeeded may emit two creates in the same turn.
+  tags:
+  - mechanics
+  - parallel-calls
+- id: tool-basic-007
+  topic: tool design
+  difficulty: beginner
+  question: What makes a good tool name and description?
+  answer: |-
+    The name should state the action and the object in domain vocabulary, and be distinguishable from its neighbours: search_orders_by_customer_email rather than search, issue_refund rather than process. The description should read as a specification for a competent contractor who cannot ask questions. It should say what the tool does, when to use it, when not to use it and which sibling applies instead, whether it has side effects, what conventions its arguments follow, and what shape comes back.
+
+    The highest-value line is usually the negative one: do not use this for refunds, use issue_refund. That prevents most misroutes. Avoid descriptions that restate the name, because the model already has the name and a restatement adds no discriminating information. Write declarative statements of fact rather than exhortations, since a constraint the model can check against beats an instruction it can only try to follow.
+  tags:
+  - tool-design
+  - descriptions
+- id: tool-basic-008
+  topic: tool design
+  difficulty: intermediate
+  question: How do you choose the right granularity for a tool?
+  answer: |-
+    Aim for one user-meaningful action: the thing a competent operator would describe as a single step. Too fine — one tool per internal service method — forces a multi-turn chain for a two-sentence request, multiplies latency and cost, and gives the model several chances to pick wrong. Too coarse, such as a manage_account tool taking an action name and a payload, pushes schema construction onto the model, hides which side effects are possible, and makes authorisation impossible to express because one tool spans reads and irreversible writes.
+
+    Two tests help. First, dependency: if the second step's arguments can be derived entirely from the first step's inputs, they are one tool; if the second depends on what the first returned, or on a judgement about it, they are two. Second, policy: can you write an approval rule for it? If a tool can either read a balance or move money depending on an argument, you cannot gate it, so split it.
+  tags:
+  - tool-design
+  - granularity
+- id: tool-basic-009
+  topic: tool design
+  difficulty: beginner
+  question: Why should a tool return structured JSON rather than a readable sentence?
+  answer: |-
+    Because the result re-enters the context window and is read by the model, which needs to aggregate, compare, and quote from it. Given a sentence like I found three orders, the model cannot sum totals, page further, or reliably distinguish a missing field from a zero — and it will invent fields you never sent.
+
+    Structured results with stable keys behave the same for zero rows and fifty, so the model does not have to reason about shape, and typed fields such as an integer amount in minor units plus a currency cannot be silently confused. Three properties make a result usable: it is stable, it is typed, and it is bounded — it states whether it was truncated and how to fetch more. A model that believes it has all the data will confidently report absence, which is one of the most damaging failure modes in a tool-using system. Prose is fine for a user-facing summary, generated separately from the data.
+  tags:
+  - tool-design
+  - results
+- id: tool-basic-010
+  topic: tool design
+  difficulty: intermediate
+  question: How should you shape arguments so that wrong values are hard to express?
+  answer: |-
+    Use the schema as a constraint system rather than a type declaration. Prefer enums over free strings for statuses, sort orders, and categories, because an enum steers generation while a string merely accepts whatever arrives. Require IDs, not names, for anything that mutates: resolve a human name to an ID in a separate read tool so the choice is visible before the model acts, and two customers sharing a name stop being ambiguous.
+
+    Make money explicit — an integer in minor units plus a currency enum — and make dates ISO 8601 with a stated timezone rather than a locale-dependent format. Bound collections with maxItems, because a model asked to add line items will happily produce forty. Avoid booleans that can contradict each other; one enum of meaningful modes is clearer. Mark required what is genuinely required: an all-optional schema reads as flexible and behaves as underspecified, so the model omits the field that mattered and the handler applies a default nobody wanted.
+  tags:
+  - tool-design
+  - json-schema
+- id: tool-basic-011
+  topic: validation
+  difficulty: intermediate
+  question: What is the difference between structural and semantic validation of tool arguments?
+  answer: |-
+    Structural validation asks whether the argument object is a well-formed instance of the declared schema: types, required keys, enum membership, string patterns, numeric bounds, array size, and no unknown properties. It is mechanical, total, and cheap, and every call should pass through it with no exceptions for trusted tools.
+
+    Semantic validation asks whether the values make sense against reality: does the account exist, is the amount within the refundable balance, is the date in the future, does this address belong to this customer, is this state transition legal. That requires your domain and your database, so it belongs in the handler. Teams that stop at the schema ship tools that accept a valid-but-nonexistent identifier and then either crash or, worse, loosely match it to another record. Both layers must reject, and both must return the same error envelope so the model has one contract to reason about.
+  tags:
+  - validation
+  - semantic-checks
+- id: tool-basic-012
+  topic: validation
+  difficulty: intermediate
+  question: What should the model see when a tool call fails?
+  answer: |-
+    A structured error it can act on: a stable machine-readable code, a message that states the expectation and the received value in domain terms, the offending field, a retryable flag, and optionally a hint describing the correct form. The message is written for a model, not for someone reading a stack trace. Saying that an amount must be a positive integer in minor units is actionable; a validator class name is not.
+
+    It must also be safe. Strip stack traces, SQL text, internal hostnames, and anything from an authorization header, because errors travel into the context, the logs, and sometimes the user's screen; keep the full detail server-side against the call ID. Make the failure unmistakable: set a failure flag rather than returning a success-shaped payload whose content happens to be a complaint, and on Anthropic mark the result block as an error. The model's next action is determined almost entirely by how precisely you describe what went wrong.
+  tags:
+  - validation
+  - errors
+- id: tool-basic-013
+  topic: validation
+  difficulty: advanced
+  question: How do you distinguish retryable failures from terminal ones, and why does it matter?
+  answer: |-
+    Classify every failure into three buckets and state the class in the payload. Fixable-by-the-model failures — wrong type, unknown enum member, missing field, malformed ID — should return a non-retryable flag at the transport level but allow one repair attempt, because re-issuing an identical call will fail identically while a corrected call may succeed.
+
+    Transient failures — timeouts, 503s, throttling, connection resets — are the runtime's problem: the dispatcher backs off and retries within the remaining deadline using the same idempotency key. Terminal failures — forbidden, policy denial, quota exhausted, a violated business invariant — must not be retried at any layer. Conflating them is the most damaging error-contract mistake. A model told forbidden may try a different tool that achieves the same effect, and a runtime that retries a terminal error burns budget and can duplicate side effects.
+  tags:
+  - validation
+  - retries
+  - errors
+- id: tool-basic-014
+  topic: validation
+  difficulty: intermediate
+  question: Why is returning an error message inside a successful result a bug?
+  answer: |-
+    Because the model treats a success envelope as data it may reason over, quote, or aggregate. A payload that says ok is true and whose result is a sentence like I could not find any orders reads to a human as a helpful message, and to the model as a successful read whose value is a sentence. It will either quote that sentence as a finding or infer that the customer has no orders, when the real cause was a typo in the email address or a permissions problem.
+
+    The distinction you lose is the one that determines the next action: search-found-nothing means try a different query or ask a clarifying question, while the-call-failed means report a problem. Keep the two apart. If an operation succeeded and produced nothing, return an empty collection with a count of zero. If it failed, set the failure flag and give a code, and on Anthropic mark the result block as an error so the provider-level signal matches your intent.
+  tags:
+  - validation
+  - error-contract
+- id: tool-basic-015
+  topic: orchestration
+  difficulty: beginner
+  question: Describe the orchestration loop for a tool-using assistant.
+  answer: |-
+    Send the conversation plus tool definitions, then inspect the response. If it contains no tool calls, you are done. If it does, append the assistant message exactly as received, execute every call through a dispatcher that validates arguments, authorises the operation against the resolved object, and runs it, then append one result message per call ID and request again. Repeat.
+
+    The loop needs four bounds decided up front: maximum steps, wall-clock deadline, token budget, and maximum side effects per run. Without them it ends when the context window fills or the bill arrives. It also needs real termination conditions beyond the model stopping: a repeated identical call is usually a stall, three steps with no new state are no progress, and a budget trip must return a truthful failure rather than truncated text that reads like an answer. Retries, idempotency, and audit all hang off this loop, which is why it belongs in your code rather than in a prompt.
+  tags:
+  - orchestration
+  - loop
+- id: tool-basic-016
+  topic: orchestration
+  difficulty: intermediate
+  question: Which budgets should an agent loop enforce, and where?
+  answer: |-
+    Four, all in code rather than in the prompt: steps, wall clock, tokens, and side effects. Steps bound the loop and prevent runaway cost; eight to twenty is a reasonable range depending on the task. Wall clock protects the user, whose patience is the real deadline, and prevents work continuing after the requester has gone. Tokens bound both cost and context exhaustion and should be tracked per call and cumulatively, because each turn resends the transcript.
+
+    Side effects bound blast radius: one refund, five ticket updates, and exceeding the cap is a terminal error rather than a hint to try another tool. Enforce each where the decision is made — a bounded range, a deadline passed into every tool call, a counter in the dispatcher — not as an instruction the model may ignore. When a budget trips, return a truthful outcome naming the limit that was hit. Silently returning partial text as the final answer is how budget exhaustion becomes a wrong answer in production.
+  tags:
+  - orchestration
+  - budgets
+- id: tool-basic-017
+  topic: orchestration
+  difficulty: advanced
+  question: Where do duplicate side effects come from in a tool-using agent?
+  answer: |-
+    Six places, and it helps to enumerate them rather than trust vigilance. An ambiguous timeout: your ten-second limit fires while the upstream applies the refund at twelve, so nobody knows whether it happened. A model re-issue after an error result that said retryable. A loop restarted from a persisted transcript after a crash or a try-again click, which re-executes from the top. Queue redelivery, when the tool execution is itself a message consumed at least once. A user double-submitting from two tabs. And parallel fan-out, where the model emits two creates in one turn because it was unsure the first succeeded.
+
+    That last source is underappreciated: models emit redundant writes when results look ambiguous, so the belief that the model will not do that is not a control. Each source needs its own mitigation, and the common one is an idempotency key stored atomically with the effect so a repeat returns the original outcome instead of performing the operation again.
+  tags:
+  - orchestration
+  - idempotency
+- id: tool-basic-018
+  topic: orchestration
+  difficulty: advanced
+  question: How should an idempotency key for a tool call be derived?
+  answer: |-
+    Deterministically, from stable inputs, with canonical serialisation. A workable recipe is a hash of the run or conversation identifier, the tool name, and the argument object serialised with sorted keys, no insignificant whitespace, and normalised numbers, so that forty-five point nine and forty-five point ninety produce the same key. Never include a timestamp, a random nonce, or the model's tool_call_id: the first makes every call unique and the last changes on exactly the re-issue you are trying to catch.
+
+    Choose scope by intent. A per-call key scoped to the run deduplicates an accidental repeat of the same action. A per-intent key that the application assigns — a refund for a specific order in this conversation — deduplicates a user pressing try again or a run resuming after a crash, which is the case that prevents double refunds. Use the intent-scoped key for irreversible writes, and store it with the reservation under a unique constraint so concurrency cannot slip past a check-then-insert.
+  tags:
+  - orchestration
+  - idempotency
+  - hashing
+- id: tool-basic-019
+  topic: security
+  difficulty: intermediate
+  question: What is the security model of a tool, and what does least privilege mean here?
+  answer: |-
+    Granting a tool grants the union of everything that tool can do, to anyone who can steer the conversation. There is no partial credit: a read_file tool is read access to every file the process can open, an http_get tool is an SSRF primitive, and an execute_sql tool is the database role's entire permission set.
+
+    So least privilege applies to the tool's identity, because the model has no identity a database can check. One credential per tool family, scoped to the operations that family needs. Read paths on genuinely read-only roles with no DDL and no access to system catalogs that reveal other tenants. No ambient cloud identity that can read every bucket. Separate network egress policy per tool, so a fetcher does not share a namespace with the billing client. And a written permission matrix — tool, credential, resources, operations, rate — reviewed whenever a tool is added, because that document is also the answer to what the agent could have done after an incident.
+  tags:
+  - security
+  - least-privilege
+- id: tool-basic-020
+  topic: security
+  difficulty: advanced
+  question: How does prompt injection arrive through tool output, and what actually stops it?
+  answer: |-
+    Tool results are untrusted input, exactly like a form submission. A fetched page, a ticket body, a PDF, or a database row can contain text addressed to the model — telling it to send a customer record somewhere and not mention it — and the model has no reliable way to separate data it was asked to read from instructions it should follow.
+
+    Delimiters and system-prompt warnings reduce the success rate of naive payloads but are not a control. The controls are structural. Remove the capability: if the agent that reads untrusted content has no egress tool, exfiltration is impossible, which is why the lethal trifecta of private data, untrusted content, and external communication should not share a context. Constrain what crosses the boundary, extracting only the fields you need with deterministic code rather than pasting raw HTML into the prompt. And never place secrets in the same context as attacker-influenced text, because the prompt is not a confidential channel.
+  tags:
+  - security
+  - prompt-injection
+- id: tool-basic-021
+  topic: security
+  difficulty: advanced
+  question: What makes a human approval gate meaningful rather than decorative?
+  answer: |-
+    Three things: the right content, the right binding, and the right scope. Content means rendering the resolved operation from validated arguments — order ID, amount in the display currency, destination account — never the model's own summary, because the summary can describe a refund of forty-five dollars while the call requests a different amount against a different order.
+
+    Binding means the approval is tied to a hash of tool, canonical arguments, and principal, is single-use, and is rejected if the model re-issues a modified call afterwards. Scope means gating only what deserves friction: irreversible, externally visible, above a threshold, or outside the user's own data. A prompt on every read teaches people to click yes, and an approval nobody reads is worse than none because it transfers blame without adding control. If a tool cannot describe its own effect precisely, it is not ready to sit behind a gate.
+  tags:
+  - security
+  - human-approval
+- id: tool-basic-022
+  topic: structured outputs
+  difficulty: intermediate
+  question: When should you use a structured output instead of a tool call?
+  answer: |-
+    Use structured output when the model's job ends with producing data: extraction, classification, normalisation, routing labels, or a plan you will execute yourself. A response schema keeps control flow in your program — one request, one response, no loop, no transcript growth, no possibility of the model calling something twice — and it is easy to evaluate because you compare a parsed object to an expected one.
+
+    Use a tool call when the model must actually act or observe, especially when the next step depends on what the previous step returned, when the resource set is open-ended, or when the operation needs authorisation, approval, and an audit trail as an operation. The tell is intent: here is the result versus please perform this. A frequent anti-pattern is implementing extraction as a single tool that is never really executed; that is structured output with extra semantics, confusing logs, and a dispatcher full of special cases.
+  tags:
+  - structured-outputs
+  - tool-design
+- id: tool-basic-023
+  topic: streaming
+  difficulty: intermediate
+  question: Why can't you execute a tool as soon as you see its arguments streaming in?
+  answer: |-
+    Because arguments arrive as fragments, and a fragment is a prefix, not a value. A partial object containing half an email address is not an object with a truncated string; the rest of the address is still coming. Parsing each delta fails, and executing on the first closing brace is worse, because that brace usually belongs to a nested object.
+
+    Both providers deliver partial arguments: OpenAI streams argument string chunks keyed by call index, and Anthropic sends input_json_delta events. In both cases the block is meaningless until it closes, and only then do you have a complete object to validate, authorise, and execute. The same applies to parallel calls: accumulate per index, keep the ID from the first fragment, and never merge buffers by arrival order. If you want to show progress, render a clearly marked preview, but keep it away from the dispatcher. Waiting costs a fraction of a second; executing a half-parsed refund costs a duplicate or a wrong amount.
+  tags:
+  - streaming
+  - arguments
+- id: tool-basic-024
+  topic: testing
+  difficulty: intermediate
+  question: How do you test a tool-using system when the model is non-deterministic?
+  answer: |-
+    In layers, so each test has one cause of failure. Snapshot the exact JSON Schema per tool and assert provider constraints such as all properties required and no unsupported keywords. Unit-test each handler against valid calls, every validation failure, authorisation failure, timeout, malformed upstream response, empty and truncated results, and idempotent replay.
+
+    Use a scripted fake model to test the loop deterministically: tool calls then an answer, a fixable error then one repair, duplicate detection, budget exhaustion, parallel results. Then run trajectory tests on recorded transcripts, asserting properties rather than one blessed path — the right resource was touched, no tool outside the allowed set was called, no more than N steps. Finally, evaluate with a real model over a scenario set, reporting selection accuracy, argument validity, task success, unnecessary calls, and cost, with several trials per scenario and a pinned model version.
+  tags:
+  - testing
+  - evals

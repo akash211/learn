@@ -1,0 +1,255 @@
+- id: rag-scn-001
+  title: Users get last quarter's policy, and the citation points at the old document
+  technologies: [rag, postgresql]
+  difficulty: advanced
+  prompt: |
+    A support assistant covers 180,000 documents in a help centre. Content is authored in a CMS,
+    exported nightly as HTML to object storage, and re-indexed by a job that recomputes embeddings for
+    every file it finds. A policy change lands: annual-plan refunds move from 14 to 30 days in the EU.
+
+    Two weeks later, agents report the assistant still quoting 14 days. The document in the CMS shows
+    30. The answer cites a page that, when clicked, shows 30 days. Chunk-level recall on your test set
+    has not moved.
+
+    Meanwhile the nightly job now takes 11 hours, so yesterday's run was still going when today's
+    started, and two runs overlapped.
+  approach: |
+    1. **Separate the three failures.** Wrong answer, wrong citation target, and slow ingestion are
+       different bugs that happen to co-occur. Fix them in that order of user impact but diagnose
+       them independently.
+    2. **Check the index, not the CMS.** Query the chunks for the policy document id and count
+       versions. Overlapping nightly runs are the likely cause: run B's delete-then-insert raced run
+       A, so both the old and new chunk sets are present, and the old one ranks higher because it is
+       duplicated. Look for duplicate `(doc_id, content_hash)` pairs — that is the fingerprint.
+    3. **Make ingestion idempotent and exclusive.** Take an advisory lock per source, key chunks on
+       `(doc_id, content_hash)`, and delete by `doc_id` before insert in one transaction. Never run
+       two full re-indexes concurrently.
+    4. **Stop re-embedding unchanged files.** Compare content hashes and embed only what changed.
+       That alone turns 11 hours into minutes for a typical night.
+    5. **Fix citations to point at content, not at a document URL.** A citation that resolves to the
+       live CMS page will always show the current text, which is why the bad answer looked correct
+       when clicked. Cite `(doc_id, chunk_id, char_start, char_end, index_version)` and render the
+       stored span, with the live link as secondary.
+    6. **Add freshness and duplication monitors.** Age of the newest chunk per source, count of
+       documents with more than one live chunk set, and the delta between CMS `updated_at` and index
+       `indexed_at`.
+    7. **Then look at ranking.** Once duplicates are gone, re-measure recall; a duplicate-heavy index
+       inflates recall while degrading answer quality, which is why the test set never moved.
+  red_flags:
+    - Re-embedding the whole corpus again as the fix, without finding the race.
+    - Explaining the citation discrepancy as "the CMS page changed", when the citation should be
+      pinned to the text that was actually used.
+    - Raising `top_k` so the new chunk is more likely to appear alongside the old one.
+    - Deleting and recreating the index during business hours without a rollback plan.
+
+- id: rag-scn-002
+  title: Cost per answer tripled after a "quality" release, and the bill is due
+  technologies: [rag]
+  difficulty: advanced
+  prompt: |
+    A B2B assistant answers 240,000 questions a month. Over two releases, someone added multi-query
+    expansion (five paraphrases), raised top-k from 6 to 20, added a cross-encoder reranker over 100
+    candidates, and switched to a larger generator. Quality scores improved by a few points. Cost per
+    answered question tripled and p95 latency went from 2.1 s to 6.4 s.
+
+    Finance wants a 60% cost reduction this quarter without a visible quality regression. Product
+    wants latency under 3 s. You have the golden set, a trace store with per-stage token counts, and
+    the ability to A/B in production.
+  approach: |
+    1. **Attribute the cost before cutting.** Use the traces to split spend by stage: rewrite, dense
+       and lexical retrieval, rerank, prompt tokens, generation. In this shape the dominant line is
+       almost always input tokens — 20 chunks at roughly 400 tokens each plus conversation history —
+       followed by five rewrites and a 100-candidate rerank.
+    2. **Cut context first, measured.** Go 20 → 8 chunks with reranking kept. Measure recall@8 and
+       faithfulness on the golden set. Quality usually improves, because distractors were being
+       counted as context. This is the single biggest lever and the least risky.
+    3. **Make expansion conditional.** Run multi-query only when the first retrieval is weak (low top
+       score or high score variance) or the query is short. Most queries are answered by the original
+       query; five paraphrases cost five embeddings and five searches to confirm that.
+    4. **Shrink the rerank window.** 100 → 30 candidates, or a smaller cross-encoder. Measure nDCG@10
+       before and after; the drop is usually negligible because the retriever's ordering is already
+       decent.
+    5. **Try the smaller generator with the same context.** With good context, the quality gap between
+       model tiers is often smaller than the price gap. Gate it on faithfulness, not on vibes.
+    6. **Then caching.** Prompt-prefix caching for the stable system prompt (order invariant content
+       first), embedding cache for repeated queries, and a tightly scoped answer cache keyed by query
+       hash plus full filter set — never by embedding similarity alone.
+    7. **Prove it with a funnel, not a vibe.** Track cost per answered question, p95 latency, recall@8,
+       faithfulness and thumbs, before and after each change, one change at a time.
+  red_flags:
+    - Cutting top-k and the reranker simultaneously, then being unable to attribute the quality change.
+    - Semantic caching keyed on embedding distance, which returns EU answers to US questions.
+    - Switching to a cheaper model without re-running the golden set.
+    - Reporting average cost instead of cost per answered question, hiding a long tail of huge prompts.
+
+- id: rag-scn-003
+  title: English works, German and Hindi return nothing useful
+  technologies: [rag]
+  difficulty: advanced
+  prompt: |
+    A documentation assistant is being rolled out in Germany and India. The English experience is
+    good: recall@10 around 0.9 on the internal evaluation set. For German queries, users get fluent
+    answers that miss the point; for Hindi queries, the assistant often says it cannot find anything,
+    even when the same content exists in English and the user is bilingual.
+
+    The corpus is 70% English, 20% German, 10% mixed. Chunking was tuned on English documents at 500
+    tokens. The embedder is a well-known English-only model. The team's plan is to translate the
+    corpus into English at ingest time.
+  approach: |
+    1. **Measure per language before changing anything.** Build a 50-query slice in each language,
+       with relevant ids labelled by a native speaker. Report recall@10 per language and, separately,
+       cross-lingual recall (German query → English document). Without that slice you cannot tell
+       whether the fix worked.
+    2. **Replace the embedder with a genuinely multilingual one.** `multilingual-e5`, `bge-m3`, Cohere
+       multilingual and similar models place languages in a shared space; an English-only model
+       cannot, and no reranker recovers from candidates that were never retrieved. Re-index — this is
+       a full migration, not an upgrade.
+    3. **Check the prefix convention.** E5-family models need `query:` and `passage:`; applying the
+       English convention to German queries is a common silent failure.
+    4. **Fix tokenisation-driven chunk sizes.** A 500-token English chunk is not 500 tokens of Hindi or
+       German content — German compounds and Devanagari tokenise differently. Measure chunk length in
+       the embedder's tokenizer and re-tune per language so that chunks are comparable in content.
+    5. **Keep hybrid retrieval, and make the lexical side language-aware.** A German `tsvector`
+       configuration, or a language-specific analyser in OpenSearch, matters: stemming English terms
+       in a German document produces noise. Route the analyser by document language.
+    6. **Reject translation-at-ingest as the primary strategy.** It loses identifiers, doubles the
+       content that must be kept in sync, and produces translations nobody reviewed. Store language
+       metadata, retrieve cross-lingually, and let the generator answer in the user's language.
+    7. **Add the language slices to CI**, so the next embedder or chunker change cannot silently
+       regress German while English stays flat.
+  red_flags:
+    - Translating the corpus and calling the problem solved, without a cross-lingual recall number.
+    - Adding a translation step at query time and tripling latency.
+    - Tuning top-k upward for non-English queries instead of fixing the embedding space.
+    - Evaluating in English only because the reviewers only read English.
+
+- id: rag-scn-004
+  title: A contractor's answer quoted a document they were never allowed to see
+  technologies: [rag]
+  difficulty: advanced
+  prompt: |
+    A knowledge assistant serves employees and contractors from one index. Access is modelled as
+    groups in the identity provider; documents carry a `classification` and a list of allowed groups.
+    Retrieval applies a filter built from the user's groups.
+
+    A contractor asks about onboarding timelines and receives an answer that quotes, verbatim, from an
+    internal HR restructuring memo. The memo is classified `confidential-hr`. The contractor's groups
+    do not include `hr-internal`.
+
+    Two days earlier, a caching layer was added to reduce retrieval latency: results were cached on
+    the normalised query text.
+  approach: |
+    1. **Contain first.** Disable the retrieval cache, then identify every query in the cache window
+       whose key had been computed without ACL in it. Treat the incident as a data exposure: the
+       affected user set, the documents returned, and the timestamps all need to be recoverable from
+       logs.
+    2. **Confirm the mechanism.** The cache key was the query text, so a contractor's identical
+       question hit an entry produced for an HR user. This is the whole bug; the model is innocent.
+    3. **Fix the cache key.** Include a hash of the effective filter set — user groups, tenant, locale
+       — and the index version. Cache *ids*, never rendered context, and re-apply filters on read so a
+       stale entry cannot widen access.
+    4. **Move enforcement to the data layer.** Apply ACL predicates inside the query (filtered ANN or
+       a pre-filtered exact scan), and make the retrieval function the only path to chunks. If a
+       caller can query the vector table directly, the ACL is advisory.
+    5. **Fix the granularity.** Store ACL on each chunk, not on the document. One document can hold a
+       public summary and a confidential appendix, and document-level filtering leaks the appendix or
+       hides the summary.
+    6. **Add a leak test to CI.** For each restricted document, generate a question answerable only
+       from it, and assert that a user outside the group gets an abstention. Run it for every
+       collection, not just the main one.
+    7. **Audit the rest of the surface.** Debug traces, reranker logs, evaluation dashboards and
+       analytics tables all stored retrieved text; any of them could have shown the memo to someone
+       outside the group.
+  red_flags:
+    - Rotating a prompt or adding "never reveal confidential documents" to the system prompt.
+    - Blaming the model rather than the cache key.
+    - Fixing the cache and not auditing the other stores that held retrieved text.
+    - Treating access control as a filter applied after ranking, "for performance".
+
+- id: rag-scn-005
+  title: p95 latency is 9 seconds and the product team wants 2.5
+  technologies: [rag]
+  difficulty: advanced
+  prompt: |
+    A RAG endpoint serves an in-app assistant. The trace shows: rewrite call 900 ms, query embedding
+    120 ms, dense search 40 ms, lexical search 30 ms, rerank of 100 candidates 1,800 ms, prompt
+    assembly 10 ms, and generation with 6,000 input tokens taking 4–6 s to first token. Total p95 is
+    around 9 s.
+
+    Retrieval is sequential: rewrite, then embed, then search, then rerank. The reranker runs on CPU.
+    The prompt includes the full conversation transcript each turn. The budget is 2.5 s to first
+    token.
+  approach: |
+    1. **Split the budget explicitly.** Auth and filter resolution 100 ms, rewrite 300 ms, retrieval
+       150 ms, rerank 250 ms, prompt assembly 50 ms, generation TTFT 1,500 ms. Anything that cannot
+       fit gets cut or made conditional — that is a product decision, so make it with the product
+       owner, not by squeezing code.
+    2. **Parallelise what is independent.** Dense and lexical search must run concurrently. The
+       embedding and the rewrite are sequential in the naive design, but you can start retrieval with
+       the raw query in parallel with the rewrite and discard the unneeded result — a speculative
+       request that costs a few milliseconds of search and saves the rewrite latency on the critical
+       path.
+    3. **Make the rewrite conditional and cheap.** Skip it for single-turn queries and for queries
+       longer than ~15 tokens. Use a small model with a hard token cap on history, and cap the
+       rewrite at 60 tokens. It is a query, not an essay.
+    4. **Shrink the rerank window.** 100 → 25 candidates and a smaller cross-encoder; measure nDCG@10
+       before and after. Add a hard timeout (250 ms) with fallback to the fused order, so a slow tail
+       degrades rather than fails.
+    5. **Reduce the prompt.** 6,000 input tokens is the TTFT driver. Eight chunks instead of twenty,
+       a rolling summary instead of the full transcript, and provider-side prompt caching for the
+       invariant prefix — with the cached portion placed first so the cache actually hits.
+    6. **Stream.** Return tokens as they arrive; the perceived latency of a 900 ms first token plus
+       streaming is far better than a 3 s wait for a complete answer. Show the retrieval stage
+       ("searching 4 documents") so the wait is legible.
+    7. **Then re-instrument.** p50 and p95 per stage, with the degrade paths recorded, so the next
+       regression is attributable in one query rather than a week of guessing.
+  red_flags:
+    - Dropping the reranker without measuring nDCG.
+    - Caching answers to fix latency, creating a permission and correctness problem.
+    - Sending the full transcript "because context helps", when it is the dominant token cost.
+    - Parallelising stages that share state and introducing race conditions in the trace.
+
+- id: rag-scn-006
+  title: Recall has plateaued at 0.62 and leadership wants to fine-tune the model
+  technologies: [rag]
+  difficulty: advanced
+  prompt: |
+    An internal engineering assistant indexes runbooks, ADRs, API references and 40,000 Jira tickets.
+    Recall@10 on a 200-query golden set is 0.62 and has not moved in three sprints, despite two prompt
+    rewrites and a switch to a larger generator. Leadership has approved budget to fine-tune the
+    generator on internal Q&A pairs.
+
+    Sampling failures: some questions about a specific service return tickets for a different service;
+    questions about error codes return prose about the error category; a few return nothing at all
+    even though the runbook exists.
+  approach: |
+    1. **Reframe the problem with numbers.** Recall@10 of 0.62 means 38% of queries cannot be answered
+       correctly at any model quality. Fine-tuning the generator raises faithfulness on the 62% and
+       does nothing for the rest. Show that arithmetic before spending the budget.
+    2. **Split recall by corpus segment.** Runbooks, ADRs, API references and tickets separately.
+       Mixed corpora usually have one segment dragging the average — tickets, which are short,
+       conversational and full of duplicated near-identical text, are the usual suspect.
+    3. **Diagnose the three failure shapes.** Different-service collisions point at an embedder that
+       clusters on topic rather than entity: fix with hybrid retrieval (service names are exact
+       tokens) and metadata filters. Error codes point at the same thing — dense retrieval smooths
+       the identifier away; BM25 finds it. Empty results point at parsing or chunking, not ranking:
+       check that the runbook is in the index and that its chunks are not 40-token fragments.
+    4. **Fix retrieval before generation.** Add lexical retrieval with `tsvector` or BM25, fuse with
+       RRF, rerank. Re-measure. This is the step that typically moves recall most, and it is days of
+       work rather than weeks.
+    5. **Then fix the tickets corpus.** Deduplicate near-identical tickets by content hash, strip
+       quoted reply chains, and chunk on the first message plus resolution rather than on the raw
+       thread. Ticket noise pollutes the whole index, including queries that should hit runbooks.
+    6. **Then consider tuning the retriever, not the generator.** If recall is still short, fine-tune
+       the embedder on (query, relevant chunk) pairs from logs — `sentence-transformers` with
+       `MultipleNegativesRankingLoss`, evaluated with `InformationRetrievalEvaluator`. It optimises
+       exactly the metric that is failing, and it is far cheaper than a generator fine-tune.
+    7. **Fine-tune the generator last, for format.** If answers are correct but verbose, badly
+       structured or inconsistently cited, a small fine-tune on house style helps. That is a
+       presentation problem, and it should be funded as one.
+  red_flags:
+    - Fine-tuning the generator to fix a retrieval metric.
+    - Reporting one aggregate recall number with no per-segment breakdown.
+    - Adding more chunks to the prompt to compensate for poor ranking.
+    - Deduplicating the corpus without checking that the duplicates were not the only copies of a
+      document.

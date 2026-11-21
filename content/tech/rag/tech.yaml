@@ -1,0 +1,127 @@
+slug: rag
+title: RAG
+category: ai-llm
+summary: Retrieval-augmented generation, treated as a retrieval system with a language model attached rather than a model with a search box bolted on.
+level: advanced
+relations:
+  - to: llm-agents
+    type: uses
+    note: An agent decides when to retrieve, reformulates the query across turns, and often runs several retrievals per task; the retrieval layer described here is what those calls land on.
+  - to: mcp
+    type: complements
+    note: MCP standardises how a model reaches tools and data sources; a RAG index is one such source, and MCP is one way to expose it without hard-coding a client.
+  - to: langchain
+    type: uses
+    note: LangChain supplies the loaders, splitters, retrievers and evaluation harnesses that this module's stages are usually assembled from — useful scaffolding, not a substitute for understanding the stages.
+  - to: postgresql
+    type: uses
+    note: PostgreSQL with pgvector and tsvector is a complete retrieval backend — vectors, BM25-style full-text, metadata filters and transactions in one place.
+intro:
+  what: |
+    Retrieval-augmented generation is a pipeline that answers a question by first finding text that
+    bears on it and then generating an answer from that text. The model's weights supply language and
+    reasoning; a search index supplies facts, provenance and permissions. The pattern was named by
+    Lewis et al. in 2020, and almost everything that has changed since is in the retrieval half.
+
+    This module treats RAG as a retrieval system that happens to end in a language model, because
+    many apparent generation failures begin earlier: the document was never parsed, the chunk split
+    the table from its header, the filter excluded the source, or the reranker buried the right
+    passage. The chapters follow a document from
+    ingestion to citation, then work backwards from a wrong answer to the stage that produced it.
+  why: |
+    The alternative to retrieval is putting knowledge in the weights, and that alternative fails
+    slowly and invisibly. A fine-tune cannot be edited when a policy changes, cannot cite what it
+    used, cannot be filtered per user, and cannot forget a document that was deleted. Retrieval
+    makes all four ordinary operations — an update, a citation, a `WHERE` clause, a `DELETE`.
+
+    It is also the point where LLM applications stop being demos. Once an answer can be attributed
+    and audited, it can be shipped to a customer, put behind a compliance review, or used to make a
+    decision. The engineering that makes that possible is unglamorous: parsing, chunk boundaries,
+    index parameters, fusion weights, evaluation sets. This module is about that engineering.
+  problems:
+    - Answering questions over a corpus that changes faster than a model can be retrained.
+    - Attributing each claim to the passage that supports it, so the answer can be checked.
+    - Enforcing per-user and per-tenant access at retrieval time rather than trusting the prompt.
+    - Keeping answers current, correctable and deletable without a deployment.
+    - Getting a small, cheap model to answer as if it had read the whole corpus.
+  where_used:
+    - Customer support assistants over help centres, tickets and product documentation.
+    - Internal knowledge search across Confluence, Drive, Slack exports and ticket history.
+    - Engineering assistants over code, runbooks, incident post-mortems and API references.
+    - Compliance, legal and clinical question answering where the citation is the product.
+  ecosystem: |
+    The pipeline is assembled from ordinary parts. Documents arrive through a connector or CDC
+    stream, get parsed (`unstructured`, Docling, PyMuPDF, `tree-sitter`), chunked, and embedded by a
+    hosted model (OpenAI, Cohere, Voyage) or an open one (`bge`, `e5`, `nomic`) run through
+    `sentence-transformers` or an inference server. Vectors and text land in pgvector, Qdrant,
+    Milvus, OpenSearch or FAISS, with BM25 or `tsvector` alongside for the lexical half. Reranking
+    is a cross-encoder (`bge-reranker`, `ms-marco`) or a hosted service. Orchestration is LangChain,
+    LlamaIndex or plain application code — the last of which is increasingly the right answer.
+    Evaluation runs on Ragas, DeepEval, TruLens or promptfoo; tracing on LangSmith, Arize Phoenix or
+    OpenTelemetry.
+  alternatives:
+    - name: Long-context prompting
+      note: Send the whole document set instead of retrieving. Simple and provenance-free; cost and latency scale with corpus size, and attention degrades in the middle of long inputs.
+    - name: Fine-tuning
+      note: Better for form, style and narrow tasks; unreliable for facts and impossible to filter or delete per user.
+    - name: Classical search (BM25 only)
+      note: Excellent when users type exact terms; no semantic matching, and no synthesis across passages.
+    - name: Agentic tool use / SQL
+      note: Correct choice for aggregation, counting and structured data — retrieve rows and compute, do not ask a model to sum.
+  related: [llm-agents, langchain, mcp, postgresql]
+chapters:
+  - id: rag-vs-fine-tuning
+    title: RAG, Fine-Tuning, and the Decision That Comes First
+    file: chapters/01-rag-vs-fine-tuning.md
+    minutes: 14
+    level: advanced
+  - id: pipeline
+    title: The Pipeline, Stage by Stage
+    file: chapters/02-pipeline.md
+    minutes: 15
+    level: advanced
+  - id: chunking
+    title: Chunking — Strategy and Trade-offs
+    file: chapters/03-chunking.md
+    minutes: 16
+    level: advanced
+  - id: embeddings
+    title: Embeddings — Dimensions, Normalisation and Domain Mismatch
+    file: chapters/04-embeddings.md
+    minutes: 16
+    level: advanced
+  - id: vector-indexes
+    title: Vector Indexes and Filtering
+    file: chapters/05-vector-indexes.md
+    minutes: 16
+    level: advanced
+  - id: hybrid-reranking-query-rewriting
+    title: Hybrid Retrieval, Reranking and Query Rewriting
+    file: chapters/06-hybrid-reranking-query-rewriting.md
+    minutes: 15
+    level: advanced
+  - id: evaluation
+    title: Evaluation — Recall, Faithfulness and Golden Sets
+    file: chapters/07-evaluation.md
+    minutes: 15
+    level: advanced
+  - id: hallucination-citations
+    title: Hallucination Control and Citation Discipline
+    file: chapters/08-hallucination-citations.md
+    minutes: 15
+    level: advanced
+  - id: operations
+    title: Operations — Refresh, Cost, Latency, Permissions
+    file: chapters/09-operations.md
+    minutes: 16
+    level: advanced
+  - id: failure-modes
+    title: Failure Modes — Debugging a Bad Answer End to End
+    file: chapters/10-failure-modes.md
+    minutes: 17
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

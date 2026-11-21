@@ -1,0 +1,123 @@
+slug: pydanticai
+title: PydanticAI
+category: ai-llm
+summary: A type-first Python framework for building LLM agents with validated tools, injected dependencies, and structured results.
+level: advanced
+relations:
+  - to: python
+    type: foundation
+    note: PydanticAI agents, tools, async runs, and dependency injection use Python's type hints and runtime model.
+  - to: tool-calling
+    type: uses
+    note: Agent tools expose validated callable interfaces that models can choose to invoke during a run.
+  - to: fastapi
+    type: complements
+    note: FastAPI can provide a typed HTTP boundary around PydanticAI workflows; the frameworks address different layers.
+  - to: langchain
+    type: alternative
+    note: Both support LLM applications; compare the type-first agent workflow with the application's integration and graph needs.
+intro:
+  what: |
+    PydanticAI is a Python framework for applications that use language models with explicit
+    tools, dependencies, and output contracts. An `Agent` combines instructions, a model, typed
+    dependency context, registered functions or toolsets, and an output type. A run coordinates
+    model requests and validated tool calls, then returns a result whose output can be a Python
+    value such as a Pydantic model. Python annotations support static tooling, while Pydantic
+    performs runtime validation at important boundaries; annotations alone do not enforce runtime
+    behavior in Python.
+
+    Pydantic is a direct conceptual and implementation neighbor: its models and validation
+    semantics help define structured outputs and tool argument schemas. This does not make model
+    output factually correct. Application code must still verify domain rules, evidence, and
+    authorization, and should treat model-generated text and tool requests as untrusted.
+  why: |
+    Calling an LLM from application code is easy; safely integrating its uncertain responses is
+    harder. Teams otherwise rebuild schema prompts, parse-and-retry loops, tool dispatch, dependency
+    plumbing, provider adapters, streaming, and fake models for tests. PydanticAI packages these
+    concerns around normal Python functions and types. A declared contract makes it easier for an
+    editor, type checker, tests, and downstream code to reason about what an agent may use and
+    return, without claiming that a probabilistic model is deterministic.
+  problems:
+    - Define validated structured results instead of trusting prompt-only JSON formatting.
+    - Register typed functions that an LLM may call, with application code enforcing permissions.
+    - Pass services and request-scoped context into agent tools without global mutable state.
+    - Switch among supported model integrations while keeping core orchestration recognizable.
+    - Test tool, dependency, and validation paths without live model calls.
+  where_used:
+    - Python services that extract, classify, summarize, or route language and multimodal inputs.
+    - Retrieval and business workflows where an agent can call narrow, permission-checked tools.
+    - Typed backend applications that need a structured result for subsequent deterministic logic.
+    - FastAPI applications that expose bounded agent runs over HTTP or streaming transports.
+  ecosystem: |
+    PydanticAI sits at the model-orchestration layer. Python and Pydantic provide its type and
+    validation foundation; provider integrations connect to model APIs; function tools and MCP
+    toolsets expose application capabilities; pytest with `TestModel` or `FunctionModel` covers
+    deterministic orchestration tests. FastAPI complements it as the HTTP application layer. It
+    overlaps with LangChain and LangGraph in LLM workflows, while each project's abstractions and
+    feature set evolve. Keep core domain logic in ordinary Python and choose the smallest framework
+    abstraction that fits state, integration, and lifecycle requirements. Confirm provider and
+    optional-dependency details for the pinned release.
+  alternatives:
+    - name: LangChain
+      note: Consider for an existing ecosystem of integrations and abstractions; compare current APIs and required workflow features.
+    - name: LangGraph
+      note: Consider explicit graph state, checkpoints, durable workflows, and human-in-the-loop transitions as central requirements.
+    - name: Direct provider SDK
+      note: A fit for a narrow deterministic request where a framework's agent, tool, or validation lifecycle would add needless abstraction.
+  related: [python, tool-calling, pydantic, fastapi, langchain]
+chapters:
+  - id: why-typed-agents
+    title: "Why Typed Agents: Contracts Around Uncertain Models"
+    file: chapters/01-why-typed-agents.md
+    minutes: 12
+    level: advanced
+  - id: agent-deps-results
+    title: "Agent, Dependencies, and Result Types"
+    file: chapters/02-agent-deps-results.md
+    minutes: 12
+    level: advanced
+  - id: tools-type-hints
+    title: "Tool Registration, Type Hints, and Call Validation"
+    file: chapters/03-tools-type-hints.md
+    minutes: 12
+    level: advanced
+  - id: dependencies-context
+    title: "Dependencies and Runtime Context Injection"
+    file: chapters/04-dependencies-context.md
+    minutes: 12
+    level: advanced
+  - id: validated-output-retries
+    title: "Structured Outputs, Validation, and Retries"
+    file: chapters/05-validated-output-retries.md
+    minutes: 13
+    level: advanced
+  - id: providers-switching
+    title: "Model Providers and Switching Models"
+    file: chapters/06-providers-switching.md
+    minutes: 12
+    level: advanced
+  - id: streaming-partial-validation
+    title: "Streaming, Partial Output, and Validation"
+    file: chapters/07-streaming-partial-validation.md
+    minutes: 12
+    level: advanced
+  - id: testing-agents
+    title: "Testing Agents with TestModel and FunctionModel"
+    file: chapters/08-testing-agents.md
+    minutes: 13
+    level: advanced
+  - id: fastapi-mcp-integration
+    title: "Integration with FastAPI and MCP"
+    file: chapters/09-fastapi-mcp-integration.md
+    minutes: 13
+    level: advanced
+  - id: pydanticai-langchain
+    title: "PydanticAI, LangChain, LangGraph: Choosing an Approach"
+    file: chapters/10-pydanticai-langchain.md
+    minutes: 12
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

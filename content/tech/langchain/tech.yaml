@@ -1,0 +1,137 @@
+slug: langchain
+title: LangChain
+category: ai-llm
+summary: A Python composition layer for LLM applications — provider-neutral chat models, prompts, tools, retrievers and a streaming-aware Runnable pipeline, plus the integrations that sit around them.
+level: advanced
+relations:
+  - to: llm-agents
+    type: uses
+    note: LangChain supplies the model, tool and message abstractions that agent loops are built from.
+  - to: rag
+    type: uses
+    note: Loaders, splitters, retrievers and the stuff-documents chain are the standard plumbing for retrieval-augmented generation.
+  - to: langgraph
+    type: alternative
+    note: LangGraph replaces LCEL chains and AgentExecutor with an explicit state graph; LangChain v1 agents run on it.
+  - to: pydanticai
+    type: alternative
+    note: PydanticAI offers typed agents and dependency injection with less integration surface and fewer layers.
+intro:
+  what: |
+    LangChain is a Python library for composing LLM calls with the code around them: prompt
+    templates, retrieval, tool execution, parsing, and the state that carries between steps. Its
+    durable contribution is a small set of interfaces — chat models, messages, prompt templates,
+    output parsers, tools, retrievers, and a uniform execution protocol called a Runnable. Provider
+    SDKs (OpenAI, Anthropic, Google, local servers) are adapted to those interfaces, so application
+    code can be written once and pointed at a different model, and the same object supports
+    `invoke`, `batch`, `stream` and their async twins.
+
+    Since early 2024 the project is split into packages with different stability: `langchain-core`
+    holds the abstractions, `langchain` holds orchestration (chains and, in v1, agents built on
+    LangGraph), `langchain-community` holds third-party integrations of varying quality, and
+    per-provider packages such as `langchain-openai` hold the model adapters. In v1 the legacy
+    chain and `AgentExecutor` code moved to `langchain-classic`, and the old `langchain.memory`
+    module was removed in favour of message history plus graph checkpointers.
+
+    It is not a runtime, a serving layer, or a framework that manages durable state for you. It is
+    a library you call from your own process; scheduling, persistence, retries across process
+    boundaries, and multi-tenant isolation remain yours to design.
+  why: |
+    Calling a provider SDK directly is easy for one call and tedious by the fifth: every provider
+    has a different message shape, a different tool-calling format, a different streaming chunk,
+    and a different error taxonomy. LangChain standardises the boring middle — messages, tool
+    schemas, retrieval results — and gives one composition operator that preserves streaming,
+    batching and tracing as steps are added. The payoff is not "less code" so much as "one code
+    path for sync, async, streaming and instrumented execution", which is exactly the code path
+    that is painful to reimplement four times.
+  problems:
+    - Write LLM application logic once against a provider-neutral chat model and message schema.
+    - Compose prompt, model, retrieval and parsing steps while keeping streaming and batching intact.
+    - Bind tool schemas to models and validate the arguments the model returns.
+    - Load, split, embed and retrieve documents with a consistent interface across stores.
+    - Trace every step of a multi-call pipeline with inputs, outputs, latency and token counts.
+  where_used:
+    - Retrieval-augmented question answering over internal documents.
+    - Internal assistants that combine a model with company APIs exposed as tools.
+    - "Document processing pipelines: extraction, classification and summarisation at batch scale."
+    - Prototypes that later get re-pointed at a different model vendor or a self-hosted model.
+    - Evaluation and regression harnesses around prompt changes.
+  ecosystem: |
+    LangChain sits between provider SDKs and orchestration frameworks. Below it: `langchain-openai`,
+    `langchain-anthropic`, `langchain-google-genai`, `langchain-ollama` and similar partner packages
+    that wrap official clients. Beside it: Pydantic for schemas, the vector-store clients
+    (pgvector, Qdrant, Chroma, Pinecone) through thin adapters, and LangSmith for tracing and
+    evaluation. Above it: LangGraph for stateful, branching, resumable workflows — LangChain v1's
+    `create_agent` is a thin wrapper over a LangGraph graph, so the boundary between the two
+    libraries is deliberately blurry. LlamaIndex solves the overlapping document-indexing problem
+    with a deeper retrieval toolkit and a different set of opinions.
+
+    Integration quality is uneven. Partner packages track their provider closely; community
+    integrations are contributed, sometimes stale, and frequently drift behind upstream API
+    changes. Treat every import outside `langchain-core` as a dependency you own.
+  alternatives:
+    - name: Provider SDK directly
+      note: Fewer layers, full access to new provider features on day one, no abstraction to learn — the right default for a single call or a single vendor.
+    - name: PydanticAI
+      note: Typed agents with dependency injection and Pydantic-validated outputs; smaller surface, less retrieval plumbing.
+    - name: LangGraph
+      note: Explicit state machine for branching, retries, human approval and durable execution; more code, far more control.
+    - name: LlamaIndex
+      note: Stronger document-indexing and retrieval abstractions, weaker general composition story.
+related: [llm-agents, rag, langgraph, pydanticai]
+chapters:
+  - id: core-abstractions
+    title: Core Abstractions and the LCEL Composition Model
+    file: chapters/01-core-abstractions.md
+    minutes: 14
+    level: core
+  - id: chains-vs-agents
+    title: Chains, Agents, and What LCEL Actually Buys You
+    file: chapters/02-chains-vs-agents.md
+    minutes: 13
+    level: core
+  - id: retrieval
+    title: "Retrieval: Loaders, Splitters, and Retrieval Chains"
+    file: chapters/03-retrieval.md
+    minutes: 15
+    level: core
+  - id: memory-state
+    title: Memory and Conversation State
+    file: chapters/04-memory-state.md
+    minutes: 13
+    level: core
+  - id: tools-structured-output
+    title: Tools and Structured Output
+    file: chapters/05-tools-structured-output.md
+    minutes: 14
+    level: advanced
+  - id: callbacks-tracing
+    title: Callbacks, Tracing, and LangSmith
+    file: chapters/06-callbacks-tracing.md
+    minutes: 13
+    level: advanced
+  - id: streaming
+    title: Streaming at Three Levels
+    file: chapters/07-streaming.md
+    minutes: 13
+    level: advanced
+  - id: debugging
+    title: Debugging Chain Failures
+    file: chapters/08-debugging.md
+    minutes: 14
+    level: advanced
+  - id: testing-evaluation
+    title: Testing and Evaluation
+    file: chapters/09-testing-evaluation.md
+    minutes: 14
+    level: advanced
+  - id: migration-realities
+    title: Migration Realities and Choosing an Abstraction
+    file: chapters/10-migration-realities.md
+    minutes: 15
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

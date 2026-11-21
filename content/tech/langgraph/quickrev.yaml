@@ -1,0 +1,102 @@
+concepts:
+  - title: "Graph = state + nodes + edges"
+    detail: |
+      State carries data, nodes perform work and return updates, and edges determine which nodes run next. `StateGraph` builds this workflow; `compile()` creates the runnable graph.
+  - title: "START and END"
+    detail: |
+      Use `START` as an explicit entry point and route every successful branch to a terminal node or `END`.
+  - title: Partial node updates
+    detail: |
+      Nodes normally return only changed keys. Unmentioned keys remain in state; keys without reducers use replacement semantics.
+  - title: Reducer semantics
+    detail: |
+      A per-channel reducer combines the existing value and a node update. Define merge behavior deliberately, especially for parallel writes.
+  - title: add_messages
+    detail: |
+      A message-aware reducer appends messages and can update an existing message by ID; plain list concatenation has different semantics.
+  - title: Conditional edges
+    detail: |
+      A router receives state and chooses known destinations, `END`, or fan-out. Validate any route value produced by a model.
+  - title: Command
+    detail: |
+      Return `Command(update=..., goto=...)` when one node must update state and route together. Prefer conditional edges for routing alone.
+  - title: Send
+    detail: |
+      Use `Send` for dynamic worker fan-out with per-worker input. Bound concurrency and merge results through reducers.
+  - title: Super-steps
+    detail: |
+      Nodes scheduled together execute in the same super-step. Do not depend on incidental completion order for shared state writes.
+  - title: Graph compile
+    detail: |
+      Compile the builder before invocation; attach runtime facilities such as a checkpointer during compilation.
+  - title: Checkpointer
+    detail: |
+      Saves graph snapshots for a thread and enables continuation, interrupts, recovery, and history inspection. In-memory savers are not durable across process restarts.
+  - title: Thread ID
+    detail: |
+      `configurable.thread_id` selects a checkpoint thread. It is a persistence pointer, never authentication or authorization.
+  - title: Store versus checkpointer
+    detail: |
+      A checkpointer keeps thread-scoped execution state; a store holds application data intended to be available across threads.
+  - title: interrupt()
+    detail: |
+      Pauses a node and returns a JSON-serializable payload. Resume with `Command(resume=value)` on the same checkpointed thread.
+  - title: Recursion limit
+    detail: |
+      A runtime cap on super-steps is a safety net, not a business-level loop budget or a meaningful exhaustion response.
+  - title: Trace the trajectory
+    detail: |
+      Evaluate route, tools, evidence, retries, and terminal status alongside final answer quality; LangSmith can help inspect and compare runs.
+traps:
+  - Treating LangGraph as an LLM or prompt framework rather than an orchestration runtime.
+  - Assuming unannotated list state automatically appends; default behavior replaces.
+  - Allowing model-generated prose to select arbitrary node or tool names.
+  - Treating a thread ID as proof that a caller may inspect or resume the thread.
+  - Assuming checkpoints make external side effects exactly once or provide rollback.
+  - Treating the recursion limit as the only bound on model, tool, time, or cost usage.
+advanced:
+  - Use reducers that are deterministic and deliberate about duplicates, conflicts, and concurrent updates.
+  - Keep checkpointed state small, serializable, versioned, and free of credentials or live runtime objects.
+  - On interrupt resume, the containing node restarts from its beginning; pre-interrupt code must be repeatable.
+  - For effects, combine stable idempotency keys with external reconciliation; a graph checkpoint is not a distributed transaction.
+  - Preserve old node names and state semantics for paused threads, or migrate/version them explicitly.
+  - Separate outcome evaluation from trajectory evaluation; test routes, evidence, tool budgets, and safe termination.
+comparisons:
+  - a: Fixed chain
+    b: StateGraph
+    difference: Chain fits a fixed linear sequence; StateGraph makes branching, cycles, state updates, and checkpointing explicit.
+  - a: Conditional edge
+    b: Command
+    difference: Conditional edge chooses a route after a node; Command can combine a node's state update and route in one return.
+  - a: Checkpointer
+    b: Store
+    difference: Checkpointer persists a thread's execution state; Store holds application data across threads.
+  - a: Workflow loop
+    b: Node retry
+    difference: Loop is a successful control-flow transition; retry repeats a node after selected exceptions.
+  - a: State
+    b: Runtime context
+    difference: State evolves and can be checkpointed; context supplies invocation dependencies and configuration.
+  - a: Node
+    b: Subgraph
+    difference: Node is one step; a compiled subgraph packages a reusable workflow behind a state interface.
+  - a: Tool proposal
+    b: Tool execution
+    difference: Model emits a structured request; application routing, validation, authorization, and a tool node perform the operation.
+commands:
+  - label: Install LangGraph
+    code: "pip install -U langgraph"
+  - label: Build and compile a graph
+    code: "graph = builder.compile()"
+  - label: Invoke a graph
+    code: "result = graph.invoke(input_state)"
+  - label: Invoke with checkpoint thread
+    code: 'graph.invoke(input_state, {"configurable": {"thread_id": "case-123"}})'
+  - label: Set a super-step guard
+    code: 'graph.invoke(input_state, {"recursion_limit": 40})'
+  - label: Resume an interrupt
+    code: "graph.invoke(Command(resume=True), config)"
+  - label: Attach an in-memory checkpointer for tests
+    code: "graph = builder.compile(checkpointer=InMemorySaver())"
+  - label: Run content validation from project root
+    code: ".venv/bin/python -m backend.app.content"

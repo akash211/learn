@@ -1,0 +1,339 @@
+- id: sf-recent-001
+  topic: orchestration
+  difficulty: advanced
+  question: When would you use a dynamic table instead of a stream-and-task pipeline, and what does TARGET_LAG actually guarantee?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A dynamic table declares the result, not the steps:
+
+    ```sql
+    CREATE DYNAMIC TABLE analytics.daily_sales
+      TARGET_LAG = '10 minutes'
+      WAREHOUSE = wh_transform
+    AS SELECT date_trunc('day', ordered_at) AS d, region, sum(amount) AS revenue
+       FROM raw.orders GROUP BY 1, 2;
+    ```
+
+    Snowflake decides when to refresh and whether it can do so incrementally; where the query is
+    incremental-friendly (filters, projections, simple aggregates) it processes only changed rows,
+    and where it is not, it recomputes. Streams plus tasks give you explicit control: you write the
+    `MERGE`, you know exactly what runs, and you can handle deletes or late-arriving rows yourself.
+
+    `TARGET_LAG` is a freshness target, not a schedule or a guarantee. Snowflake aims to keep the
+    table within that lag of its base tables, but actual staleness can exceed it when refresh
+    capacity, query complexity or pipeline depth is insufficient. Downstream dynamic tables cannot
+    target a shorter lag than their upstream dynamic-table dependencies.
+
+    Choose dynamic tables for declarative transformation layers with predictable SQL; choose
+    streams and tasks when you need custom merge logic, external calls, or precise control of when
+    work happens.
+  tags: [dynamic-tables, target-lag, streams]
+
+- id: sf-recent-002
+  topic: iceberg
+  difficulty: advanced
+  question: What do you give up by moving a table from native Snowflake storage to an Iceberg table, and when is it worth it?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    An Iceberg table stores data as Parquet files plus Iceberg metadata, either in a
+    Snowflake-managed catalog or in an external catalog such as AWS Glue, with an external volume
+    pointing at your bucket. You gain openness: Spark, Trino, Flink and Athena can read the same
+    table, and the data outlives any single vendor's account.
+
+    You give up the native-only features. Time travel, fail-safe and zero-copy clones are properties
+    of Snowflake's own storage layer, and an Iceberg table does not inherit them, so recovery
+    planning has to happen at the file and catalog level instead of with `AT (OFFSET => ...)`. The
+    optimiser also has less freedom: pruning depends on the Iceberg manifest metadata and
+    partition spec rather than on Snowflake's per-partition column statistics, so a badly partitioned
+    Iceberg table can scan far more than the equivalent native table. Writes go through compaction
+    and manifest maintenance rather than Snowflake's own partitioning.
+
+    It is worth it when interoperability is the requirement — a lakehouse shared with Spark, a
+    regulatory need for open formats, or a migration path off the platform. It is usually not worth
+    it for an internal mart where Snowflake is the only reader.
+  tags: [iceberg, open-formats, lakehouse]
+
+- id: sf-recent-003
+  topic: loading
+  difficulty: advanced
+  question: When does Snowpipe Streaming beat file-based Snowpipe, and what changes operationally?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    File-based Snowpipe is triggered by object-creation events: a producer writes a file, the
+    notification fires, Snowflake loads it. That imposes a floor on latency and a per-file cost that
+    dominates when files are small. A producer emitting thousands of records a second into 50 KB
+    files pays the per-file overhead thousands of times an hour and still waits for the file to be
+    closed.
+
+    Snowpipe Streaming writes rows directly into table storage through an SDK: the client opens a
+    channel, sends batches of rows, and Snowflake handles the commit. There is no file to stage, no
+    notification to break, and latency is much lower, which is what makes it the right choice for
+    event streams and CDC feeds.
+
+    Operationally the differences matter. You now own client-side concerns: offset tracking,
+    retry and exactly-once behaviour on the producer side, and throughput tuning of the channel.
+    There is no `SYSTEM$PIPE_STATUS` pending-file count to watch — you monitor channel health,
+    ingestion latency and rows committed instead. And because rows are committed continuously,
+    downstream streams and tasks see a steadier trickle rather than file-sized batches, which can
+    change how often a `WHEN SYSTEM$STREAM_HAS_DATA` task actually fires.
+  tags: [snowpipe-streaming, ingestion, latency]
+
+- id: sf-recent-004
+  topic: performance
+  difficulty: advanced
+  question: What does the Query Acceleration Service actually accelerate, and when would you enable it?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    QAS offloads part of a query's scan and filter work to shared compute, outside your warehouse:
+
+    ```sql
+    ALTER WAREHOUSE wh_bi SET
+      ENABLE_QUERY_ACCELERATION = TRUE
+      QUERY_ACCELERATION_MAX_SCALE_FACTOR = 8;
+    ```
+
+    The scale factor caps how much extra compute can be added relative to the warehouse. The service
+    targets the portion of a plan that is a large table scan with selective filters — the case where
+    a small warehouse is adequate for most of the day but one report scans a huge table and either
+    queues or crawls.
+
+    It does not accelerate joins, aggregations or sorts beyond the scan they consume, and it does not
+    help queries that are already partition-pruned to a small fraction of the table — there is
+    nothing to offload. Enabling it on a warehouse where every query is a small lookup buys nothing
+    and complicates cost attribution, because the accelerated portion is billed separately from
+    warehouse credits.
+
+    The honest use case is a deliberately small warehouse with a long tail of occasional big scans,
+    where the alternative is running `XLARGE` all day for a handful of queries. Measure the query
+    with it on and off; the profile will show whether the scan actually moved.
+  tags: [qas, acceleration, warehouse]
+
+- id: sf-recent-005
+  topic: performance
+  difficulty: advanced
+  question: What does the search optimisation service add that micro-partition pruning cannot do?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Pruning answers range questions: it compares a constant to per-partition min/max. It cannot
+    answer "which rows contain this substring", "which rows have this exact value somewhere in a
+    huge table with no useful clustering", or "which VARIANT documents contain this key value". Those
+    are the cases the search optimisation service addresses by building and maintaining an auxiliary
+    structure:
+
+    ```sql
+    ALTER TABLE raw.events ADD SEARCH OPTIMIZATION
+      ON EQUALITY(event_type), SUBSTRING(payload:message::string);
+    ```
+
+    It supports equality and substring predicates on columns, including paths inside `VARIANT`, and
+    some geospatial predicates, which is what makes it useful for log and event tables where the
+    filter is a needle in a very large haystack.
+
+    The costs are ongoing rather than one-off. It consumes serverless credits to build and to
+    maintain as data changes, and it adds storage for the index structures, so a table with heavy
+    DML pays continuously. It is also not a substitute for clustering: a range filter on a date
+    column is still served by partition pruning, and enabling search optimisation on a table that
+    only ever receives range filters is pure overhead.
+  tags: [search-optimization, variant, predicates]
+
+- id: sf-recent-006
+  topic: concurrency
+  difficulty: advanced
+  question: How do multi-cluster warehouses behave, and how do the STANDARD and ECONOMY scaling policies differ?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A multi-cluster warehouse runs between `MIN_CLUSTER_COUNT` and `MAX_CLUSTER_COUNT` clusters of the
+    same size:
+
+    ```sql
+    ALTER WAREHOUSE wh_bi SET
+      MIN_CLUSTER_COUNT = 1
+      MAX_CLUSTER_COUNT = 4
+      SCALING_POLICY = 'STANDARD';
+    ```
+
+    Each cluster bills independently, so the maximum is a cost ceiling as much as a capacity ceiling.
+    Clusters start when queries begin to queue and stop when they are no longer needed; the two
+    policies differ in how eagerly they do that.
+
+    `STANDARD` starts a new cluster as soon as queries are queuing, which minimises latency and
+    maximises cost — good for interactive dashboards where a two-minute wait is a bug report.
+    `ECONOMY` waits several minutes before adding a cluster and keeps clusters running longer before
+    shutting them down, which avoids the churn of starting and stopping a cluster for a short burst.
+    It is the right choice for batch windows with spiky concurrency and a tolerance for queueing.
+
+    Neither policy fixes a badly sized warehouse: four clusters of `XSMALL` each spill
+    independently, so concurrency improves while per-query performance does not.
+  tags: [multi-cluster, scaling-policy, concurrency]
+
+- id: sf-recent-007
+  topic: governance
+  difficulty: advanced
+  question: How does tag-based masking differ from attaching a masking policy to each column, and what does it cost you?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Attaching a policy per column is explicit and precise, and it does not scale: a warehouse with
+    four hundred tables and thirty PII columns needs thirty `ALTER TABLE ... MODIFY COLUMN` statements
+    that someone must remember to repeat for every new table.
+
+    Tag-based masking inverts it. You tag columns, then attach a masking policy to the tag:
+
+    ```sql
+    ALTER TAG governance.pii SET MASKING POLICY pii_string;
+    ALTER TABLE raw.customers MODIFY COLUMN email SET TAG governance.pii = 'contact';
+    ```
+
+    Every column carrying that tag is masked, including columns tagged after the policy was attached.
+    Combined with classification results, tagging can be driven by a scan rather than by hand — the
+    only version that survives an organisation with fifty data engineers.
+
+    The cost is indirection. A reader looking at a column sees a tag, not a policy, so debugging
+    "why is this value masked for me" means knowing the tag hierarchy and which policy is attached
+    at which level — and a tag applied too broadly silently masks a column that a report depends on.
+    Tags are also metadata that must be governed themselves: who may tag, and who may change the
+    policy behind a tag, are security decisions, not housekeeping.
+  tags: [tag-based-masking, classification, governance]
+
+- id: sf-recent-008
+  topic: cost
+  difficulty: advanced
+  question: How do you attribute Snowflake credits to a query, and where does attribution break down?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    `WAREHOUSE_METERING_HISTORY` gives credits per warehouse per hour; it says nothing about which
+    query spent them. The join that teams build by hand allocates warehouse-seconds in proportion to
+    each query's execution time, which is a decent approximation for a warehouse running one query at
+    a time and a poor one for a warehouse running twenty concurrently, because a query that queues
+    and a query that hogs memory do not consume the same share.
+
+    `QUERY_ATTRIBUTION_HISTORY`, where it is available in your account, attributes warehouse and
+    serverless consumption to individual queries directly, which is what you need for "which
+    dashboard costs the most" rather than "which warehouse costs the most".
+
+    Attribution breaks down in three places. Serverless features — Snowpipe, automatic clustering,
+    search optimisation, materialized view maintenance — consume credits outside warehouse metering,
+    so any model built only on `WAREHOUSE_METERING_HISTORY` is structurally incomplete. Shared
+    warehouses blur ownership across teams, because the credits belong to the warehouse, not the
+    role that ran the query. And storage is a separate ledger: `TABLE_STORAGE_METRICS` splits active,
+    time-travel and fail-safe bytes per table, which is where clone and retention costs hide.
+  tags: [cost-attribution, query-history, serverless]
+
+- id: sf-recent-009
+  topic: replication
+  difficulty: advanced
+  question: How does cross-region replication and failover work for a Snowflake account that needs a real DR story?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Database replication copies a database and its storage to a secondary account in another region:
+
+    ```sql
+    ALTER DATABASE prod ENABLE REPLICATION TO ACCOUNTS myorg.dr_account;
+    -- in the secondary account:
+    CREATE DATABASE prod FROM myorg.primary_account.prod;
+    ALTER DATABASE prod REFRESH;
+    ```
+
+    Each refresh moves only new micro-partitions, so the steady-state cost is change volume rather
+    than database size. The secondary is read-only until promoted, which means it can serve read
+    traffic for that region while remaining a recovery target.
+
+    For a complete recovery point you need a failover group rather than database replication alone,
+    because an account is more than its tables: users, roles, grants, warehouses, shares and
+    integrations all have to exist on the other side. A failover group replicates a defined set of
+    object types and can be promoted with `ALTER FAILOVER GROUP`, at which point the secondary
+    becomes primary and the old primary becomes read-only.
+
+    The parts people forget are DNS and clients — connection strings, private connectivity endpoints
+    and BI tool configurations all point at a region-specific hostname — and the fact that recovery
+    is only as good as the last successful refresh. Monitor replication lag, not just replication
+    status.
+  tags: [replication, failover, disaster-recovery]
+
+- id: sf-recent-010
+  topic: data-sharing
+  difficulty: advanced
+  question: How does Snowflake data sharing give a partner live data without copying it, and what are the governance limits?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A share is metadata: a named set of grants that another account can mount as a read-only
+    database. No files move and no storage is duplicated, so the consumer always sees the current
+    state of the provider's table:
+
+    ```sql
+    CREATE SHARE sales_share;
+    GRANT USAGE ON DATABASE sales TO SHARE sales_share;
+    GRANT SELECT ON TABLE sales.marts.orders_v TO SHARE sales_share;
+    ALTER SHARE sales_share ADD ACCOUNTS = partner_account;
+    ```
+
+    The consumer runs `CREATE DATABASE sales_shared FROM SHARE ...` and queries it on their own
+    warehouses at their own cost. Revoking the grant removes access on the next query, which is the
+    property a nightly CSV export can never have.
+
+    Governance limits are real. Shares are read-only and cannot be re-shared by the consumer; secure
+    views are strongly preferred over tables so the schema does not become the contract; row-level
+    filtering must be built into the shared object, because the consumer controls their own roles.
+    A consumer without a Snowflake account needs a reader account, which the provider creates and
+    pays for. And when both sides need to join data without revealing it — overlap analysis,
+    audience matching — a clean room, not a share, is the tool.
+  tags: [data-sharing, secure-views, clean-rooms]
+
+- id: sf-recent-011
+  topic: semi-structured
+  difficulty: advanced
+  question: A vendor's JSON feed adds and renames fields every few weeks. How do you keep the pipeline loading without manual schema changes?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    The resilient design is two layers. Land the document as `VARIANT` with an ingestion timestamp
+    and source file name, and never overwrite it — that table is the replayable record of what
+    actually arrived. Then build typed models from it, promoting the fields the business needs and
+    letting everything else stay inside `VARIANT` until someone asks for it.
+
+    For that second layer, use casts that cannot abort a load: `TRY_CAST(payload:x AS number)`
+    rather than `::number`, and route failures into a quarantine table with the original payload so
+    that a shape change produces a queryable backlog rather than a failed batch.
+
+    For structured files, let the schema drift instead of fighting it. `INFER_SCHEMA` over a staged
+    file set returns column names and types; `COPY ... MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE`
+    loads by name so column order changes and new fields are harmless; Snowpipe's schema detection
+    does the same continuously. Renames are the hard case everywhere — a rename is indistinguishable
+    from a delete plus an add, so it needs an explicit mapping in the model, not a cleverer loader.
+
+    The failure to avoid is a strict typed load with `ON_ERROR = ABORT_STATEMENT`, where one new
+    field stops ingestion entirely.
+  tags: [schema-evolution, infer-schema, json]
+
+- id: sf-recent-012
+  topic: cloning
+  difficulty: advanced
+  question: What goes wrong when an organisation uses zero-copy clones for every environment, and how do you control it?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Clones are free until they diverge, which means a clone is cheap to create and expensive to
+    forget. The standard pattern — a nightly clone for each developer, CI run and demo — produces
+    environments that reload fully every day, each becoming a second copy within twenty-four hours.
+    Storage grows linearly in the number of clones while every dashboard reports "clones are free".
+
+    Three other things go wrong. Grants are not inherited, so a clone handed to an analyst is either
+    unusable or over-granted by someone in a hurry. Streams are not cloned, so a pipeline tested in a
+    clone silently has no state. And clones inherit the source's time-travel retention, so a clone of
+    a table with ninety days of retention carries that storage cost as it diverges.
+
+    Control comes from treating clones as ephemeral infrastructure: a naming convention that encodes
+    owner and expiry, a scheduled job that drops anything past its TTL, tags for cost attribution,
+    and a rule that CI clones come from a snapshot (`AT (OFFSET => ...)`) rather than the live table
+    so that a rebuild is reproducible. Track `TABLE_STORAGE_METRICS` for clone growth the same way
+    you track warehouse spend.
+  tags: [clones, cost, environments]

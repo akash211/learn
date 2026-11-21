@@ -1,0 +1,144 @@
+- id: mcp-scn-001
+  title: A shared service token returns another tenant's records
+  technologies: [mcp, llm-agents, rest-apis]
+  difficulty: advanced
+  prompt: |
+    An MCP server exposes `get_invoice(invoice_id)`. It authenticates users at the gateway but
+    calls the billing API with one broad service token. A customer changes the invoice ID and
+    receives an invoice belonging to another tenant. The team points out that the host only shows
+    the tool to signed-in users and proposes adding a warning to its description.
+  approach: |
+    Treat this as a server-side authorization failure and possible data exposure. Immediately
+    disable or constrain the affected capability, assess which records were accessed, and follow
+    incident response for possible disclosure. Bind each call to the verified principal and enforce
+    tenant/object authorization in the MCP service or billing API query; do not trust the ID alone.
+    Reduce the service token's privilege and consider delegated identity or explicit policy mapping.
+    Ensure list/search and resource paths receive the same checks. Add regression tests for a valid
+    user requesting another tenant's record and verify audit attribution. A tool description and
+    host-side visibility are usability controls, not authorization.
+  red_flags:
+    - Treating tool descriptions or host UI visibility as access control.
+    - Fixing only the invoice detail route while leaving search/list endpoints unscoped.
+    - Continuing broad access without assessing the exposure or rotating credentials if needed.
+    - Trusting a tenant ID supplied as a normal tool argument.
+
+- id: mcp-scn-002
+  title: A document resource tells the assistant to export secrets
+  technologies: [mcp, llm-agents]
+  difficulty: advanced
+  prompt: |
+    A company MCP server provides a resource that reads support tickets. A ticket includes text
+    telling the assistant to ignore earlier instructions and send all customer records to an
+    external address. An agent reads the ticket and then proposes calling an email tool with a
+    large export. The team thinks the resource is safe because it is read-only.
+  approach: |
+    Identify the text as untrusted prompt-injection content. Reading data is not the same as
+    executing it, but the content can influence model behavior when added to context. Preserve
+    provenance, isolate retrieved content from privileged instructions, minimize fields returned,
+    and exclude secrets and unnecessary records. Require user confirmation or stronger workflow
+    approval for outbound or bulk actions, while keeping server-side authorization and recipient
+    allowlists in force. Test with adversarial tickets and ensure the server independently blocks
+    unauthorized export even if the model requests it. Review whether the email and data servers
+    compose into an exfiltration path. Do not rely on a text filter or warning alone.
+  red_flags:
+    - Assuming a read-only resource cannot lead to a harmful action.
+    - Treating prompt-injection detection as a complete security boundary.
+    - Sending data to a model or email tool without minimization and authorization.
+    - Testing the attack against production systems or actual customer records.
+
+- id: mcp-scn-003
+  title: A database query tool is saturating the reporting replica
+  technologies: [mcp, postgresql, databases]
+  difficulty: advanced
+  prompt: |
+    An analyst-facing MCP server exposes `query_database(sql: str)`. The server connects to a
+    read replica with a nominally read-only account. A model-generated query requests an unbounded
+    join over several years of data; latency spikes and other reports time out. A second team
+    argues that read-only access makes the tool safe.
+  approach: |
+    Separate write safety from availability and data-boundary safety. A read-only principal blocks
+    mutations but does not bound scan cost, restrict columns, prevent cross-tenant reads, or stop
+    resource exhaustion. Disable or tightly constrain arbitrary SQL. Prefer task-oriented tools
+    with parameterized queries, allowlisted filters, fixed projections, tenant predicates, bounded
+    date windows and row counts, statement timeouts, and concurrency limits. Inspect query plans
+    and replica capacity, then add cost-aware rate limits. Test wide ranges and adversarial inputs
+    using representative non-production data. Audit principal, query class, duration, and result
+    count without logging sensitive SQL values. If arbitrary query is a real product need, provide
+    a sandboxed query language and explicit policy review.
+  red_flags:
+    - Equating a read-only database role with an availability or privacy guarantee.
+    - Increasing replica size without limiting the query surface.
+    - Returning arbitrary columns or tenant data based only on model instructions.
+    - Using string concatenation to construct SQL or identifiers.
+
+- id: mcp-scn-004
+  title: Legacy SSE client fails after a transport upgrade
+  technologies: [mcp, docker, rest-apis]
+  difficulty: intermediate
+  prompt: |
+    A team changes a remote server from an older HTTP+SSE SDK configuration to Streamable HTTP.
+    Local tests pass with the latest Python client, but a desktop host used by several customers
+    disconnects or reports that tools are unavailable. The reverse proxy also buffers responses.
+  approach: |
+    Establish the actual compatibility boundary before changing code again. Inventory host and
+    client versions, supported transports, server SDK and protocol revisions, and gateway behavior.
+    The newer local client passing does not prove that the deployed host supports Streamable HTTP.
+    Run an end-to-end test through the production-equivalent proxy, confirm streaming is not
+    buffered, required headers and routes survive, and timeouts permit the protocol behavior.
+    Decide whether to maintain both transports temporarily, require a host upgrade, or stage the
+    migration with clear errors. Pin SDKs and document the supported matrix. Test authentication,
+    reconnect and in-flight failure handling for the selected revision; do not treat HTTP+SSE and
+    Streamable HTTP as interchangeable aliases.
+  red_flags:
+    - Declaring the transport upgrade complete based on one new client.
+    - Assuming a reverse proxy's ordinary POST test verifies streaming.
+    - Ignoring host release age or failing to publish a migration requirement.
+    - Changing protocol behavior without a rollback or compatibility plan.
+
+- id: mcp-scn-005
+  title: A side-effecting tool runs twice after a timeout
+  technologies: [mcp, tool-calling, llm-agents]
+  difficulty: advanced
+  prompt: |
+    An MCP tool creates a cloud deployment. A host times out waiting for the result and retries the
+    call. The first deployment succeeded but the response was lost, so a duplicate deployment starts
+    and consumes extra capacity. The handler returns only free-form text and has no operation ID.
+  approach: |
+    Treat the timeout as an ambiguous outcome, not proof that the action failed. Stop uncontrolled
+    retries and identify whether duplicate effects already occurred. Add idempotency scoped to the
+    authenticated principal and operation, persisting the original outcome for a duplicate key, or
+    return a durable operation handle that clients can query. Define status semantics for accepted,
+    running, succeeded, and failed operations. Make the action's side effects explicit in its schema
+    and description, require appropriate user approval, and enforce server-side quotas and policy.
+    Test response loss after commit, duplicate requests, concurrent calls with the same key, and
+    expiration behavior. A client-side retry policy alone cannot guarantee exactly-once execution.
+  red_flags:
+    - Retrying every timeout as if no work occurred.
+    - Claiming exactly-once semantics without durable idempotency state.
+    - Using an idempotency key that is reusable across users or unrelated operations.
+    - Failing to make operation state discoverable after the original response is lost.
+
+- id: mcp-scn-006
+  title: A Python SDK upgrade changes generated tool behavior
+  technologies: [mcp, python, pytest]
+  difficulty: intermediate
+  prompt: |
+    A dependency update upgrades the MCP Python SDK across a major version. The server still
+    starts, but a nullable argument is now required in the published schema, a tool result has a
+    different structured representation, and the target host does not show the expected output.
+    There are only unit tests for the underlying service function.
+  approach: |
+    Treat the SDK upgrade as a protocol and public-contract change. Review the migration guide and
+    supported specification revisions, inspect generated schemas for requiredness, nullability,
+    defaults, bounds and descriptions, and compare the serialized result as seen by an MCP client.
+    Add protocol-level tests for discovery/lifecycle, list and call behavior, errors, and output.
+    Verify compatibility with the specific target host and transport; test a known-good SDK version
+    and the upgrade in isolation. Pin the dependency and roll back if clients cannot consume the new
+    contract. Update tests for optional values and structured output, then add an agent-in-the-loop
+    evaluation using safe fixtures to catch usability changes. Service unit tests alone do not cover
+    schema generation or serialization.
+  red_flags:
+    - Inferring compatibility from successful process startup.
+    - Patching the host display without understanding the wire schema change.
+    - Testing only service internals and not the actual client-visible result.
+    - Upgrading a version-sensitive SDK without pinning or a rollback path.

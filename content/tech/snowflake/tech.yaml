@@ -1,0 +1,150 @@
+slug: snowflake
+title: Snowflake
+category: data-engineering
+summary: A managed analytical warehouse built on separated storage, compute and services — where performance is decided by micro-partition pruning, warehouse sizing and caching rather than indexes.
+level: core
+relations:
+  - to: sql
+    type: uses
+    note: SQL is the only interface to the data; Snowflake's dialect adds semi-structured access, time travel and cloning on top of ANSI joins and window functions.
+  - to: redshift
+    type: alternative
+    note: Redshift is the closest like-for-like competitor; it exposes distribution keys, sort keys and WLM queues, where Snowflake hides physical layout behind micro-partitions and per-warehouse concurrency.
+  - to: databricks
+    type: alternative
+    note: Databricks is the lakehouse alternative — open table formats and Spark compute over object storage, versus Snowflake's proprietary managed storage and SQL engine.
+  - to: dbt
+    type: uses
+    note: dbt is the usual transformation layer on top of Snowflake; models become views and tables, and dbt's incremental strategies map onto Snowflake's MERGE and clone patterns.
+  - to: parquet
+    type: uses
+    note: Parquet is the interchange format for stages and external tables; Snowflake loads it directly and can query it in place through external tables and Iceberg tables.
+intro:
+  what: |
+    Snowflake is a managed analytical database in which storage, compute, and the control plane
+    are three separate services. Table data lives in cloud object storage as immutable,
+    compressed, columnar micro-partitions. Queries run on virtual warehouses — MPP clusters that
+    you start, resize and stop independently — and every client request first passes through the
+    cloud services layer, which handles authentication, access control, metadata, parsing,
+    optimisation, transactions and the result cache.
+
+    That separation is the whole design. A warehouse owns no data, so resizing it is a metadata
+    operation rather than a data redistribution; several warehouses can read the same tables at
+    once without copying them; and suspending compute never risks the data. In exchange, every
+    scan crosses the network from object storage, there are no user-managed indexes or
+    distribution keys to tune, and performance becomes a matter of how few micro-partitions a
+    query must read and how well the warehouse is sized for the work.
+
+    This module covers the mechanics rather than the syntax: how pruning is decided, what the
+    query profile is telling you, which of the three caches answered your query, how loads and
+    CDC pipelines are built, what time travel and zero-copy clones actually copy, and how credit
+    consumption is driven by warehouse-seconds rather than by rows.
+  why: |
+    Snowflake made the warehouse elastic and removed most of the operational work that used to
+    come with one: no vacuum, no sort keys, no node replacement, no capacity planning ahead of a
+    quarter-end spike. The cost of that convenience is that the levers are different. A team that
+    arrives from PostgreSQL looks for an index and finds none; a team that arrives from Redshift
+    looks for a distribution style and finds none. What remains is data layout (clustering),
+    pruning, warehouse size and concurrency, caching, and the SQL you write.
+
+    It also fails in characteristic ways. A nightly reload quietly destroys clustering and every
+    dashboard gets slower without a single query changing. A warehouse left running with a
+    10-minute auto-suspend burns credits on an empty cluster. A task fails once, its stream goes
+    stale, and the pipeline is silently dead for a week. A dashboard tool that appends a
+    timestamp to every query defeats the result cache. Each of these is legible from metadata —
+    `SYSTEM$CLUSTERING_INFORMATION`, `QUERY_HISTORY`, `WAREHOUSE_METERING_HISTORY`,
+    `TASK_HISTORY` — but only if you know the mechanism behind it.
+  problems:
+    - Serving concurrent analytical workloads without provisioning for the peak.
+    - Isolating workloads from each other — ingestion, BI, data science — without copying data.
+    - Scanning very large tables cheaply by skipping most of the data instead of indexing it.
+    - Loading heterogeneous files (CSV, JSON, Parquet) reliably, including duplicates and bad rows.
+    - Capturing changes and orchestrating ELT without an external scheduler for simple pipelines.
+    - Recovering from human error — a bad DELETE, a dropped table — within a defined window.
+    - Giving many teams governed access to the same data without exports or copies.
+  where_used:
+    - Enterprise data warehouses and data marts that replaced on-premises MPP appliances.
+    - The transformation target for dbt, Airflow, Dagster and Fivetran-style ingestion.
+    - Customer-facing analytics where per-tenant isolation and elastic concurrency matter.
+    - Data sharing between organisations: supplier feeds, benchmark datasets, clean rooms.
+    - A landing and modelling layer for semi-structured event and application logs.
+  ecosystem: |
+    Snowflake sits at the centre of a modern data stack rather than at its edge. Ingestion tools
+    write files to stages and call `COPY INTO` or Snowpipe; dbt compiles models into views,
+    tables and incremental merges; orchestration runs either outside (Airflow, Dagster) or inside
+    (streams and tasks); BI tools connect over JDBC/ODBC and read the result cache when their
+    queries repeat. Parquet is the usual file format at the boundary, and Iceberg tables let the
+    same storage be read by other engines.
+
+    Compared with Redshift, Snowflake hides physical design: there are no distribution styles,
+    sort keys or vacuum, and concurrency is bought by adding warehouses rather than by tuning
+    WLM queues. Compared with Databricks, it keeps storage proprietary and the engine SQL-first,
+    which buys governance and predictability at the cost of format openness — an Iceberg table
+    is the bridge between the two positions. Compared with BigQuery, the difference is mostly
+    the unit of compute: a warehouse you size and stop, rather than a serverless pool.
+  alternatives:
+    - name: Amazon Redshift
+      note: Cheaper at steady, predictable load on AWS and more tunable at the physical level; you operate distribution keys, sort keys and WLM.
+    - name: Databricks / Delta Lake
+      note: Open table formats and Spark for mixed SQL, Python and ML workloads; more engineering, more control over file layout.
+    - name: BigQuery
+      note: Serverless capacity model with no warehouse to size; strongest when the estate is already on Google Cloud.
+    - name: DuckDB
+      note: Single-node columnar engine for datasets that fit one machine; a fraction of the cost, none of the concurrency or governance.
+  related: [sql, redshift, databricks, dbt, parquet]
+chapters:
+  - id: architecture
+    title: "Architecture: Storage, Compute and the Cloud Services Layer"
+    file: chapters/01-architecture.md
+    minutes: 14
+    level: core
+  - id: micro-partitions
+    title: Micro-Partitions, Clustering and Pruning
+    file: chapters/02-micro-partitions.md
+    minutes: 15
+    level: core
+  - id: query-optimisation
+    title: "Query Optimisation: Profiles, Spilling and Warehouse Sizing"
+    file: chapters/03-query-optimisation.md
+    minutes: 15
+    level: core
+  - id: caching
+    title: "Caching: Result, Local Disk and Metadata"
+    file: chapters/04-caching.md
+    minutes: 13
+    level: core
+  - id: loading
+    title: "Loading: Stages, COPY, Snowpipe and Bad Rows"
+    file: chapters/05-loading.md
+    minutes: 15
+    level: core
+  - id: streams-tasks
+    title: "Streams, Tasks and CDC Orchestration"
+    file: chapters/06-streams-tasks.md
+    minutes: 15
+    level: advanced
+  - id: time-travel-clones
+    title: "Time Travel, Fail-Safe and Zero-Copy Clones"
+    file: chapters/07-time-travel-clones.md
+    minutes: 14
+    level: core
+  - id: semi-structured
+    title: "Semi-Structured Data: VARIANT, FLATTEN and Schema Evolution"
+    file: chapters/08-semi-structured.md
+    minutes: 15
+    level: core
+  - id: security-governance
+    title: "Security and Governance: RBAC, Policies and Shares"
+    file: chapters/09-security-governance.md
+    minutes: 15
+    level: core
+  - id: cost-engineering
+    title: "Cost Engineering: Credits, Suspension and Attribution"
+    file: chapters/10-cost-engineering.md
+    minutes: 14
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml
