@@ -1,0 +1,143 @@
+- id: fapi-scn-001
+  title: One synchronous vendor call slows every route
+  technologies: [fastapi, python, rest-apis]
+  difficulty: advanced
+  prompt: |
+    A FastAPI service has low CPU utilization, but p99 latency increases across unrelated routes
+    after a new `async def` endpoint is deployed. The endpoint calls a synchronous vendor SDK that
+    waits on HTTPS for about a second. Traffic spikes make the whole service appear unresponsive.
+    The team proposes adding more async endpoints and increasing the database pool.
+  approach: |
+    Recognize event-loop blocking: the synchronous SDK call inside a coroutine does not yield, so
+    the loop cannot serve other requests during socket wait. Confirm with loop-lag and per-route
+    timing, and inspect stacks during a spike. Move the call to an async client or isolate the
+    complete synchronous call with `asyncio.to_thread`; add SDK-level timeouts because cancelling
+    the await does not kill a running thread. Bound concurrency with a semaphore or client pool and
+    honor vendor rate limits. Exercise concurrent traffic in a test and compare loop lag before and
+    after. Do not assume the database pool is implicated merely because requests are delayed.
+  red_flags:
+    - Treating `async def` as automatically non-blocking.
+    - Scaling database connections without evidence of database waits.
+    - Offloading without timeouts or bounded downstream concurrency.
+    - Using CPU utilization alone to dismiss a blocked event loop.
+
+- id: fapi-scn-002
+  title: Public response starts leaking an internal account field
+  technologies: [fastapi, pydantic, python]
+  difficulty: intermediate
+  prompt: |
+    A route returns SQLAlchemy user objects directly. A schema migration adds `recovery_email` and
+    `password_reset_token_hash`; a later API response unexpectedly includes both fields. Existing
+    tests assert only status 200 and the user's display name.
+  approach: |
+    Treat this as a response-contract and data exposure defect. Define an explicit Pydantic v2
+    public DTO containing only permitted fields and set it as the route's response model, or map
+    the ORM instance to that DTO in service code. Enable `from_attributes=True` when constructing
+    from ORM attributes and load only required relationships. Add a regression test asserting
+    exact public JSON and explicitly proving that recovery and token-hash fields are absent. Review
+    other routes that serialize the same entity and consider whether leaked values require rotation
+    or incident handling. Avoid returning a raw `Response` for the normal path, since it bypasses
+    standard model filtering. Keep persistence schema changes independent from public API schema.
+  red_flags:
+    - Hiding the two keys in one frontend without fixing server serialization.
+    - Returning every ORM column and trusting the database model as an API contract.
+    - Assuming response models filter a manually constructed JSONResponse.
+    - Failing to inspect other endpoints that expose the same entity.
+
+- id: fapi-scn-003
+  title: Streaming CSV export fails after headers have been sent
+  technologies: [fastapi, sqlalchemy, python]
+  difficulty: advanced
+  prompt: |
+    A route streams a multi-gigabyte database export. The generator holds a session dependency,
+    performs lazy relationship loads row by row, and writes CSV with string concatenation. When a
+    database error occurs after several chunks, the client receives a truncated file and the server
+    cannot return a JSON error. Slow clients cause database connections to remain occupied.
+  approach: |
+    Separate the transport from the data access plan. A stream cannot change status after bytes are
+    sent, so validate permissions and prerequisites before starting, and define how clients detect
+    incomplete exports (for example, a job result or final manifest). Use a real CSV writer for
+    quoting. Avoid lazy per-row loads by selecting required columns/relationships efficiently and
+    using bounded batches or keyset pagination. Do not retain one long transaction and connection
+    while a client downloads slowly; for large exports, generate a durable file asynchronously and
+    return a download URL. If streaming remains appropriate, use bounded buffers, cancellation-safe
+    cleanup, and a dependency/resource lifetime that extends through iteration. Test disconnects
+    and failures with realistic proxy behavior.
+  red_flags:
+    - Expecting a 500 JSON body after the response has started.
+    - Keeping an unbounded transaction open through a slow download.
+    - Ignoring CSV quoting, lazy-load N+1 queries, and disconnect cleanup.
+    - Returning a success status without any way to detect a partial export.
+
+- id: fapi-scn-004
+  title: Missing authorization check exposes another tenant's record
+  technologies: [fastapi, python, rest-apis]
+  difficulty: advanced
+  prompt: |
+    A bearer token is correctly validated, and the route requires an authenticated principal. A
+    customer reports that changing `/invoices/501` to `/invoices/502` returns a different
+    company's invoice. The route queries by invoice ID only. The team proposes adding another JWT
+    claim but has not changed the query or tests.
+  approach: |
+    Separate authentication from object-level authorization. A valid token establishes a principal,
+    not ownership of every requested invoice. Enforce tenant and access predicates in the service or
+    database query, using the principal's authorized tenant membership and any invoice-specific
+    policy. Do not trust a tenant ID supplied only by the caller. Decide whether inaccessible
+    resources return 403 or a privacy-preserving 404, and apply that policy consistently. Add tests
+    for same-tenant access, cross-tenant access, nonexistent IDs, and users with multiple permitted
+    tenants; ensure no invoice fields leak in error details. Audit other ID-based routes for the same
+    pattern. A new token claim can help identify context but does not replace per-resource checks.
+  red_flags:
+    - Assuming JWT signature verification grants object access.
+    - Trusting a caller-provided tenant ID without matching it to the principal.
+    - Fixing only the invoice route while ignoring sibling resource endpoints.
+    - Returning detailed existence or customer data in authorization errors.
+
+- id: fapi-scn-005
+  title: Database connections exhaust after increasing replicas
+  technologies: [fastapi, sqlalchemy, docker]
+  difficulty: advanced
+  prompt: |
+    A service runs four worker processes in each container. It scales from two containers to eight,
+    and the database begins rejecting connections. The pool configuration says `pool_size=10`,
+    `max_overflow=5`; developers assume that means the whole service has at most 15 connections.
+    There are also migration and monitoring connections.
+  approach: |
+    Calculate the configured upper bound per process and multiply it by workers and replicas; account
+    for overflow, startup overlap, migrations, monitoring, and other applications. Here each worker
+    owns its own engine and pool, so the theoretical web capacity is 4 workers times 8 containers
+    times the per-process pool-plus-overflow allowance, not a service-wide 15. Confirm actual pool
+    checkout and database connection metrics. Reduce pool limits or worker count, cap deployment
+    scale, and reserve database capacity for other clients. Set pool timeouts and observe queuing so
+    overload fails predictably. Test scaling and rolling-deployment overlap. Consider whether
+    multiple workers per container are needed in the orchestrator; scale based on measured CPU and
+    memory rather than assuming a large worker count is beneficial.
+  red_flags:
+    - Treating pool settings as global across worker processes.
+    - Raising the database connection limit without evaluating its capacity.
+    - Ignoring overflow and rolling deploy overlap.
+    - Using arbitrary worker count formulas instead of measured resource constraints.
+
+- id: fapi-scn-006
+  title: A test suite passes while lifespan-dependent routes fail in staging
+  technologies: [fastapi, pytest, httpx]
+  difficulty: intermediate
+  prompt: |
+    An app creates a shared HTTP client and database engine in its lifespan function. Unit tests
+    instantiate `AsyncClient(transport=ASGITransport(app=app))` and call routes directly. All tests
+    pass, but staging reports that `app.state.http` is missing on the first request after deployment.
+  approach: |
+    Determine whether the test transport ran application lifespan; ASGITransport should not be
+    assumed to start and stop lifespan automatically. Add an async test fixture using a lifespan
+    manager or another explicit lifecycle context, then create the client and send requests while
+    that context is active. Assert both successful resource availability and shutdown cleanup. An
+    app factory can isolate state and avoid stale global app instances across tests. Keep a separate
+    route unit test that overrides external resources where useful, but include a lifespan-aware
+    integration test. Verify the production startup command and that all workers complete startup
+    before readiness reports success. Test dependency versions together because client and framework
+    behavior is version-sensitive.
+  red_flags:
+    - Treating all in-process ASGI transports as lifecycle managers.
+    - Fixing only the test by setting arbitrary state and never exercising startup.
+    - Marking the service ready before required startup resources exist.
+    - Forgetting shutdown cleanup or testing with a shared stale application instance.

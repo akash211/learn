@@ -1,0 +1,90 @@
+concepts:
+  - title: File, footer and magic
+    detail: "Parquet files begin and end with `PAR1`; the trailing length locates Thrift-compact `FileMetaData` with schema and row-group descriptions. A complete footer is essential for locating chunks."
+  - title: Row group
+    detail: "A horizontal slice of rows containing one column chunk per leaf column. Its size affects metadata overhead, scan parallelism, memory and pruning granularity; it is not a directory partition."
+  - title: Column chunk
+    detail: "The values for one column within one row group, described by offsets, sizes, codec, encodings and optional statistics. Projection can avoid chunks the query does not need."
+  - title: Pages
+    detail: "Chunks contain data pages and may have a dictionary page; nested data pages also carry repetition/definition information. Page indexes are optional and reader support varies."
+  - title: Physical and logical types
+    detail: "A physical type such as `INT64` is not sufficient to infer meaning. Logical annotations describe strings, dates, decimals and timestamp semantics."
+  - title: Encoding versus codec
+    detail: "Dictionary, RLE/bit-packing and delta encode values; Snappy, Zstd, GZIP and LZ4 compress page payloads. They are separate layers."
+  - title: Dictionary fallback
+    detail: "A dictionary is generally scoped to a column chunk. High cardinality can make it ineffective; writers may switch to another encoding such as `PLAIN`."
+  - title: Delta encodings
+    detail: "`DELTA_BINARY_PACKED` represents integer differences; byte-array delta encodings exploit lengths or prefixes. They do not sort rows or guarantee narrow statistics."
+  - title: Nested levels
+    detail: "Definition levels describe optional path presence; repetition levels identify repeated boundaries. They preserve nested structure in columnar leaf streams, following Dremel's approach."
+  - title: Statistics
+    detail: "Min/max and null counts are optional coarse metadata. Readers can skip only when they can prove a region cannot match; missing or ambiguous stats require conservative reads."
+  - title: Three pruning layers
+    detail: "Partition pruning removes paths, row-group/page statistics can skip regions, and projection pruning avoids unneeded columns. Each requires eligible predicates, metadata and reader support."
+  - title: Physical order
+    detail: "Sorting or clustering on common filter fields can narrow row-group min/max ranges. Randomly mixed values often make every group's range broad."
+  - title: Codec compatibility
+    detail: "Test every writer/reader combination. Internal Parquet GZIP is unlike external `.gz` wrapping; LZ4 variants and Zstd reader support deserve explicit checks."
+  - title: Small files
+    detail: "Each object adds listing, footer and scheduling work. Compact safely and monitor file-size distributions; no universal target fits every engine and workload."
+  - title: Parquet is not a table protocol
+    detail: "Raw files do not define atomic commits, concurrent writes, deletes, merges or snapshots. Delta, Iceberg and Hudi add table metadata/protocols over data files."
+  - title: Remote reads
+    detail: "Footer-at-end enables range access, but object listing, request latency, retries and coordinator metadata costs remain. Measure planning separately from scan time."
+
+traps:
+  - "Equating a scan plan's pushed-filter label with row groups actually skipped. Verify bytes and runtime scan counters."
+  - "Treating physical type as complete semantics and ignoring logical annotations, nullability or timestamp interpretation."
+  - "Assuming dictionary encoding, statistics, page indexes or bloom filters always exist and are used by every reader."
+  - "Wrapping a Parquet file in external gzip and expecting ordinary footer/range access."
+  - "Partitioning by a near-unique field, then expecting compression to solve the resulting small-file overhead."
+  - "Reading a Delta directory with a raw Parquet glob and assuming it represents the current committed snapshot."
+
+advanced:
+  - "A schema is stored per file; schema merging and field-name/field-ID resolution are engine- and table-policy-dependent. Test mixed historical files."
+  - "Min/max usefulness depends on physical order, type sort semantics, statistics availability and reader behavior; page indexes and bloom filters are optional."
+  - "A footer can be readable while data pages still fail decompression or semantic validation. Integrity and row correctness need separate checks."
+  - "File size and row-group size are distinct. Reader task assignment, batch memory and parallelism are engine-specific."
+  - "Codec rollout is a compatibility change. Zstd level, LZ4 variant, reader version and existing mixed-codec files all matter."
+  - "Object-store planning can be coordinator/request-bound before scan tasks start; adding workers may not fix listing or footer bottlenecks."
+
+comparisons:
+  - a: Parquet
+    b: ORC
+    difference: "Both are columnar analytics formats; Parquet has row groups/chunks/pages, ORC stripes/indexes. Choose by reader ecosystem and tested workload."
+  - a: Parquet
+    b: Avro
+    difference: "Columnar analytical projection vs row-oriented event interchange and writer/reader schema resolution."
+  - a: Parquet
+    b: Delta Lake
+    difference: "Parquet is a file format; Delta adds a transaction log and table snapshot/commit semantics over Parquet data."
+  - a: Row group
+    b: Directory partition
+    difference: "Row group is an intra-file horizontal data unit; directory partition is dataset-level path layout for coarse pruning."
+  - a: Encoding
+    b: Compression codec
+    difference: "Encoding represents typed values (dictionary, delta); codec compresses page payloads (Snappy, Zstd, GZIP, LZ4)."
+  - a: Internal GZIP
+    b: External gzip wrapper
+    difference: "Parquet GZIP compresses internal page data with metadata/range access; a whole-file wrapper obscures ordinary footer/chunk access."
+  - a: Projection pruning
+    b: Predicate pruning
+    difference: "Projection avoids unneeded columns; predicate pruning tries to avoid paths, row groups or pages that cannot match."
+
+commands:
+  - label: Inspect Parquet file metadata
+    code: parquet-tools meta part-00000.parquet
+  - label: Inspect schema with PyArrow
+    code: "python -c 'import pyarrow.parquet as pq; print(pq.read_schema(\"part.parquet\")); print(pq.ParquetFile(\"part.parquet\").metadata)'"
+  - label: Inspect a Spark scan plan
+    code: df.select("event_time", "amount").where("event_time >= TIMESTAMP '2026-01-01 00:00:00'").explain("formatted")
+  - label: Write with Spark compression explicitly
+    code: "df.write.option(\"compression\", \"zstd\").parquet(output_path)"
+  - label: Write Parquet with DuckDB
+    code: "COPY (SELECT * FROM source) TO 'output.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);"
+  - label: Count files in an S3 prefix
+    code: aws s3 ls s3://bucket/table/ --recursive
+  - label: Validate YAML content
+    code: python -m backend.app.content
+  - label: Read a Parquet file via PyArrow
+    code: "python -c 'import pyarrow.parquet as pq; print(pq.read_table(\"part.parquet\").schema)'"

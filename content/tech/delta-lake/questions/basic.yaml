@@ -1,0 +1,453 @@
+- id: delta-basic-001
+  topic: transaction log
+  difficulty: beginner
+  question: What is the `_delta_log`, and why can't I read a Delta table by globbing every Parquet file?
+  answer: |
+    `_delta_log` is the transaction log that defines a Delta table's committed state. Its numbered
+    commit records contain actions such as adding files, removing files, setting the schema and
+    declaring required protocol features. A reader reconstructs a particular table version from
+    these actions, then scans only the active files for that snapshot. Checkpoints summarize state
+    so readers need not replay the full history from the beginning.
+
+    A raw Parquet glob ignores the log. It can include obsolete files that were replaced by an
+    update, miss logical deletions represented by table metadata, or mishandle features such as
+    deletion vectors. Use a Delta-aware reader for a mutable table. Direct Parquet access is useful
+    for controlled forensic inspection, but it is not equivalent to reading the current Delta
+    snapshot and should not be used as an alternate production reader without a protocol-aware
+    compatibility plan.
+  tags: [transaction-log, snapshots, parquet]
+
+- id: delta-basic-002
+  topic: commits
+  difficulty: beginner
+  question: What happens when a Delta Lake write commits?
+  answer: |
+    A writer starts from a table snapshot, evaluates the operation, and writes new Parquet files.
+    The files are not part of the table just because they exist in storage. The transaction becomes
+    visible when the writer publishes a new numbered log commit containing actions that add the new
+    files and, where necessary, remove replaced files. Readers use the commit history to build the
+    new snapshot, so they see the old complete version or the new complete version rather than an
+    intermediate mixture.
+
+    If publication fails, the candidate files may remain as unreferenced orphans; cleanup can
+    reclaim them later. Commit publication mechanisms depend on storage and coordination setup, so
+    don't assume arbitrary filesystem rename guarantees. A table transaction covers one table by
+    default, not an entire workflow or multiple tables. Inspect history and operation metrics to
+    confirm which table version was actually committed.
+  tags: [commits, atomicity, log]
+
+- id: delta-basic-003
+  topic: acid
+  difficulty: beginner
+  question: What does ACID mean for a Delta table on object storage?
+  answer: |
+    Atomicity means a Delta reader sees a committed table version, not half of a file replacement.
+    Consistency means a transaction respects the schema, protocol and declared constraints that its
+    client understands; Delta cannot enforce business rules that were never encoded. Isolation
+    means readers use stable snapshots and concurrent writers validate their assumptions before
+    committing. Durability means an acknowledged commit and its referenced data persist under the
+    configured storage guarantees.
+
+    These guarantees are scoped. A normal Delta commit is for one table, not an atomic transaction
+    across several tables, a Kafka offset and an API call. External lifecycle rules or manual
+    deletion can still remove files behind the table. The exact isolation and conflict behavior can
+    depend on operation, table layout, protocol features and runtime. In an interview or design,
+    state the boundary and recovery assumptions instead of claiming that “ACID” makes every part
+    of a pipeline exactly once.
+  tags: [acid, isolation, durability]
+
+- id: delta-basic-004
+  topic: optimistic concurrency
+  difficulty: intermediate
+  question: How does optimistic concurrency control work in Delta Lake?
+  answer: |
+    A Delta writer reads a starting snapshot and plans changes without holding an exclusive lock
+    throughout the computation. It writes candidate data files, then validates whether commits
+    made since its snapshot conflict with its read or write assumptions. If validation passes, it
+    publishes a new table version. If another writer made an incompatible change, the transaction
+    may be retried against fresh state or fail with a concurrency exception.
+
+    Optimistic concurrency performs well when conflicts are uncommon because independent work can
+    proceed in parallel. It does not mean all simultaneous writes succeed: overlapping overwrites,
+    merges or metadata changes can conflict. Conflict rules vary by command and implementation.
+    Design retries to reload/recompute rather than replay a stale plan, bound retry count, and make
+    source batches idempotent. Diagnose conflict rate by operation and affected partitions; adding
+    executors will not fix two jobs repeatedly modifying the same logical data.
+  tags: [concurrency, optimistic, conflicts]
+
+- id: delta-basic-005
+  topic: schema enforcement
+  difficulty: beginner
+  question: What is schema enforcement in Delta Lake?
+  answer: |
+    Schema enforcement compares incoming data with the table schema stored in Delta metadata
+    before accepting a write. If a producer changes a column's name or supplies an incompatible
+    type, the write normally fails rather than silently creating an inconsistent collection of
+    Parquet files. That failure is useful: it surfaces source drift at the boundary where it can be
+    classified and corrected.
+
+    A schema is not a complete quality contract. It does not automatically guarantee business
+    rules such as valid ranges, unique keys or correct units. Those need explicit constraints or
+    pipeline validation. Nested fields, nullability, decimals, timestamps and case sensitivity also
+    deserve testing in the actual engine. Enforcement is the default safety net; it should not be
+    bypassed just to get a job green. Determine whether the input is malformed or whether the table
+    contract needs a reviewed, intentional evolution.
+  tags: [schema, enforcement, data-quality]
+
+- id: delta-basic-006
+  topic: schema evolution
+  difficulty: intermediate
+  question: When should a Delta write use schema evolution such as `mergeSchema`?
+  answer: |
+    Use schema evolution when the source change is intentional, understood and compatible with
+    downstream consumers—for example, adding a nullable field that the table contract now
+    includes. In Spark Delta, a narrowly scoped write can use the `mergeSchema` option, and `MERGE`
+    has operation-specific schema evolution settings. Exact syntax and behavior depend on the
+    Delta/Spark version. A separately reviewed DDL migration is often clearer when the contract
+    should change independently of an ingestion batch.
+
+    Avoid turning schema merge on globally. It can convert a misspelled source column into a
+    permanent field, and it does not make semantic changes safe: changing dollars to cents keeps a
+    numeric type but changes meaning. Type widening and column mapping may require newer protocol
+    features, which can exclude old readers. Review source differences, test all clients, record
+    the change and only then enable the smallest needed evolution path.
+  tags: [schema-evolution, compatibility, merge-schema]
+
+- id: delta-basic-007
+  topic: protocol compatibility
+  difficulty: intermediate
+  question: What is the Delta protocol, and how can enabling a table feature break an older client?
+  answer: |
+    The protocol in the transaction log declares minimum reader and writer versions and, in newer
+    protocols, named table features. It tells clients which semantics they must implement to read
+    or modify the table correctly. A feature such as column mapping or deletion vectors changes
+    how rows or metadata are interpreted. If an old reader ignores that feature, it could return
+    incorrect data; if a writer ignores it, it could corrupt table state.
+
+    Before enabling a feature, inventory every reader and writer, including streaming jobs,
+    catalogs, backup tools and non-Spark connectors. Verify minimum versions and the feature matrix
+    for the precise releases. Protocol upgrades can be irreversible or difficult to undo, even if a
+    property is later disabled. Keep the lowest protocol that meets requirements and test from the
+    oldest supported production client, not just from the latest interactive notebook.
+  tags: [protocol, compatibility, table-features]
+
+- id: delta-basic-008
+  topic: time travel
+  difficulty: beginner
+  question: How does Delta time travel work, and what is the difference between version and timestamp reads?
+  answer: |
+    Time travel asks a Delta reader to reconstruct a historical table snapshot. A version read
+    names an exact commit number, making it deterministic and easy to compare with current state.
+    A timestamp read selects the applicable table version based on commit timestamps. Neither
+    method reconstructs source event time; they describe when the table's committed state changed.
+
+    In Spark, a read can specify `versionAsOf` or `timestampAsOf`, and compatible SQL runtimes
+    provide `VERSION AS OF` or `TIMESTAMP AS OF`. The historical files must still exist and the log
+    must retain enough history to reconstruct the snapshot. `VACUUM` can delete obsolete data files,
+    shortening the usable time-travel window. Time travel is therefore a debugging and analysis
+    feature within retention, not a permanent archive or substitute for an independent backup.
+  tags: [time-travel, versions, history]
+
+- id: delta-basic-009
+  topic: vacuum
+  difficulty: beginner
+  question: What does `VACUUM` do, and why can an aggressive retention period be dangerous?
+  answer: |
+    `VACUUM` removes data files that are no longer referenced by the current table snapshot and
+    have passed the retention cutoff. Updates and overwrites logically remove old files first;
+    those files can remain for time travel and for readers still using an older snapshot. Vacuum is
+    the physical cleanup step. It does not compact active small files, and log-history cleanup is a
+    related but separate policy.
+
+    If retention is too short, a long-running reader or writer may need files that vacuum removes.
+    Historical versions then become unreadable, and restore may be impossible if the necessary
+    data is gone. Delta commonly applies a minimum-retention safety check; bypassing it can be
+    hazardous. Base the interval on the longest query, stream, maintenance run and recovery
+    objective. Use dry-run capability where available, review candidates and keep separate
+    backups for retention requirements beyond Delta's file window.
+  tags: [vacuum, retention, recovery]
+
+- id: delta-basic-010
+  topic: merge
+  difficulty: intermediate
+  question: What does `MERGE` do in Delta Lake, and what makes it atomic?
+  answer: |
+    `MERGE` compares a source relation with a target table using a match condition, then applies
+    clauses for matched updates/deletes and unmatched inserts. It supports common upsert and CDC
+    patterns. The engine identifies relevant target data, evaluates matches and writes file changes;
+    a single target-table transaction publishes the resulting actions. Readers see the previous
+    snapshot or the committed new snapshot, not a partially applied merge.
+
+    Atomic table application does not make the source unique or ordered. Duplicate source keys can
+    produce ambiguous matches, and late events can overwrite newer state unless the merge condition
+    checks a source sequence. A merge also does not atomically advance a Kafka offset or update a
+    second table. Deduplicate and validate the source, use deterministic business keys, and make
+    replay idempotent. Performance depends heavily on target files scanned and match predicates,
+    not only on the number of source rows.
+  tags: [merge, upsert, atomicity]
+
+- id: delta-basic-011
+  topic: CDC
+  difficulty: intermediate
+  question: How should a CDC pipeline handle duplicate and out-of-order events before a Delta `MERGE`?
+  answer: |
+    Preserve source identity and ordering metadata when landing CDC: primary key, operation,
+    source sequence/commit version, event id and ingestion batch id. Deduplicate repeated event ids,
+    then choose a deterministic latest change per key for the batch where that is semantically
+    correct. In the merge, compare incoming source sequence with the target's last applied sequence
+    so a delayed older event cannot overwrite newer state. Handle delete events explicitly as
+    tombstones or delete clauses.
+
+    Do not use ingestion timestamp as a substitute for source order when delivery can be delayed or
+    replayed. A repeated micro-batch should become a no-op or reproduce the same state. Keep raw
+    events for audit and rebuilds, and record source progress only after the target outcome is
+    known. A Delta transaction does not atomically commit an external source offset, so recovery
+    requires idempotence or reconciliation across the table and source checkpoint.
+  tags: [cdc, idempotence, ordering]
+
+- id: delta-basic-012
+  topic: SCD Type 1
+  difficulty: beginner
+  question: How does SCD Type 1 differ from SCD Type 2 when implemented with Delta?
+  answer: |
+    SCD Type 1 overwrites the current values for a key and does not keep prior attribute history.
+    It is appropriate when corrections supersede old values or consumers only need the latest
+    state. A Delta `MERGE` can update matched rows and insert new keys. The source should be
+    deduplicated to one deterministic row per key, with a stale-event check when updates can arrive
+    out of order.
+
+    SCD Type 2 preserves versions by closing the current row and inserting a new row with validity
+    columns such as `valid_from`, `valid_to` and `is_current`. That requires stronger temporal
+    rules: one active row per key, event ordering, late-arrival handling and interval boundaries.
+    Type 1 is not just a cheaper Type 2; it discards history. Choose by business semantics, not by
+    which merge statement is shorter, and test deletes, repeated events and corrections explicitly.
+  tags: [scd, type-1, type-2]
+
+- id: delta-basic-013
+  topic: SCD Type 2
+  difficulty: intermediate
+  question: What invariants should a Delta SCD Type 2 table maintain?
+  answer: |
+    A Type 2 dimension typically keeps a row per effective version, with a business key, values,
+    `valid_from`, `valid_to` and a current-row marker. Core invariants are that intervals for a key
+    do not overlap, boundaries follow one consistent inclusive/exclusive convention, there is at
+    most one current version, and a change closes the prior version while inserting the new one.
+    Store the source sequence or event identity needed to resolve duplicates and ordering.
+
+    A basic `MERGE` may handle the latest in-order changes, but late-arriving events can fall
+    between existing versions and require interval repair. A delete may close the current record
+    or create a tombstone according to the domain. Test same-timestamp events, key changes,
+    duplicate batches, deletes and reactivation. Delta provides atomic target-table commits; it
+    does not decide temporal business rules or ensure one current row unless the pipeline enforces
+    them.
+  tags: [scd-type-2, temporal-data, invariants]
+
+- id: delta-basic-014
+  topic: partitioning
+  difficulty: beginner
+  question: How should you choose partition columns for a Delta table?
+  answer: |
+    Partition by a small number of coarse, commonly filtered columns when partition pruning or
+    partition-scoped writes materially help. Dates or a limited set of regions can be sensible at
+    sufficient scale. A high-cardinality key such as user id often creates many directories,
+    metadata overhead and tiny files. Partitioning is a physical layout choice, not a requirement
+    for every table.
+
+    Check query filters, data volume per value, skew and how writes arrive. A partition column is
+    most useful when consumers filter on it and ingestion can keep each group large enough. It
+    does not sort data within files, and a partition predicate must be logically safe for a merge
+    or overwrite. Changing partition strategy later can require rewriting the table. For moderate
+    or evolving workloads, an unpartitioned table with statistics or clustering may be simpler;
+    evaluate based on actual reads and writes rather than copying another table's layout.
+  tags: [partitioning, layout, data-skipping]
+
+- id: delta-basic-015
+  topic: small files
+  difficulty: beginner
+  question: Why are many small files a problem, and how does compaction help?
+  answer: |
+    Each file adds object-store requests, listing and planning work, metadata, footer reads and
+    task scheduling overhead. A query that must open thousands of tiny files can spend more time
+    managing files than scanning rows. Streaming micro-batches and frequent small appends commonly
+    create this pattern. Small files can also make statistics less effective and increase pressure
+    on catalogs or the driver.
+
+    Compaction rewrites many active files into fewer larger files while preserving table contents.
+    Delta implementations offer `OPTIMIZE` or related APIs in supported versions; Databricks may
+    also provide auto compaction and predictive maintenance. A target size is workload-dependent:
+    overly large files reduce parallelism and can hurt selective reads. Compaction costs compute
+    and I/O, so measure file counts, file-size distribution, bytes scanned and query latency before
+    and after. It is not the same as `VACUUM`, which deletes obsolete files.
+  tags: [small-files, compaction, optimize]
+
+- id: delta-basic-016
+  topic: Z-order
+  difficulty: intermediate
+  question: What is Z-ordering in Delta Lake, and when might it help?
+  answer: |
+    Z-ordering rewrites data so values from selected columns are more locally grouped across files.
+    Delta readers can use per-file statistics such as minimum and maximum values to skip files that
+    cannot match a query predicate. If values are randomly distributed, file ranges overlap widely
+    and skipping is weak; improved locality can narrow those ranges. Z-order is useful when queries
+    repeatedly filter selectively on a small set of columns that are not good directory partition
+    keys.
+
+    Z-order is not a secondary index and does not guarantee every query reads less data. It rewrites
+    files and consumes resources, and the syntax/availability is platform- and version-specific;
+    Databricks SQL's `OPTIMIZE ... ZORDER BY` should not be assumed in all OSS clients. Avoid
+    ordering by many columns, measure representative predicates and bytes skipped, and compare
+    maintenance cost. On tables using liquid clustering, Z-order is not a compatible layout choice
+    in documented OSS behavior.
+  tags: [z-order, data-skipping, optimize]
+
+- id: delta-basic-017
+  topic: deletion vectors
+  difficulty: intermediate
+  question: What are deletion vectors, and do they immediately erase deleted rows from storage?
+  answer: |
+    A deletion vector records row positions in a Parquet file that should be treated as deleted or
+    superseded. A compatible Delta reader applies that metadata while scanning. This can avoid
+    rewriting an entire large file for a small `DELETE`, `UPDATE` or `MERGE`, improving row-change
+    performance in supported versions.
+
+    A deletion vector is a logical soft-delete, not immediate physical erasure. Old row bytes may
+    remain in files until a rewrite/purge applies changes, and obsolete files may remain until
+    `VACUUM` passes the retention threshold. Exact support for scans and each DML operation varies
+    by delta-spark version, delta-rs or other client. Enabling the feature raises protocol
+    requirements, so older readers may no longer be safe. If a privacy requirement needs physical
+    deletion, use the implementation's documented purge workflow and verify old files, backups
+    and replicas are handled, rather than treating a successful SQL `DELETE` as proof of erasure.
+  tags: [deletion-vectors, protocol, erasure]
+
+- id: delta-basic-018
+  topic: liquid clustering
+  difficulty: intermediate
+  question: How does liquid clustering differ from Hive partitioning and Z-ordering?
+  answer: |
+    Hive-style partitioning places files under directory values for fixed columns; Z-ordering
+    rewrites files to improve locality for selected values. Liquid clustering records clustering
+    columns as table metadata and incrementally organizes data around them in supported clients.
+    Clustering columns can be changed without immediately rewriting all existing files, allowing
+    layout intent to evolve. Existing data only reflects the new keys after supported reclustering
+    work runs.
+
+    It can suit high-cardinality filters, skewed distributions and changing query patterns where
+    fixed partitions become awkward. OSS Delta documentation describes liquid clustering as
+    incompatible with partitioning and Z-ordering on the same table, and it requires compatible
+    protocol features and clients. Databricks adds managed options such as predictive key selection
+    and `CLUSTER BY AUTO` in supported runtimes; these are not generic OSS guarantees. Verify GA or
+    preview status, supported operations and every reader/writer before enabling it.
+  tags: [liquid-clustering, partitioning, compatibility]
+
+- id: delta-basic-019
+  topic: streaming sink
+  difficulty: intermediate
+  question: What does a Delta sink provide to a Structured Streaming query?
+  answer: |
+    Spark Structured Streaming can write micro-batches to a Delta table, committing each batch as a
+    table version. With a durable, stable checkpoint and supported Spark/Delta integration, the
+    sink uses transaction identity to make replay of a committed batch idempotent within that
+    query's recovery lineage. This is a useful exactly-once effect at the Delta sink boundary.
+
+    It depends on preserving the checkpoint and query identity. Deleting a checkpoint and starting
+    anew can replay source data, and reusing a checkpoint for a changed query is unsafe. A callback
+    such as `foreachBatch` can execute again after failure; non-Delta API calls inside it are not
+    part of the Delta commit. Keep checkpoint storage durable, use deterministic idempotency keys
+    for external effects, and test failure between table commit and checkpoint progress. A
+    transactional table sink does not create a distributed transaction with Kafka, a second Delta
+    table or an HTTP service.
+  tags: [streaming, checkpoint, idempotence]
+
+- id: delta-basic-020
+  topic: change data feed
+  difficulty: intermediate
+  question: What is Delta Change Data Feed (CDF), and what should consumers consider?
+  answer: |
+    Change Data Feed exposes row-level changes associated with Delta table commits, commonly
+    including insert, update pre/post-image and delete change types with commit metadata. It lets a
+    downstream process consume changes incrementally rather than diffing full snapshots. In Spark,
+    CDF reads use supported Delta APIs/options and can specify a starting version or timestamp.
+
+    CDF must be enabled and supported by the table's protocol and client. It is not automatically
+    an eternal CDC archive: deleted data, log retention, starting position, schema evolution and
+    reader compatibility determine what remains available. Consumers need durable checkpoints and
+    idempotent application, particularly if they write to another system. Some row metadata or
+    features may not be exposed in CDF in a given runtime. Confirm the supported table operations,
+    retention behavior and exact client release before relying on CDF as the only recovery feed.
+  tags: [cdf, change-data, incremental-processing]
+
+- id: delta-basic-021
+  topic: exactly once
+  difficulty: intermediate
+  question: Is a Delta streaming pipeline exactly once end to end?
+  answer: |
+    Not automatically. A Spark streaming query writing to Delta can provide idempotent commits for
+    replayed micro-batches under supported configuration when its checkpoint and query identity are
+    preserved. That describes one boundary, not the entire architecture. Source delivery may
+    repeat, user code may run again, and `foreachBatch` side effects are not included in the Delta
+    transaction.
+
+    A Delta table A write and table B write can also commit independently, as can a table update
+    and an external Kafka offset or API request. End-to-end systems commonly combine at-least-once
+    delivery with event IDs, deduplication, sequence checks and idempotent updates to achieve an
+    effectively-once business result. Define the required invariant precisely—for example, one
+    target row per event id—and test recovery after failures at each boundary. “Exactly once” without
+    a named transaction scope hides the most important failure cases.
+  tags: [exactly-once, streaming, transactions]
+
+- id: delta-basic-022
+  topic: restore and recovery
+  difficulty: intermediate
+  question: How is restoring a Delta table different from reading an old version?
+  answer: |
+    A time-travel read selects an older snapshot for that query; it does not change the current
+    table. A restore operation, where supported, writes a new commit that makes the logical
+    contents match a prior version. The version number still moves forward, leaving an audit trail
+    of the recovery action. This is preferable to hand-editing log files or copying selected
+    Parquet files into the table directory.
+
+    Restore requires the old snapshot's log information and data files to remain available. If
+    `VACUUM` removed required files, the log alone cannot recreate them. Before restoring, inspect
+    history, identify the bad commit and understand whether later valid writes would be lost or need
+    replay. Restore syntax and operation availability vary by runtime/client. For long-term
+    disaster recovery, retain independent backups or replayable source data and rehearse recovery;
+    table time travel is bounded by retention policy.
+  tags: [restore, recovery, time-travel]
+
+- id: delta-basic-023
+  topic: Delta and Parquet
+  difficulty: beginner
+  question: What does Delta Lake add beyond Parquet?
+  answer: |
+    Parquet is a columnar file format. It defines how rows and columns are encoded in individual
+    files, but it does not by itself define a table-wide transaction log, atomic commit sequence,
+    schema contract, file removal history or table snapshot. Delta uses Parquet for data and adds
+    `_delta_log` metadata to identify which files belong to each committed table version.
+
+    That layer enables consistent reads while files are replaced, optimistic concurrency, schema
+    enforcement, versioned snapshots and operations such as `MERGE` in compatible engines. The
+    format does not transform Parquet into a database server or guarantee every engine supports
+    every operation. A raw Parquet reader sees physical files but does not apply Delta's active-file
+    set and features. Use plain Parquet for immutable, simple datasets; use a table format when
+    producers and consumers need table-level changes, transactions or incremental history.
+  tags: [parquet, table-format, snapshots]
+
+- id: delta-basic-024
+  topic: open-source and Databricks
+  difficulty: intermediate
+  question: Which capabilities belong to OSS Delta Lake and which may be Databricks-managed?
+  answer: |
+    OSS Delta Lake includes the open table protocol, Delta's transaction-log semantics and
+    implementations such as `delta-spark`; the project evolves independently of any one hosted
+    platform. Other clients, including delta-rs and connectors built with Delta Kernel, implement
+    portions of the ecosystem with version-specific support. A table may be open and still require
+    a client that understands its declared protocol features.
+
+    Databricks layers managed services and runtime behavior around Delta, including Unity Catalog
+    governance, Photon acceleration, predictive optimization and some automation or concurrency
+    capabilities. Those are not automatically available in OSS Spark. Conversely, release dates
+    and feature coverage differ across managed runtimes and OSS libraries. Check the exact feature
+    matrix and GA/preview status for the engine and version you deploy, especially before enabling
+    deletion vectors, clustering, catalog-managed tables or new protocol features. Never infer
+    client compatibility from the word “Delta” alone.
+  tags: [oss, databricks, ecosystem]

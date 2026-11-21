@@ -1,0 +1,253 @@
+- id: dsa-basic-001
+  topic: arrays
+  difficulty: beginner
+  question: 'Two Sum: return indices of two values summing to target.'
+  answer: "Approach: Scan once; look up the complement among prior indices before recording the current value.\n\nWhy it works: The map stores only prior indices, so each lookup can pair the current item with an earlier one and never reuse an index.\n\nWorked example: nums=[2, 7, 11], target=9 returns [0, 1]. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n) expected; space O(n).\n\n```python\ndef two_sum(nums, target):\n    seen = {}\n    for i, x in enumerate(nums):\n        if target - x in seen:\n            return [seen[target - x], i]\n        seen[x] = i\n    return []\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - arrays
+- id: dsa-basic-002
+  topic: strings
+  difficulty: beginner
+  question: How do you determine whether two strings are anagrams?
+  answer: "Approach: Compare character frequency maps; both strings must have the same length and counts.\n\nWhy it works: Equal character multiplicities are both necessary and sufficient for rearrangement; Counter handles arbitrary hashable code points.\n\nWorked example: \"listen\" and \"silent\" have identical frequency maps. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n) expected; space O(u), for u distinct characters.\n\n```python\nfrom collections import Counter\ndef is_anagram(s, t):\n    return Counter(s) == Counter(t)\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable.\n\nImplementation note: Check the empty and boundary cases, and confirm whether the routine mutates its input or excludes returned output from its auxiliary-space bound."
+  tags:
+  - strings
+- id: dsa-basic-003
+  topic: hashing
+  difficulty: intermediate
+  question: Group a list of words into anagram groups.
+  answer: "Approach: Use the sorted letters as a canonical dictionary key; append each word to its group.\n\nWhy it works: Sorting each word creates a canonical representation independent of original letter order; identical keys therefore share a group.\n\nWorked example: \"eat\", \"tea\", and \"ate\" share the sorted key (\"a\", \"e\", \"t\"). This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n m log m); space O(nm), for n words of length at most m.\n\n```python\nfrom collections import defaultdict\ndef group_anagrams(words):\n    groups = defaultdict(list)\n    for word in words:\n        groups[tuple(sorted(word))].append(word)\n    return list(groups.values())\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - hashing
+- id: dsa-basic-004
+  topic: sliding window
+  difficulty: intermediate
+  question: Find the length of the longest substring without repeated characters.
+  answer: "Approach: Track each character’s latest index and move the left boundary past a repeat.\n\nWhy it works: The left boundary only moves forward, and max prevents an old repeated index outside the active window from invalidating it.\n\nWorked example: For \"abba\", the best window has length 2, not 3. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n) expected; space O(min(n, alphabet)).\n\n```python\ndef longest_unique(s):\n    last = {}; left = best = 0\n    for right, ch in enumerate(s):\n        left = max(left, last.get(ch, -1) + 1)\n        last[ch] = right\n        best = max(best, right - left + 1)\n    return best\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - sliding-window
+- id: dsa-basic-005
+  topic: arrays
+  difficulty: intermediate
+  question: Find the maximum sum of a non-empty contiguous subarray.
+  answer: "Approach: Kadane’s recurrence either starts anew at x or extends the previous best-ending sum.\n\nWhy it works: At each position, every best subarray ending there either starts at that item or extends the previous ending; tracking the global best handles all endpoints.\n\nWorked example: For [-2, 3, -1], the best sum is 3. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n); space O(1).\n\n```python\ndef max_subarray(nums):\n    ending = best = nums[0]\n    for x in nums[1:]:\n        ending = max(x, ending + x)\n        best = max(best, ending)\n    return best\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - arrays
+- id: dsa-basic-006
+  topic: arrays
+  difficulty: intermediate
+  question: Return the product of all elements except self without division.
+  answer: "Approach: Build prefix products in the result, then multiply by a running suffix product.\n\nWhy it works: The first pass stores products strictly to each position’s left; the reverse pass supplies the product strictly to its right, including correct behavior with zeros.\n\nWorked example: For [1, 2, 3, 4], output is [24, 12, 8, 6]. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n); O(1) auxiliary space excluding output.\n\n```python\ndef product_except_self(nums):\n    out = [1] * len(nums)\n    p = 1\n    for i, x in enumerate(nums):\n        out[i] = p; p *= x\n    s = 1\n    for i in range(len(nums) - 1, -1, -1):\n        out[i] *= s; s *= nums[i]\n    return out\n```\n\nImplementation note: Check the empty and boundary cases, and confirm whether the routine mutates its input or excludes returned output from its auxiliary-space bound."
+  tags:
+  - arrays
+- id: dsa-basic-007
+  topic: two pointers
+  difficulty: intermediate
+  question: Return all unique triplets whose sum is zero.
+  answer: "Approach: Sort, fix one value, then use opposing pointers; skip duplicate values after matches.\n\nWhy it works: After sorting, pointer movement is justified by sum order; skipping equal fixed values and matched endpoints removes duplicate triplets.\n\nWorked example: [-1, 0, 1, 2, -1, -4] yields [-1,-1,2] and [-1,0,1]. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n^2); space O(n) for the sorted copy, excluding returned triplets.\n\n```python\ndef three_sum(nums):\n    a = sorted(nums); out = []\n    for i in range(len(a) - 2):\n        if i and a[i] == a[i-1]: continue\n        l, r = i + 1, len(a) - 1\n        while l < r:\n            s = a[i] + a[l] + a[r]\n            if s < 0: l += 1\n            elif s > 0: r -= 1\n            else:\n                out.append([a[i], a[l], a[r]])\n                l += 1; r -= 1\n                while l < r and a[l] == a[l-1]: l += 1\n                while l < r and a[r] == a[r+1]: r -=\
+    \ 1\n    return out\n```"
+  tags:
+  - two-pointers
+- id: dsa-basic-008
+  topic: arrays
+  difficulty: intermediate
+  question: Rotate an array to the right by k positions in place.
+  answer: "Approach: Reduce k modulo n and reverse the full list, then each resulting segment.\n\nWhy it works: Three reversals put the final k-element suffix first while preserving order inside each segment; modulo handles large rotations.\n\nWorked example: Rotating [1,2,3,4,5] by 2 gives [4,5,1,2,3]. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n); space O(1).\n\n```python\ndef rotate(nums, k):\n    if not nums: return\n    k %= len(nums)\n    def rev(i, j):\n        while i < j:\n            nums[i], nums[j] = nums[j], nums[i]; i += 1; j -= 1\n    rev(0, len(nums)-1); rev(0, k-1); rev(k, len(nums)-1)\n```\n\nImplementation note: Check the empty and boundary cases, and confirm whether the routine mutates its input or excludes returned output from its auxiliary-space bound."
+  tags:
+  - arrays
+- id: dsa-basic-009
+  topic: intervals
+  difficulty: intermediate
+  question: Merge overlapping intervals.
+  answer: "Approach: Sort by start and extend the last output interval whenever ranges overlap.\n\nWhy it works: After sorting by start, only the last output interval can overlap the next range; extending its end preserves a normalized prefix.\n\nWorked example: [[1,3],[2,6],[8,10]] becomes [[1,6],[8,10]]. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n log n); space O(n) for output.\n\n```python\ndef merge_intervals(intervals):\n    out = []\n    for start, end in sorted(intervals):\n        if not out or start > out[-1][1]: out.append([start, end])\n        else: out[-1][1] = max(out[-1][1], end)\n    return out\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - intervals
+- id: dsa-basic-010
+  topic: stack
+  difficulty: beginner
+  question: Determine whether brackets are valid and correctly nested.
+  answer: "Approach: Push expected closers; each closing token must match the stack top.\n\nWhy it works: The stack top is the only opener that may legally close next, enforcing both pairing and nesting order.\n\nWorked example: \"([])\" is valid; \"([)]\" fails at the mismatched closer. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n); space O(n).\n\n```python\ndef valid_brackets(s):\n    pairs = {\"(\": \")\", \"[\": \"]\", \"{\": \"}\"}; st = []\n    for ch in s:\n        if ch in pairs: st.append(pairs[ch])\n        elif not st or st.pop() != ch: return False\n    return not st\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - stack
+- id: dsa-basic-011
+  topic: stack
+  difficulty: intermediate
+  question: Implement a stack that supports push, pop, top, and retrieving minimum in O(1).
+  answer: "Approach: Maintain a parallel stack of minima, repeating the current minimum at every depth.\n\nWhy it works: Each depth stores its prefix minimum, so popping data and minima together restores the exact prior stack state.\n\nWorked example: Push 5, then 2: get_min is 2; pop restores 5. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Each operation O(1); space O(n).\n\n```python\nclass MinStack:\n    def __init__(self): self.data = []; self.mins = []\n    def push(self, x):\n        self.data.append(x); self.mins.append(x if not self.mins else min(x, self.mins[-1]))\n    def pop(self): self.mins.pop(); return self.data.pop()\n    def top(self): return self.data[-1]\n    def get_min(self): return self.mins[-1]\n```"
+  tags:
+  - stack
+- id: dsa-basic-012
+  topic: monotonic stack
+  difficulty: intermediate
+  question: For each day, find how many days until a warmer temperature.
+  answer: "Approach: Keep unresolved indices on a decreasing stack; a warmer day resolves the top.\n\nWhy it works: A warmer day resolves every colder unresolved index it pops; the stack retains exactly those indices without a known warmer successor.\n\nWorked example: [73,74,75,71,69,72,76,73] starts with answer 1. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n); space O(n).\n\n```python\ndef daily_temperatures(t):\n    ans = [0] * len(t); st = []\n    for i, x in enumerate(t):\n        while st and t[st[-1]] < x:\n            j = st.pop(); ans[j] = i - j\n        st.append(i)\n    return ans\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - monotonic-stack
+- id: dsa-basic-013
+  topic: queue
+  difficulty: intermediate
+  question: Implement a FIFO queue using two stacks.
+  answer: "Approach: Push into input; transfer to output only when output is empty, reversing arrival order.\n\nWhy it works: Transferring only into an empty output stack reverses arrival order once and preserves FIFO order for subsequent operations.\n\nWorked example: Push 1, push 2, then pop returns 1. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Amortized O(1) per operation; O(n) space.\n\n```python\nclass MyQueue:\n    def __init__(self): self.ins = []; self.outs = []\n    def push(self, x): self.ins.append(x)\n    def _move(self):\n        if not self.outs:\n            while self.ins: self.outs.append(self.ins.pop())\n    def pop(self): self._move(); return self.outs.pop()\n    def peek(self): self._move(); return self.outs[-1]\n    def empty(self): return not self.ins and not self.outs\n```"
+  tags:
+  - queue
+- id: dsa-basic-014
+  topic: linked list
+  difficulty: intermediate
+  question: Reverse a singly linked list.
+  answer: "Approach: Iteratively redirect each next pointer while retaining the untouched suffix.\n\nWhy it works: Each iteration transfers one edge from the untouched suffix to the reversed prefix without losing the saved successor.\n\nWorked example: 1→2→3 becomes 3→2→1. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n); space O(1).\n\n```python\nclass Node:\n    def __init__(self, val=0, next=None): self.val, self.next = val, next\ndef reverse_list(head):\n    prev = None\n    while head:\n        nxt = head.next; head.next = prev; prev = head; head = nxt\n    return prev\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - linked-list
+- id: dsa-basic-015
+  topic: linked list
+  difficulty: intermediate
+  question: Merge two sorted linked lists.
+  answer: "Approach: Attach the smaller current node to a dummy-tail, then append the remainder.\n\nWhy it works: Choosing the smaller head preserves sorted order, and each original node is attached exactly once.\n\nWorked example: Merging 1→3 and 2→4 produces 1→2→3→4. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(m+n); O(1) auxiliary space when relinking nodes.\n\n```python\nclass Node:\n    def __init__(self, val=0, next=None): self.val, self.next = val, next\ndef merge_lists(a, b):\n    dummy = tail = Node()\n    while a and b:\n        if a.val <= b.val: tail.next, a = a, a.next\n        else: tail.next, b = b, b.next\n        tail = tail.next\n    tail.next = a or b\n    return dummy.next\n```"
+  tags:
+  - linked-list
+- id: dsa-basic-016
+  topic: linked list
+  difficulty: beginner
+  question: Detect whether a linked list contains a cycle.
+  answer: "Approach: Advance slow by one and fast by two; a meeting proves a cycle.\n\nWhy it works: On a cycle the fast pointer gains one node per iteration relative to slow, so finite cycle length forces a meeting.\n\nWorked example: A tail pointing back to the second node eventually makes slow is fast. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n); space O(1).\n\n```python\ndef has_cycle(head):\n    slow = fast = head\n    while fast and fast.next:\n        slow = slow.next; fast = fast.next.next\n        if slow is fast: return True\n    return False\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - linked-list
+- id: dsa-basic-017
+  topic: linked list
+  difficulty: intermediate
+  question: Remove the nth node from the end of a list, assuming 1 <= n <= its length.
+  answer: "Approach: A dummy node and n-step lead pointer leave slow immediately before the target.\n\nWhy it works: The fixed pointer gap makes slow stop at the predecessor of the target, including head removal via the dummy node.\n\nWorked example: In 1→2→3→4 with n=2, remove 3. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n); space O(1).\n\n```python\nclass Node:\n    def __init__(self, val=0, next=None): self.val, self.next = val, next\ndef remove_nth(head, n):\n    dummy = Node(0, head); fast = slow = dummy\n    for _ in range(n): fast = fast.next\n    while fast.next: fast = fast.next; slow = slow.next\n    slow.next = slow.next.next\n    return dummy.next\n```"
+  tags:
+  - linked-list
+- id: dsa-basic-018
+  topic: linked list
+  difficulty: intermediate
+  question: Determine whether a linked list is a palindrome.
+  answer: "Approach: Find midpoint, reverse second half, and compare corresponding values.\n\nWhy it works: After locating the midpoint, reversing the second half aligns corresponding values without allocating another sequence.\n\nWorked example: 1→2→2→1 compares equal from both ends. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n); space O(1), mutates the second half temporarily.\n\n```python\nclass Node:\n    def __init__(self, val=0, next=None): self.val, self.next = val, next\ndef is_list_palindrome(head):\n    slow = fast = head\n    while fast and fast.next: slow = slow.next; fast = fast.next.next\n    prev = None\n    while slow:\n        nxt = slow.next; slow.next = prev; prev = slow; slow = nxt\n    left, right = head, prev\n    while right:\n        if left.val != right.val: return False\n        left = left.next; right = right.next\n    return True\n```"
+  tags:
+  - linked-list
+- id: dsa-basic-019
+  topic: trees
+  difficulty: beginner
+  question: Find the maximum depth of a binary tree.
+  answer: "Approach: Recursively take one plus the larger child depth, with empty depth zero.\n\nWhy it works: Every nonempty node contributes one level above the deeper child; the empty subtree establishes the zero-depth base case.\n\nWorked example: A root with one child and no grandchildren has depth 2. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n); recursion space O(h).\n\n```python\nclass TreeNode:\n    def __init__(self, val=0, left=None, right=None): self.val, self.left, self.right = val, left, right\ndef max_depth(root):\n    if root is None: return 0\n    return 1 + max(max_depth(root.left), max_depth(root.right))\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - trees
+- id: dsa-basic-020
+  topic: trees
+  difficulty: beginner
+  question: Check whether two binary trees are identical in shape and values.
+  answer: "Approach: Both empty is equal; otherwise compare values and corresponding subtrees.\n\nWhy it works: The recursive comparison checks both shape and value at each corresponding position, so local equality composes to whole-tree equality.\n\nWorked example: Two empty trees are equal; a missing child on only one side is not. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n); recursion space O(h).\n\n```python\nclass TreeNode:\n    def __init__(self, val=0, left=None, right=None): self.val, self.left, self.right = val, left, right\ndef same_tree(a, b):\n    if a is None or b is None: return a is b\n    return a.val == b.val and same_tree(a.left,b.left) and same_tree(a.right,b.right)\n```"
+  tags:
+  - trees
+- id: dsa-basic-021
+  topic: trees
+  difficulty: intermediate
+  question: Return binary-tree level-order traversal as lists of values.
+  answer: "Approach: Process the queue length captured at the start of each level.\n\nWhy it works: Capturing the queue size before processing prevents newly enqueued children from leaking into the current level.\n\nWorked example: A tree 1 with children 2 and 3 returns [[1],[2,3]]. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n); space O(w) queue plus O(n) output.\n\n```python\nfrom collections import deque\nclass TreeNode:\n    def __init__(self, val=0, left=None, right=None): self.val, self.left, self.right = val, left, right\ndef level_order(root):\n    if not root: return []\n    q = deque([root]); out = []\n    while q:\n        row = []\n        for _ in range(len(q)):\n            node = q.popleft(); row.append(node.val)\n            if node.left: q.append(node.left)\n            if node.right: q.append(node.right)\n        out.append(row)\n    return out\n```"
+  tags:
+  - trees
+- id: dsa-basic-022
+  topic: BST
+  difficulty: intermediate
+  question: Validate that a binary tree is a strict binary search tree.
+  answer: "Approach: Pass exclusive lower and upper bounds to every subtree.\n\nWhy it works: Ancestor bounds propagate through the full subtree, catching violations that a parent-child-only test misses.\n\nWorked example: Root 5 with left child 3 and deeper right descendant 6 is invalid. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n); recursion space O(h).\n\n```python\nclass TreeNode:\n    def __init__(self, val=0, left=None, right=None): self.val, self.left, self.right = val, left, right\ndef is_valid_bst(root):\n    def check(node, lo, hi):\n        if not node: return True\n        if lo is not None and node.val <= lo: return False\n        if hi is not None and node.val >= hi: return False\n        return check(node.left, lo, node.val) and check(node.right, node.val, hi)\n    return check(root, None, None)\n```"
+  tags:
+  - BST
+- id: dsa-basic-023
+  topic: BST
+  difficulty: intermediate
+  question: Find the kth-smallest key in a BST (assume 1 <= k <= node count).
+  answer: "Approach: Inorder traversal visits keys in sorted order; stop at visit k.\n\nWhy it works: Inorder traversal of a strict BST is sorted; stopping at visit k avoids traversing the remaining nodes.\n\nWorked example: For keys 2,1,3 and k=2, inorder visits 1 then returns 2. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(h+k) in the iterative traversal; space O(h).\n\n```python\nclass TreeNode:\n    def __init__(self, val=0, left=None, right=None): self.val, self.left, self.right = val, left, right\ndef kth_smallest(root, k):\n    st = []; node = root\n    while True:\n        while node: st.append(node); node = node.left\n        node = st.pop(); k -= 1\n        if k == 0: return node.val\n        node = node.right\n```"
+  tags:
+  - BST
+- id: dsa-basic-024
+  topic: BST
+  difficulty: intermediate
+  question: Find the lowest common ancestor of two values in a BST; both exist.
+  answer: "Approach: Descend left or right while both targets lie on the same side; otherwise current splits them.\n\nWhy it works: The first node not strictly above or below both targets is the lowest point where their search paths diverge.\n\nWorked example: In a BST rooted at 6, values 2 and 8 split at 6. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(h); space O(1).\n\n```python\nclass TreeNode:\n    def __init__(self, val=0, left=None, right=None): self.val, self.left, self.right = val, left, right\ndef bst_lca(root, p, q):\n    while root:\n        if p < root.val and q < root.val: root = root.left\n        elif p > root.val and q > root.val: root = root.right\n        else: return root\n    return None\n```"
+  tags:
+  - BST
+- id: dsa-basic-025
+  topic: heap
+  difficulty: intermediate
+  question: Return the k most frequent values; ties may be in any order.
+  answer: "Approach: Count values, then use a size-k min-heap keyed by frequency.\n\nWhy it works: Counter computes exact frequencies; nlargest selects the highest counts while ties may be returned in any order.\n\nWorked example: For [1,1,1,2,2,3] and k=2, values 1 and 2 are returned. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n + u log k); space O(u), u distinct values.\n\n```python\nfrom collections import Counter\nimport heapq\ndef top_k_frequent(nums, k):\n    return [x for x, _ in heapq.nlargest(k, Counter(nums).items(), key=lambda p:p[1])]\n```\n\nImplementation note: Check the empty and boundary cases, and confirm whether the routine mutates its input or excludes returned output from its auxiliary-space bound."
+  tags:
+  - heap
+- id: dsa-basic-026
+  topic: heap
+  difficulty: intermediate
+  question: Design a stream that returns the kth largest value after each insertion (assume k initial values exist).
+  answer: "Approach: Keep a min-heap of the k largest seen; its root is the kth largest.\n\nWhy it works: The size-k heap keeps the largest seen values, so its minimum is exactly the kth-largest retained value.\n\nWorked example: With k=3 and initial [4,5,8,2], add 3 returns 4. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Add O(log k); query O(1); space O(k).\n\n```python\nimport heapq\nclass KthLargest:\n    def __init__(self, k, nums):\n        self.k = k; self.h = nums[:]; heapq.heapify(self.h)\n        while len(self.h) > k: heapq.heappop(self.h)\n    def add(self, val):\n        heapq.heappush(self.h, val)\n        if len(self.h) > self.k: heapq.heappop(self.h)\n        return self.h[0]\n```"
+  tags:
+  - heap
+- id: dsa-basic-027
+  topic: binary search
+  difficulty: beginner
+  question: Find target in a sorted array, returning its index or -1.
+  answer: "Approach: Compare the midpoint and discard the half that cannot contain the target.\n\nWhy it works: Each comparison removes a half that cannot contain the target because the array is sorted.\n\nWorked example: Searching [1,3,5,7] for 5 returns index 2. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(log n); space O(1).\n\n```python\ndef binary_search(nums, target):\n    lo, hi = 0, len(nums)-1\n    while lo <= hi:\n        mid = (lo+hi)//2\n        if nums[mid] == target: return mid\n        if nums[mid] < target: lo = mid+1\n        else: hi = mid-1\n    return -1\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - binary-search
+- id: dsa-basic-028
+  topic: binary search
+  difficulty: intermediate
+  question: Search a distinct-valued rotated sorted array.
+  answer: "Approach: At least one half is sorted; test whether target lies in that half.\n\nWhy it works: At least one half remains sorted; checking its value interval identifies which side may still contain the target.\n\nWorked example: [4,5,6,7,0,1,2] contains 0 at index 4. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(log n); space O(1).\n\n```python\ndef search_rotated(a, target):\n    lo, hi = 0, len(a)-1\n    while lo <= hi:\n        m=(lo+hi)//2\n        if a[m] == target: return m\n        if a[lo] <= a[m]:\n            if a[lo] <= target < a[m]: hi=m-1\n            else: lo=m+1\n        else:\n            if a[m] < target <= a[hi]: lo=m+1\n            else: hi=m-1\n    return -1\n```"
+  tags:
+  - binary-search
+- id: dsa-basic-029
+  topic: binary search
+  difficulty: intermediate
+  question: Return the first and last index of target in a sorted array.
+  answer: "Approach: Use lower and upper insertion boundaries; upper minus one is the final occurrence.\n\nWhy it works: Lower and upper insertion boundaries bracket every equal value, even when duplicates are adjacent.\n\nWorked example: [1,2,2,2,4] with target 2 returns [1,3]. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(log n); space O(1).\n\n```python\nfrom bisect import bisect_left, bisect_right\ndef search_range(nums, target):\n    l=bisect_left(nums,target); r=bisect_right(nums,target)-1\n    return [l,r] if l <= r and nums[l] == target else [-1,-1]\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - binary-search
+- id: dsa-basic-030
+  topic: graphs
+  difficulty: intermediate
+  question: Count islands in a rectangular character grid of land and water tokens using four-direction adjacency.
+  answer: "Approach: Flood-fill each unseen land cell and mark cells when pushed.\n\nWhy it works: Marking each land cell when pushed ensures each cell is visited once and a component is not counted again.\n\nWorked example: A 2×2 grid [[1,1],[0,1]] contains one four-connected island. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(RC); auxiliary space O(RC) worst case.\n\n```python\ndef num_islands(grid):\n    if not grid: return 0\n    rows, cols=len(grid),len(grid[0]); count=0\n    for r in range(rows):\n        for c in range(cols):\n            if grid[r][c] == \"1\":\n                count+=1; stack=[(r,c)]; grid[r][c]=\"0\"\n                while stack:\n                    i,j=stack.pop()\n                    for x,y in ((i+1,j),(i-1,j),(i,j+1),(i,j-1)):\n                        if 0<=x<rows and 0<=y<cols and grid[x][y]==\"1\":\n                            grid[x][y]=\"0\"; stack.append((x,y))\n    return count\n```"
+  tags:
+  - graphs
+- id: dsa-basic-031
+  topic: graphs
+  difficulty: intermediate
+  question: Flood-fill a 2D image from a starting cell with a new color.
+  answer: "Approach: Use iterative DFS, replacing matching cells when discovered.\n\nWhy it works: Replacing a cell at discovery time prevents duplicate pushes while preserving the original-color test for neighbors.\n\nWorked example: Filling the center of [[1,1],[1,2]] with color 3 recolors only the connected 2-region. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(RC); auxiliary space O(RC) worst case.\n\n```python\ndef flood_fill(image, sr, sc, color):\n    old=image[sr][sc]\n    if old == color: return image\n    rows,cols=len(image),len(image[0]); stack=[(sr,sc)]; image[sr][sc]=color\n    while stack:\n        r,c=stack.pop()\n        for i,j in ((r+1,c),(r-1,c),(r,c+1),(r,c-1)):\n            if 0<=i<rows and 0<=j<cols and image[i][j]==old:\n                image[i][j]=color; stack.append((i,j))\n    return image\n```"
+  tags:
+  - graphs
+- id: dsa-basic-032
+  topic: graphs
+  difficulty: intermediate
+  question: Return a deep copy of a connected graph from a start node.
+  answer: "Approach: DFS with an original-to-copy map; create copies before exploring neighbors.\n\nWhy it works: Create and memoize each copy before visiting neighbors; this breaks cycles and preserves repeated references.\n\nWorked example: A node with a self-loop clones to a distinct node whose neighbor is itself. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(V+E); space O(V).\n\n```python\nclass Node:\n    def __init__(self, val=0, neighbors=None): self.val, self.neighbors = val, neighbors or []\ndef clone_graph(node):\n    if node is None: return None\n    copies={}\n    def dfs(x):\n        if x in copies: return copies[x]\n        y=Node(x.val); copies[x]=y\n        y.neighbors=[dfs(z) for z in x.neighbors]\n        return y\n    return dfs(node)\n```"
+  tags:
+  - graphs
+- id: dsa-basic-033
+  topic: graphs
+  difficulty: intermediate
+  question: Determine whether all courses can be completed given prerequisite pairs.
+  answer: "Approach: Kahn topological sort; completion of fewer than all vertices indicates a cycle.\n\nWhy it works: If every vertex could be removed at indegree zero, the graph would be acyclic; leftover vertices therefore include a cycle.\n\nWorked example: A→B and B→A leave no complete topological ordering. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(V+E); space O(V+E).\n\n```python\nfrom collections import deque\ndef can_finish(n, prerequisites):\n    adj=[[] for _ in range(n)]; deg=[0]*n\n    for course, pre in prerequisites: adj[pre].append(course); deg[course]+=1\n    q=deque(i for i,d in enumerate(deg) if d==0); done=0\n    while q:\n        x=q.popleft(); done+=1\n        for y in adj[x]:\n            deg[y]-=1\n            if deg[y]==0: q.append(y)\n    return done==n\n```"
+  tags:
+  - graphs
+- id: dsa-basic-034
+  topic: backtracking
+  difficulty: intermediate
+  question: Return all subsets of a list of distinct values.
+  answer: "Approach: At each index, branch into excluding or including the current value.\n\nWhy it works: Each index is decided once as excluded or included, so every subset has one decision path.\n\nWorked example: For [a,b], the four results are [], [b], [a], [a,b]. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time/output O(n 2^n); recursion space O(n), excluding output.\n\n```python\ndef subsets(nums):\n    out=[]; path=[]\n    def visit(i):\n        if i==len(nums): out.append(path.copy()); return\n        visit(i+1); path.append(nums[i]); visit(i+1); path.pop()\n    visit(0); return out\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - backtracking
+- id: dsa-basic-035
+  topic: backtracking
+  difficulty: intermediate
+  question: Return unique combinations summing to target using positive candidates, each candidate reusable.
+  answer: "Approach: Sort positive candidates and recurse from the chosen index; stop when a value exceeds the remainder.\n\nWhy it works: Sorted positive candidates permit stopping once a value exceeds the remainder; recursing at i allows reuse without permutation duplicates.\n\nWorked example: Candidates [2,3,6,7], target 7 yield [2,2,3] and [7]. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Exponential output in worst case; recursion O(target/min_candidate) depth for positive candidates.\n\n```python\ndef combination_sum(candidates, target):\n    a=sorted(set(candidates)); out=[]; path=[]\n    def dfs(start, remain):\n        if remain==0: out.append(path.copy()); return\n        for i in range(start,len(a)):\n            x=a[i]\n            if x>remain: break\n            path.append(x); dfs(i,remain-x); path.pop()\n    dfs(0,target); return out\n```"
+  tags:
+  - backtracking
+- id: dsa-basic-036
+  topic: dynamic programming
+  difficulty: intermediate
+  question: Find the minimum number of coins to make amount, or -1 if impossible.
+  answer: "Approach: Bottom-up dp[a] stores minimum coins for amount a; relax every coin.\n\nWhy it works: Every optimal solution ends in some coin c, and dp[a-c] represents the best prefix before that final choice.\n\nWorked example: For coins [1,3,4], amount 6 takes two coins of 3. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(amount * number_of_coins); space O(amount).\n\n```python\ndef coin_change(coins, amount):\n    dp=[amount+1]*(amount+1); dp[0]=0\n    for a in range(1,amount+1):\n        for c in coins:\n            if c<=a: dp[a]=min(dp[a],dp[a-c]+1)\n    return -1 if dp[amount]>amount else dp[amount]\n```\n\nImplementation note: Check the empty and boundary cases, and confirm whether the routine mutates its input or excludes returned output from its auxiliary-space bound."
+  tags:
+  - dynamic-programming

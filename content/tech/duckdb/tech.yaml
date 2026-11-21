@@ -1,0 +1,131 @@
+slug: duckdb
+title: DuckDB
+category: databases
+summary: An in-process analytical database that runs vectorised SQL directly over files and embedded data, with no server to operate.
+level: core
+relations:
+  - to: sql
+    type: uses
+    note: SQL is the declarative interface DuckDB optimizes and executes.
+  - to: parquet
+    type: uses
+    note: DuckDB scans and writes Parquet with column projection and filter pushdown.
+  - to: sqlite
+    type: alternative
+    note: Both are embeddable; SQLite favors transactional records while DuckDB favors analytical scans.
+  - to: postgresql
+    type: alternative
+    note: PostgreSQL is a shared networked OLTP service; DuckDB targets embedded OLAP and can query PostgreSQL through an extension.
+intro:
+  what: |
+    DuckDB is an in-process analytical database: the SQL engine runs inside the application
+    process, CLI, notebook, or Python interpreter that uses it. It can keep a database in memory
+    or persist one in a local file, and it can query CSV, Parquet, JSON, and other sources without
+    loading every row into managed tables. There is no separate database server to deploy.
+
+    Its execution engine is columnar and vectorised. Rather than dispatching one function call for
+    each row, operators work on batches of values, which suits scans, filters, joins, and
+    aggregations. DuckDB brings warehouse-style SQL to a laptop, CI runner, application process,
+    or edge machine, while remaining a single-host engine rather than a distributed cluster.
+  why: |
+    Analytical work is often awkwardly small for a cluster and too large or structured for a
+    spreadsheet. Installing a server, provisioning a warehouse, copying files, and maintaining a
+    service can cost more time than the query. DuckDB removes that ceremony: open a file, point SQL
+    at columnar data, inspect a plan, and export the result.
+
+    It wins for local analytics when work benefits from vectorised SQL and columnar scans but
+    does not need a fleet or shared multi-writer service. It embeds in scripts and applications,
+    handles many workloads larger than RAM by spilling supported temporary state to disk, and
+    interoperates with open formats. These are strengths, not a promise that every query is faster
+    or every dataset fits comfortably on one host.
+  problems:
+    - Explore and aggregate local Parquet datasets without loading every row into pandas.
+    - Build reproducible single-machine ETL with SQL and a small deployment footprint.
+    - Query files in place and materialize only curated results that need persistence.
+    - Embed analytics in Python, R, Java, Node.js, or command-line workflows without a server.
+    - Test SQL transformations quickly in CI using representative fixtures.
+    - Produce Parquet, CSV, or JSON outputs from SQL pipelines and local databases.
+  where_used:
+    - Interactive analysis of Parquet, CSV, and JSON in notebooks and the DuckDB CLI.
+    - Local data preparation, quality checks, research, and developer workflows.
+    - Embedded analytics in desktop, command-line, and read-mostly applications.
+    - CI tests for SQL transforms and lightweight data pipeline components.
+    - Prototyping queries that may later move to Spark, PostgreSQL, or a cloud warehouse.
+  ecosystem: |
+    DuckDB sits between application code and data. The host language opens a connection and sends
+    SQL; DuckDB scans local files, an attached database, or supported external sources and returns
+    Arrow, pandas, Polars, or native results. Extensions add HTTP/S3 access, PostgreSQL scanning,
+    and Iceberg or Delta readers; availability and coverage depend on release.
+
+    Parquet is a portable columnar file format; DuckDB is an engine that queries it. SQLite
+    prioritizes transactional application storage, while DuckDB prioritizes analytical work.
+    PostgreSQL and Spark add shared-service or horizontal-scale capabilities DuckDB does not aim
+    to provide. Choose the lightest engine whose concurrency, durability, and data-size needs fit.
+  alternatives:
+    - name: SQLite
+      note: Better for embedded transactional records, frequent small updates, and broad application compatibility.
+    - name: PostgreSQL
+      note: Better for shared network access, many writers, access control, and transactional service workloads.
+    - name: Polars
+      note: A strong dataframe-first columnar alternative when SQL and database features are not central.
+    - name: Apache Spark
+      note: Distributed processing when a workload requires a cluster and horizontal scale.
+    - name: Cloud data warehouse
+      note: Managed concurrent analytics and elastic compute when shared access and operations matter most.
+  related: [sql, parquet, sqlite, postgresql]
+chapters:
+  - id: architecture
+    title: "Architecture: The Analytical Engine in Your Process"
+    file: chapters/01-architecture.md
+    minutes: 12
+    level: core
+  - id: installation-embedding
+    title: Installation, the CLI, and Embedding
+    file: chapters/02-installation-embedding.md
+    minutes: 12
+    level: core
+  - id: files-remote
+    title: Querying CSV, JSON, Parquet, and Remote Files
+    file: chapters/03-files-remote.md
+    minutes: 13
+    level: core
+  - id: optimizer-explain
+    title: The Optimizer and EXPLAIN
+    file: chapters/04-optimizer-explain.md
+    minutes: 12
+    level: core
+  - id: sql-analytics
+    title: Joins, Windows, and Analytical SQL
+    file: chapters/05-sql-analytics.md
+    minutes: 13
+    level: core
+  - id: external-databases
+    title: PostgreSQL, SQLite, Iceberg, and Delta
+    file: chapters/06-external-databases.md
+    minutes: 12
+    level: advanced
+  - id: types-json
+    title: Types and Semi-Structured JSON
+    file: chapters/07-types-json.md
+    minutes: 12
+    level: core
+  - id: persistence-concurrency
+    title: Persistence, Transactions, and Concurrency
+    file: chapters/08-persistence-concurrency.md
+    minutes: 12
+    level: core
+  - id: performance
+    title: Performance Tuning and Memory
+    file: chapters/09-performance.md
+    minutes: 13
+    level: advanced
+  - id: pipeline-fit
+    title: "Pipeline Fit: Where DuckDB Belongs"
+    file: chapters/10-pipeline-fit.md
+    minutes: 12
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

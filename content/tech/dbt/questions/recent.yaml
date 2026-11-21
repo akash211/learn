@@ -1,0 +1,143 @@
+- id: dbt-recent-001
+  topic: dbt 1.8 unit tests
+  difficulty: intermediate
+  question: What changed with native unit testing in dbt v1.8, and when would you use it?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    dbt v1.8 introduced native unit tests for SQL models. A unit test provides static rows for each model input and declares expected output rows, letting a developer exercise transformation logic before building a full relation from production-scale data. This is most valuable for custom behavior—complex `CASE` rules, date math, window functions, regex handling, or a bug-prone edge case—rather than re-testing straightforward warehouse primitives such as `min()`.
+
+    Unit tests complement rather than replace data tests. They answer whether the model's SQL maps known inputs to expected outputs; data tests query actual built data for properties such as uniqueness or non-null keys. Tests are defined in YAML under model paths and use `given` and `expect`. Include every `ref()` or `source()` dependency as an input. Check adapter/version limits, and run them in development or CI. A green fixture test cannot establish that production data satisfies assumptions or that the deployed warehouse integration works.
+  tags: [dbt-1.8, unit-tests, SQL]
+
+- id: dbt-recent-002
+  topic: dbt 1.8 changes
+  difficulty: intermediate
+  question: What upgrade considerations came with dbt v1.8 beyond unit tests?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Alongside native SQL model unit tests, dbt v1.8 introduced the `data_tests:` YAML property to distinguish data tests from unit tests; legacy `tests:` remained supported for backward compatibility. It also added `--empty` support for `dbt run` and `dbt build`, allowing schema-only-style validation by limiting refs and sources to zero rows while still exercising model SQL against the target. This can catch dependency and compilation problems without reading full input datasets, but it is not a data-quality check.
+
+    Another architectural change decoupled dbt Core and adapter development. A working project still needs a compatible adapter, and adapter packages continue to install Core as needed, but version compatibility should be checked explicitly. During upgrade, review deprecations and run representative builds with the actual adapter. Do not treat a successful unit test or `--empty` invocation as a complete production validation: normal execution and data tests remain necessary for important outputs.
+  tags: [dbt-1.8, data-tests, adapters]
+
+- id: dbt-recent-003
+  topic: dbt 1.9 microbatch
+  difficulty: advanced
+  question: What does the microbatch incremental strategy add, and what trade-offs remain?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Introduced in dbt v1.9, microbatch targets large time-series models by dividing work into discrete event-time batches instead of issuing one enormous incremental query. Configuration such as `event_time`, `batch_size` and `lookback` helps dbt generate per-batch filters; supported adapters can execute batches independently, and failed batches can be retried with `dbt retry`. Specific ranges can be targeted with event-time start and end options where supported. This is useful when a full incremental query times out or overloads a warehouse.
+
+    It does not make event timestamps trustworthy, guarantee late data is captured, or remove the need for a source correction policy. Batch boundaries, lookback, unique keys, concurrency and adapter support must be tested. A late record outside the lookback may still be missed, and parallel batches can affect warehouse contention. Compare results against a full rebuild for representative windows and include a targeted repair method. Verify feature availability for the pinned Core and adapter versions before designing around it.
+  tags: [dbt-1.9, microbatch, incremental]
+
+- id: dbt-recent-004
+  topic: dbt 1.9 snapshots
+  difficulty: intermediate
+  question: What snapshot improvements arrived in dbt v1.9, and why migrate carefully?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    dbt v1.9 added a YAML snapshot specification and more standardized snapshot configuration, including optional `target_schema` behavior that can use the environment schema. It also introduced controls such as `snapshot_meta_column_names` for renaming metadata fields, `dbt_valid_to_current` for a non-null current-row marker, and `hard_deletes` modes including `ignore`, `invalidate` and `new_record`. The exact configuration form should match the installed version and adapter.
+
+    These options affect historical interpretation, not just code style. A `new_record` deletion policy can create an explicit deleted version; changing validity fields can break downstream filters that assume `dbt_valid_to is null`. Existing snapshot tables contain accumulated state, so migrate with a tested plan and validate current-row and as-of queries before production rollout. Check snapshot source key uniqueness, update timestamp types and data retention. A snapshot still observes only states present when it runs; new configuration cannot reconstruct changes that were never captured.
+  tags: [dbt-1.9, snapshots, SCD2]
+
+- id: dbt-recent-005
+  topic: dbt 1.9 state selection
+  difficulty: advanced
+  question: Why did `state:modified` receive attention in dbt v1.9, and how should CI use it?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    `state:modified` compares current parsed resources with a prior manifest; projects often use it for slim CI. dbt v1.9 improved its behavior to reduce false positives and negatives, including environment-aware handling for intentional differences such as a model materialized as a table in production and a view in development, behind behavior-change handling. The important point is that state selection evolves with dbt's comparison semantics, so upgrading can alter which nodes CI sees.
+
+    A common command is `dbt build --select state:modified+ --state path/to/prod-artifacts`, where `+` includes downstream dependents. Keep the baseline manifest separate from the current invocation's `target/` output, inspect the selector with `dbt ls`, and verify behavior after upgrades. State comparison includes parsed project changes, not just Git file names. Ensure the selected set has the upstream relations it needs and includes relevant tests. Retain periodic full builds because slim CI can miss assumptions caused by its reduced scope.
+  tags: ['state:modified', dbt-1.9, CI]
+
+- id: dbt-recent-006
+  topic: model contracts
+  difficulty: advanced
+  question: How should an enforced model contract shape schema-change and release policy?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    An enforced contract declares expected output column names and data types and causes supported models to fail when their result does not match. It is a structural promise for consumers, not a test of business meaning or row-level values. Use it for stable marts and interfaces whose schema should not drift unnoticed, and pair it with data tests for uniqueness, nulls, accepted values and reconciliations.
+
+    Incremental contracts need special care: use supported `on_schema_change` settings such as `append_new_columns` or `fail` so the stored target does not silently diverge from the declared columns. Avoid casually using `sync_all_columns` where removal would violate a contract. Column deletion or type changes should be treated as breaking API changes: coordinate dependents, test adapter behavior and use an intentional migration or model version. Constraint support varies by platform and materialization; verify what is actually enforced on the target. A contract that CI never tests in the deployment adapter is only an unverified declaration.
+  tags: [contracts, schema, compatibility]
+
+- id: dbt-recent-007
+  topic: dbt 1.10 sampling
+  difficulty: intermediate
+  question: What is dbt v1.10's `--sample` flag for, and what can it not prove?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    dbt v1.10 added `--sample` for `dbt run` and `dbt build` to support lower-cost development validation on large datasets. In sample mode, dbt generates time-based filtered refs and sources so developers can execute model logic without processing all input rows. This can make iteration faster and help catch SQL, dependency and some transformation issues before a full build.
+
+    Sampling is not a correctness guarantee for full data. Rare edge cases, long-tail late arrivals, cross-partition relationships, uniqueness violations and skew may be absent from the chosen sample. It can also produce different aggregates or joins from the full dataset. Treat sample-mode output as a development signal, not a production result or replacement for unit tests, data tests and representative integration builds. Confirm the feature's exact behavior and limitations for the project's version and adapter, and keep a route to validate full-scale execution before release.
+  tags: [dbt-1.10, sampling, development]
+
+- id: dbt-recent-008
+  topic: dbt 1.10 YAML authoring
+  difficulty: intermediate
+  question: What migration should projects make for standalone YAML anchors in dbt v1.10?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    dbt v1.10 warns about unexpected top-level keys in properties YAML, a pattern often caused by YAML anchors declared outside the normal resource structure. Reusable standalone anchors should be placed under the supported top-level `anchors:` key rather than left as arbitrary top-level entries. The change makes the authoring format more explicit and helps dbt flag typos or unsupported properties that otherwise may be silently ignored or misinterpreted.
+
+    During migration, search model and properties YAML for anchor definitions outside recognized structures, move them under `anchors:`, and confirm aliases still resolve to the intended model or column properties. Review warnings rather than suppressing them wholesale, since unexpected keys may indicate real mistakes. Use the parser and CI with the exact dbt version used in deployment. A YAML parser accepting the file is not enough: dbt's properties schema has its own recognized keys and validation rules.
+  tags: [dbt-1.10, YAML, anchors]
+
+- id: dbt-recent-009
+  topic: dbt 1.10 warnings
+  difficulty: advanced
+  question: How did dbt v1.10 improve authoring feedback, and what does `validate_macro_args` do?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    dbt v1.10 expanded deprecation and warning feedback for project constructs that may become invalid, including unexpected properties, duplicate YAML keys and unexpected Jinja blocks. The goal is to surface issues early while teams have a migration window. The `validate_macro_args` behavior flag can validate that macro argument documentation in YAML matches the Jinja macro signature and uses supported types; the behavior is opt-in in v1.10 according to the release guidance.
+
+    This is useful for shared macros because a mismatch between documented interface and actual arguments can mislead callers and tooling. Before enabling warnings-as-errors, fix or triage warnings and test the effect: projects using `--warn-error` can turn newly surfaced issues into failures. Do not assume every warning is cosmetic, or enable strict failure across a legacy repository without a migration plan. Upgrade in CI first, review warnings, then promote specific classes to errors once the project is clean.
+  tags: [dbt-1.10, warnings, macros]
+
+- id: dbt-recent-010
+  topic: slim CI state artifacts
+  difficulty: advanced
+  question: What can go wrong when implementing slim CI with `--state` and deferral?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Slim CI often runs `dbt build --select state:modified+ --state path/to/prod-artifacts` and may defer unselected upstream refs to relations described by the baseline manifest. Common failures include overwriting the baseline manifest with the current run before comparison, using artifacts from the wrong commit or environment, assuming changed nodes include all needed ancestors in a clean schema, and omitting tests or resource types that should gate a pull request.
+
+    Build an artifact flow that downloads the intended production manifest into a separate state directory and writes current outputs elsewhere. Preview the selection with `dbt ls`, record the state artifact's commit and target, and verify how schema/database mapping resolves deferred refs. State selection is based on dbt's manifest comparison, not a raw Git diff. Run periodic full builds and test the workflow after Core, adapter or selector changes. Slim CI is an optimization whose baseline and coverage are part of correctness.
+  tags: [slim-CI, 'state:modified', deferral]
+
+- id: dbt-recent-011
+  topic: dbt 1.8-1.10 testing strategy
+  difficulty: intermediate
+  question: How should unit tests, data tests, contracts and `--empty` fit together in CI?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Use each check for the failure mode it can detect. Unit tests, available natively for SQL models from dbt v1.8, exercise logic with static fixtures. Data tests query built relations for properties such as unique keys, non-null columns and valid relationships. Enforced contracts check declared output structure for supported resources and adapters. `--empty`, introduced for run/build in v1.8, can validate dependency resolution and model SQL while limiting refs and sources to zero rows, but it does not validate actual data quality or a full-scale query plan.
+
+    A practical CI sequence may parse and compile, run focused unit tests, build selected models in an isolated schema, then run data tests and contract enforcement. The command and selection should match the project's version; `dbt build` can coordinate resources and tests. Include adapter-backed integration coverage for warehouse-specific behavior. Keep broader full builds or scheduled checks to catch issues that a small fixture or slim selection misses.
+  tags: [dbt-1.8, tests, contracts]
+
+- id: dbt-recent-012
+  topic: version-aware feature adoption
+  difficulty: advanced
+  question: How should a team evaluate dbt v1.8-1.10 features before enabling them broadly?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Start by mapping the project to exact dbt Core or Cloud release track, adapter and package versions; a feature described for a release is only useful if the execution environment supports it. Then identify which models benefit: unit tests for complex SQL logic, microbatch for supported time-series workloads, snapshot configuration improvements for history requirements, or `--sample` for lower-cost development checks. Avoid adopting features merely because they are new.
+
+    Use a branch and representative warehouse target to test syntax, adapter behavior, artifacts and data results. For state-based CI, compare selected nodes before and after an upgrade with `dbt ls --select state:modified+ --state ...`. For snapshots, migrate existing history in a clone and verify current/as-of queries. Review new warnings and behavior flags, pin versions, and document rollback steps. Feature validation must include real output comparison and cost/latency review, not only successful parsing.
+  tags: [dbt-1.8, dbt-1.9, dbt-1.10, upgrades]

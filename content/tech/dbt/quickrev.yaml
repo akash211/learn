@@ -1,0 +1,86 @@
+concepts:
+  - title: 'A model is a query plus context'
+    detail: 'A SQL model becomes a target-specific relation through adapter, config and materialization; the file alone is not the deployed object.'
+  - title: '`ref()` creates graph edges'
+    detail: 'Use `{{ ref(''model'') }}` for dbt-managed resources; it resolves relations per target and drives build order and lineage.'
+  - title: 'Sources declare external inputs'
+    detail: '`{{ source(''app'', ''orders'') }}` records an upstream dependency but does not ingest or create the table.'
+  - title: 'Grain is a business decision'
+    detail: 'Define what one row represents, then test the key; a filename or `unique_key` config does not enforce the intended grain.'
+  - title: 'dbt build is broader than `dbt run`'
+    detail: '`run` builds models; `build` coordinates selected buildable resources and tests in DAG order. Inspect selection before execution.'
+  - title: 'Materializations trade off build and query work'
+    detail: 'Views defer work, tables persist full results, incremental tables bound updates, and ephemeral models inline SQL as CTEs.'
+  - title: 'Incremental correctness is authored'
+    detail: 'Filters, keys, strategy and late-arrival policy determine correctness; dbt cannot infer which changed rows a source forgot to expose.'
+  - title: 'is_incremental() selects a query path'
+    detail: 'It commonly guards filters that apply only when an incremental target exists and the run is not a full refresh.'
+  - title: 'Strategies have different write semantics'
+    detail: '`append` does not update duplicates; `merge` uses a key to update/insert; `insert_overwrite` replaces partitions when supported.'
+  - title: 'Tests answer different questions'
+    detail: 'Unit tests exercise logic with fixtures; data tests query actual relations; contracts check declared shape and supported constraints.'
+  - title: 'Source freshness is a timestamp signal'
+    detail: 'It indicates recency of a configured loaded-at measure, not completeness, validity or successful delivery of every partition.'
+  - title: 'Exposures declare consumers'
+    detail: 'Exposures add downstream ownership and lineage metadata; they do not run or validate dashboards and applications.'
+  - title: 'Jinja is rendered before warehouse SQL'
+    detail: 'Inspect compiled SQL for generated behavior and keep `ref()`/`source()` calls statically discoverable.'
+  - title: 'Snapshots capture observed states'
+    detail: 'They support SCD2-style history but cannot reconstruct source changes that occurred and disappeared between snapshot runs.'
+  - title: 'Artifacts describe project and invocation'
+    detail: '`manifest.json` captures parsed graph state; `run_results.json` captures invocation outcomes. Tie both to commit and environment.'
+  - title: 'Slim CI needs a real baseline'
+    detail: '`state:modified+` compares manifests and includes descendants; isolate prior artifacts, inspect with `dbt ls`, and retain full builds.'
+traps:
+  - Believing `dbt run` executes data tests; use `dbt build` or run `dbt test` explicitly.
+  - Hard-coding a relation name and losing target-aware dependency and lineage behavior from `ref()` or `source()`.
+  - Treating `unique_key` as a uniqueness test or assuming `append` is idempotent.
+  - Using event time as an arrival watermark without testing lateness, corrections and deletes.
+  - Assuming fresh source timestamps prove all partitions and records arrived.
+  - Treating a contract as proof that business calculations or row values are correct.
+advanced:
+  - Use `dbt build --select state:modified+ --state path/to/prod-artifacts` only with a preserved baseline manifest and a verified selector.
+  - For incremental repair, state exactly which time window is reread and which strategy replaces existing keys or partitions.
+  - A full refresh is not a generic cure: estimate cost, establish isolated validation and document how production history is preserved.
+  - Contracts on incremental models require schema-change behavior aligned to the declared contract; verify adapter support and existing target schema.
+  - A snapshot's observed validity interval is not necessarily the source system's business-effective interval or an exact audit log.
+  - Macro and package changes can affect many compiled models; compile, test dependents and review state selection after upgrades.
+comparisons:
+  - a: '`dbt run`'
+    b: '`dbt build`'
+    difference: '`run` builds selected models only; `build` coordinates selected resource builds and tests in DAG order.'
+  - a: '`ref()`'
+    b: '`source()`'
+    difference: '`ref()` targets a dbt-managed resource; `source()` targets an externally managed relation declared in YAML.'
+  - a: 'Unit test'
+    b: 'Data test'
+    difference: 'Unit tests compare fixture inputs to expected SQL output; data tests query actual built relations for violating rows.'
+  - a: 'View'
+    b: 'Table'
+    difference: 'A view stores a query definition and defers compute; a table persists a full result and costs more to rebuild.'
+  - a: '`append`'
+    b: '`merge`'
+    difference: 'Append inserts selected rows without inherently deduplicating; merge updates/inserts by a configured unique key where supported.'
+  - a: 'Snapshot'
+    b: 'Incremental model'
+    difference: 'A snapshot tracks observed changes in mutable source rows; an incremental model builds a result using an authored change filter and strategy.'
+  - a: 'Core'
+    b: 'Cloud'
+    difference: 'Core is the open-source CLI framework operated by the team; Cloud is a hosted development/orchestration platform around dbt projects.'
+commands:
+  - label: Check connection and profile
+    code: dbt debug
+  - label: Install declared packages
+    code: dbt deps
+  - label: Build selected models and tests
+    code: dbt build --select +fct_orders
+  - label: Preview selected nodes without building
+    code: dbt ls --select state:modified+ --state path/to/prod-artifacts
+  - label: Slim CI build with downstream dependents
+    code: dbt build --select state:modified+ --state path/to/prod-artifacts
+  - label: Rebuild one incremental model from scratch
+    code: dbt build --full-refresh --select fct_events
+  - label: Check declared source freshness
+    code: dbt source freshness
+  - label: Generate docs artifacts
+    code: dbt docs generate

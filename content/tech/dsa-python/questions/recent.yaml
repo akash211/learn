@@ -1,0 +1,128 @@
+- id: dsa-recent-001
+  topic: top-k
+  difficulty: intermediate
+  question: Keep the k most frequent values from a large array; ties may be arbitrary.
+  answer: "Approach: Count values and use a bounded min-heap over frequencies.\n\nWhy it works: Counting separates frequency computation from selection, and the heap-based utility avoids fully sorting every distinct value.\n\nWorked example: For [1,1,1,2,2,3] and k=2, return 1 and 2. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n + u log(min(k, u))) for k>0; space O(u), for u distinct values.\n\n```python\nfrom collections import Counter\nimport heapq\ndef top_k(nums, k):\n    return [x for x,_ in heapq.nlargest(k, Counter(nums).items(), key=lambda p:p[1])]\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - top-k
+  period: 2024-2026
+  type: representative
+- id: dsa-recent-002
+  topic: intervals
+  difficulty: intermediate
+  question: Merge a list of possibly overlapping meeting intervals.
+  answer: "Approach: Sort by start and extend the active output interval while ranges overlap.\n\nWhy it works: Sorting makes starts nondecreasing, so only the active last interval can overlap the next interval.\n\nWorked example: [[1,3],[2,6],[8,10]] merges to [[1,6],[8,10]]. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n log n); space O(n) output.\n\n```python\ndef merge(intervals):\n    out=[]\n    for s,e in sorted(intervals):\n        if not out or s>out[-1][1]: out.append([s,e])\n        else: out[-1][1]=max(out[-1][1],e)\n    return out\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - intervals
+  period: 2024-2026
+  type: representative
+- id: dsa-recent-003
+  topic: cache
+  difficulty: intermediate
+  question: Implement an LRU cache with O(1) average get and put.
+  answer: "Approach: OrderedDict keeps least-recent first; move hits/updates to the end and evict from the front.\n\nWhy it works: Moving a hit or update to the end records recency; removing the first item therefore evicts the least recently used key.\n\nWorked example: With capacity 2, get(a) after inserting a,b makes b the eviction candidate. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Average O(1) per operation; space O(capacity).\n\n```python\nfrom collections import OrderedDict\nclass LRUCache:\n    def __init__(self, capacity): self.cap=capacity; self.data=OrderedDict()\n    def get(self, key):\n        if key not in self.data: return -1\n        self.data.move_to_end(key); return self.data[key]\n    def put(self, key, value):\n        if self.cap<=0: return\n        if key in self.data: self.data.move_to_end(key)\n        self.data[key]=value\n        if len(self.data)>self.cap: self.data.popitem(last=False)\n```"
+  tags:
+  - cache
+  period: 2024-2026
+  type: representative
+- id: dsa-recent-004
+  topic: rate limiting
+  difficulty: intermediate
+  question: Implement a token bucket with positive capacity and refill rate, permitting bursts up to capacity.
+  answer: "Approach: Refill by elapsed time up to capacity, then atomically consume cost if enough tokens exist. This in-memory version assumes serialized calls.\n\nWhy it works: Refill is proportional to elapsed time and capped at capacity; consuming only after the balance check prevents negative state.\n\nWorked example: Capacity 5, refill 1 token/second: after spending one, waiting two seconds restores two tokens. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: O(1) time and O(1) space per bucket.\n\n```python\nclass TokenBucket:\n    def __init__(self, capacity, refill_per_second):\n        self.capacity=capacity; self.rate=refill_per_second; self.tokens=float(capacity); self.updated=None\n    def allow(self, now, cost=1):\n        if cost<0 or cost>self.capacity: return False\n        if self.updated is None: self.updated=now\n        elapsed=max(0.0, now-self.updated)\n        self.tokens=min(self.capacity, self.tokens+elapsed*self.rate)\n \
+    \       self.updated=max(self.updated,now)\n        if self.tokens<cost: return False\n        self.tokens-=cost; return True\n```"
+  tags:
+  - rate-limiting
+  period: 2024-2026
+  type: representative
+- id: dsa-recent-005
+  topic: sliding window
+  difficulty: intermediate
+  question: Return the maximum of every contiguous window of width k.
+  answer: "Approach: Maintain a decreasing deque of indices; expire old indices and remove dominated values.\n\nWhy it works: Indices at the front are current maxima candidates; expired indices leave from front and dominated values from back.\n\nWorked example: [1,3,-1,-3,5,3,6,7], k=3 begins with maxima [3,3,5]. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n); space O(k).\n\n```python\nfrom collections import deque\ndef sliding_max(nums,k):\n    if k<=0 or k>len(nums): return []\n    q=deque(); out=[]\n    for i,x in enumerate(nums):\n        while q and q[0]<=i-k: q.popleft()\n        while q and nums[q[-1]]<=x: q.pop()\n        q.append(i)\n        if i>=k-1: out.append(nums[q[0]])\n    return out\n``` Each index enters and leaves the deque at most once, which is why the full scan is linear even though an iteration may pop several candidates. For example, in a decreasing sequence the front expires naturally, while a new large value can remove several smaller values from the back. These cases expose off-by-one expiration and confirm that values rather than indices are emitted."
+  tags:
+  - sliding-window
+  period: 2024-2026
+  type: representative
+- id: dsa-recent-006
+  topic: sliding window
+  difficulty: advanced
+  question: Find the shortest substring of s containing every character of t with multiplicity.
+  answer: "Approach: Expand until all required counts are covered, then shrink while valid and retain the shortest range.\n\nWhy it works: The missing count tracks required multiplicity, so a window is shrunk only while it still covers every required character.\n\nWorked example: s=\"ADOBECODEBANC\", t=\"ABC\" returns \"BANC\". This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(|s|+|t|) expected; space O(u).\n\n```python\nfrom collections import Counter\ndef min_window(s,t):\n    if not t or not s: return \"\"\n    need=Counter(t); missing=len(t); left=0; best=(0,float(\"inf\"))\n    for right,ch in enumerate(s):\n        if need[ch]>0: missing-=1\n        need[ch]-=1\n        while missing==0:\n            if right-left+1<best[1]-best[0]: best=(left,right+1)\n            c=s[left]; need[c]+=1; left+=1\n            if need[c]>0: missing+=1\n    return s[best[0]:best[1]] if best[1]!=float(\"inf\") else \"\"\n```"
+  tags:
+  - sliding-window
+  period: 2024-2026
+  type: representative
+- id: dsa-recent-007
+  topic: sliding window
+  difficulty: advanced
+  question: Count subarrays containing exactly k distinct integers.
+  answer: "Approach: Compute atMost(k)-atMost(k-1) with a frequency-map sliding window.\n\nWhy it works: At-most counts include every valid suffix ending at each right boundary; subtracting adjacent limits isolates exactly-k windows.\n\nWorked example: [1,2,1,2,3] with k=2 returns 7. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n) expected; space O(n).\n\n```python\nfrom collections import defaultdict\ndef subarrays_exactly_k(a,k):\n    def at_most(limit):\n        if limit<0: return 0\n        count=defaultdict(int); left=total=0\n        for right,x in enumerate(a):\n            if count[x]==0: limit-=1\n            count[x]+=1\n            while limit<0:\n                y=a[left]; count[y]-=1; left+=1\n                if count[y]==0: limit+=1\n            total+=right-left+1\n        return total\n    return at_most(k)-at_most(k-1)\n``` The sliding window counts every valid start for each right endpoint, because any start at or after the maintained left boundary still has at most the allowed number of distinct values. Subtracting the at-most counts isolates windows with exactly k. For [1,2,1,2,3] and k=2, the result is 7. A negative limit returns zero, so k=0 is handled consistently by the difference."
+  tags:
+  - sliding-window
+  period: 2024-2026
+  type: representative
+- id: dsa-recent-008
+  topic: matrix
+  difficulty: intermediate
+  question: Return all elements of a rectangular matrix in clockwise spiral order.
+  answer: "Approach: Shrink top, bottom, left, and right boundaries after each directed edge traversal.\n\nWhy it works: After each edge, shrinking the corresponding boundary prevents revisiting cells on the next inner spiral.\n\nWorked example: [[1,2,3],[4,5,6]] traverses [1,2,3,6,5,4]. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(RC); output space O(RC).\n\n```python\ndef spiral_order(matrix):\n    if not matrix or not matrix[0]: return []\n    top,bottom,left,right=0,len(matrix)-1,0,len(matrix[0])-1; out=[]\n    while top<=bottom and left<=right:\n        out.extend(matrix[top][left:right+1]); top+=1\n        for r in range(top,bottom+1): out.append(matrix[r][right])\n        right-=1\n        if top<=bottom:\n            out.extend(reversed(matrix[bottom][left:right+1])); bottom-=1\n        if left<=right:\n            for r in range(bottom,top-1,-1): out.append(matrix[r][left])\n            left+=1\n    return out\n``` Shrinking a boundary immediately after traversing its edge prevents that edge from appearing in the next inner layer. The conditional checks matter when only one row or column remains; without them, a thin matrix can be emitted twice. For example, after the top row of a one-row matrix is visited, no bottom-row traversal should repeat it."
+  tags:
+  - matrix
+  period: 2024-2026
+  type: representative
+- id: dsa-recent-009
+  topic: matrix
+  difficulty: intermediate
+  question: Rotate an n by n matrix clockwise in place.
+  answer: "Approach: Transpose across the diagonal, then reverse each row.\n\nWhy it works: Transposition swaps row/column coordinates, then row reversal converts the reflected orientation into a clockwise turn.\n\nWorked example: [[1,2],[3,4]] becomes [[3,1],[4,2]]. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(n^2); space O(1).\n\n```python\ndef rotate_matrix(a):\n    n=len(a)\n    for i in range(n):\n        for j in range(i+1,n): a[i][j],a[j][i]=a[j][i],a[i][j]\n    for row in a: row.reverse()\n```\n\nImplementation note: Test the smallest input and a duplicate or boundary case, and check that the returned values match the stated contract. The stated complexity includes the main traversal; returned output storage is separate when applicable."
+  tags:
+  - matrix
+  period: 2024-2026
+  type: representative
+- id: dsa-recent-010
+  topic: trie
+  difficulty: intermediate
+  question: Implement a trie with insert, exact search, and prefix search.
+  answer: "Approach: Each node maps characters to child nodes and carries an end-of-word marker.\n\nWhy it works: Shared prefixes reuse trie nodes, while the end marker distinguishes a complete word from a prefix.\n\nWorked example: Insert \"cat\": search(\"cat\") is true but search(\"ca\") is false and starts_with(\"ca\") is true. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: O(L) per operation for word length L; space O(total inserted characters).\n\n```python\nclass TrieNode:\n    def __init__(self): self.children={}; self.end=False\nclass Trie:\n    def __init__(self): self.root=TrieNode()\n    def insert(self, word):\n        node=self.root\n        for ch in word: node=node.children.setdefault(ch,TrieNode())\n        node.end=True\n    def _walk(self, text):\n        node=self.root\n        for ch in text:\n            if ch not in node.children: return None\n            node=node.children[ch]\n        return node\n    def search(self, word):\n\
+    \        node=self._walk(word); return node is not None and node.end\n    def starts_with(self, prefix): return self._walk(prefix) is not None\n```"
+  tags:
+  - trie
+  period: 2024-2026
+  type: representative
+- id: dsa-recent-011
+  topic: DP on strings
+  difficulty: intermediate
+  question: Determine whether a string can be segmented into dictionary words.
+  answer: "Approach: Let dp[i] mark segmentability of prefix s[:i]; extend from reachable cut points.\n\nWhy it works: Each true prefix endpoint can extend by a dictionary word; bounded start positions avoid checking impossible longer words.\n\nWorked example: \"leetcode\" with [\"leet\",\"code\"] is segmentable. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(nL²) with maximum word length L (O(n³) worst case) because slicing and hashing substrings cost O(L); space O(n + dictionary size), excluding temporary slices.\n\n```python\ndef word_break(s, words):\n    words=set(words); dp=[False]*(len(s)+1); dp[0]=True\n    maxlen=max(map(len,words),default=0)\n    for end in range(1,len(s)+1):\n        for start in range(max(0,end-maxlen),end):\n            if dp[start] and s[start:end] in words: dp[end]=True; break\n    return dp[-1]\n```"
+  tags:
+  - DP-on-strings
+  period: 2024-2026
+  type: representative
+- id: dsa-recent-012
+  topic: DP on strings
+  difficulty: intermediate
+  question: Compute Levenshtein edit distance between two strings.
+  answer: "Approach: Use rolling DP rows for insert, delete, and replace transitions; put shorter string on columns.\n\nWhy it works: Each cell chooses match, insertion, deletion, or replacement based on the neighboring prefix states.\n\nWorked example: Edit distance between \"horse\" and \"ros\" is 3. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(mn); space O(min(m,n)).\n\n```python\ndef edit_distance(a,b):\n    if len(b)>len(a): a,b=b,a\n    prev=list(range(len(b)+1))\n    for i,x in enumerate(a,1):\n        cur=[i]+[0]*len(b)\n        for j,y in enumerate(b,1):\n            cur[j]=prev[j-1] if x==y else 1+min(prev[j],cur[j-1],prev[j-1])\n        prev=cur\n    return prev[-1]\n``` The base row and column encode the costs of creating a prefix from an empty string, so empty inputs naturally produce the other string's length. Each edit changes one character, and the recurrence considers insertion, deletion, or substitution; matching characters need no extra cost. For example, transforming horse into ros takes three edits. Rolling rows saves memory but not time, which remains proportional to the product of the lengths."
+  tags:
+  - DP-on-strings
+  period: 2024-2026
+  type: representative
+- id: dsa-recent-013
+  topic: DP on strings
+  difficulty: intermediate
+  question: Find the length of the longest common subsequence of two strings.
+  answer: "Approach: Use a prefix DP; matching characters extend the diagonal, otherwise take the better neighboring state.\n\nWhy it works: Matching characters extend the diagonal; otherwise the best subsequence excludes one of the two final characters.\n\nWorked example: LCS(\"abcde\",\"ace\") has length 3. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(mn); space O(min(m,n)).\n\n```python\ndef lcs_length(a,b):\n    if len(b)>len(a): a,b=b,a\n    dp=[0]*(len(b)+1)\n    for x in a:\n        prev=0\n        for j,y in enumerate(b,1):\n            old=dp[j]\n            if x==y: dp[j]=prev+1\n            else: dp[j]=max(dp[j],dp[j-1])\n            prev=old\n    return dp[-1]\n``` A subsequence preserves relative order but may skip intervening characters, which is why ace is a common subsequence of abcde and has length three. On a mismatch, either the best answer omits the current character from the first string or omits it from the second, so the recurrence takes the larger neighboring state. The one-row implementation saves the previous diagonal before overwriting a cell."
+  tags:
+  - DP-on-strings
+  period: 2024-2026
+  type: representative
+- id: dsa-recent-014
+  topic: scheduling
+  difficulty: intermediate
+  question: Find the minimum CPU intervals needed to execute tasks with cooldown n.
+  answer: "Approach: The most frequent task defines a lower bound; fill gaps of length n with other tasks or idle slots.\n\nWhy it works: The most frequent task fixes frame spacing; tied tasks occupy the final frame positions, while abundant other work fills idle gaps.\n\nWorked example: Tasks [A,A,A,B,B,B] with cooldown 2 need 8 intervals. This small trace checks the boundary behavior as well as the normal path.\n\nComplexity: Time O(m) to count m tasks; space O(u).\n\n```python\nfrom collections import Counter\ndef least_intervals(tasks,n):\n    if not tasks: return 0\n    counts=Counter(tasks); peak=max(counts.values())\n    tied=sum(v==peak for v in counts.values())\n    return max(len(tasks),(peak-1)*(n+1)+tied)\n``` The most frequent task dictates the minimum spacing; less frequent tasks can fill those gaps, reducing idle time until task count itself becomes the stronger lower bound. For example, three A tasks with cooldown two require at least seven intervals, while two equally frequent task types produce the tied-frequency formula."
+  tags:
+  - scheduling
+  period: 2024-2026
+  type: representative

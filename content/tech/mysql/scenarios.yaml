@@ -1,0 +1,95 @@
+- id: mysql-scn-001
+  title: Replica is healthy but checkout reads stale inventory
+  technologies: [mysql]
+  difficulty: advanced
+  prompt: |
+    A checkout writes an inventory reservation to the MySQL source and immediately reads the reservation through a read pool. The application intermittently reports that no reservation exists. `SHOW REPLICA STATUS` shows running receiver and applier threads, and `Seconds_Behind_Source` is usually zero. The service has asynchronous source-to-replica replication and multiple read replicas.
+  approach: |
+    Treat this first as a consistency and routing problem, not a missing-row incident. Trace the write and subsequent read to confirm they use the same database and transaction commits successfully. A replica can lag briefly even when the status field looks healthy; verify executed GTID progress and query freshness rather than relying on one lag estimate.
+
+    Offer the product a clear read-after-write policy: route that session's dependent reads to the source, or wait for a selected replica to execute the relevant GTID with a bounded timeout and fallback. If bounded staleness is acceptable, state it explicitly. Review connection-pool routing and failover behaviour, then add integration tests that inject replication delay. Watch source load if more reads are pinned there.
+  red_flags:
+    - Treating `Seconds_Behind_Source = 0` as a linearizability guarantee.
+    - Increasing replica count without addressing consistency expectations.
+    - Rewriting the inventory row because the replica returned an old snapshot.
+    - Assuming the applier thread's running state means a particular transaction is visible.
+
+- id: mysql-scn-002
+  title: A routine index change triggers widespread latency
+  technologies: [mysql]
+  difficulty: advanced
+  prompt: |
+    A migration adds an index to a busy InnoDB orders table. The deployment team expects an online operation, but writes slow down and many new requests queue. The DDL session is waiting for a metadata lock, later queries are also waiting, disk free space is falling, and one replica is gaining several minutes of lag. The exact ALTER algorithm was not specified.
+  approach: |
+    Contain impact first. Identify the metadata-lock holder and the queued DDL, and coordinate with the migration owner before killing sessions or cancelling work; cancellation may leave cleanup or an invalid intermediate condition depending on the operation. Protect service capacity and observe replica and disk limits. A waiting exclusive metadata-lock request can queue later statements behind it, while an index build can consume I/O and produce binlog work.
+
+    Establish which algorithm the server selected or attempted, whether it is rebuilding the table, and the release-specific support for the requested change. For the next attempt, test on production-like data, specify an acceptable algorithm so an unexpected copy does not proceed, set a lock timeout, and schedule a bounded cutover. A shadow-copy tool is an option only after checking its binlog/topology and constraint requirements. Resume only with disk headroom, replica capacity, an abort plan, and a safe application compatibility window.
+  red_flags:
+    - Assuming the word online means no metadata lock or no resource load.
+    - Starting another ALTER while the first one is queued.
+    - Killing the blocker without understanding its transaction or effects.
+    - Ignoring replica lag and free-space trends until the primary fails.
+
+- id: mysql-scn-003
+  title: Undo history grows while row count remains flat
+  technologies: [mysql]
+  difficulty: advanced
+  prompt: |
+    InnoDB disk use is growing despite a stable row count. The history list length in `SHOW ENGINE INNODB STATUS` has risen for hours. An application connection is `Sleep` in the process list, and the service recently deployed a long-running report. CPU is moderate, but disk latency and replica apply time are increasing.
+  approach: |
+    Separate row count from retained historical versions. Find open transactions and their age, inspect the report's transaction boundaries and isolation level, and determine whether a read view is preventing purge from discarding undo history. A sleeping connection can still hold a transaction open. Correlate history-list growth with transaction age and workload before attributing all disk growth to undo.
+
+    Coordinate safe termination or completion of the offending transaction with the application owner; rollback can itself take time and generate load. Fix the code to commit promptly or stream/report outside a long transaction where semantics permit. Monitor purge progress, disk capacity, and replica lag as the history drains. Do not simply raise storage or kill every sleeping session. Add transaction-age visibility and application safeguards to prevent recurrence.
+  red_flags:
+    - Assuming an idle connection cannot hold a read view or locks.
+    - Calling undo a backup and attempting to restore old data from it.
+    - Killing the process without checking rollback duration or application effects.
+    - Ignoring long transactions while increasing undo capacity or storage.
+
+- id: mysql-scn-004
+  title: Recover to just before an accidental delete
+  technologies: [mysql]
+  difficulty: advanced
+  prompt: |
+    An operator deletes the wrong customer rows at 14:32. The most recent physical backup completed at midnight. Binary logging is enabled, but the on-call engineer is unsure which files belong to the backup and whether the logs are complete. A read replica has already applied the delete. The application remains online.
+  approach: |
+    Preserve evidence and avoid making the blast radius worse. Do not assume the replica is a clean copy because the delete has replicated. Identify the backup's consistent point, its GTID or binlog coordinates, and every required binlog through the recovery target. Confirm files are present and validate the destructive event and transaction boundary using a copy of the logs.
+
+    Restore the backup to an isolated instance and replay the logs only to a point before the delete. Validate customer data and application invariants there. Decide whether to recover selected rows into production or promote a fully recovered database; each requires careful handling of writes since the incident. Coordinate application write restrictions and cutover, retain logs and backups until verification, and communicate any lost post-target changes. If a log gap exists, explain the achievable recovery point honestly.
+  red_flags:
+    - Restoring over production before validating the point and recovered data.
+    - Assuming the replica predates the delete.
+    - Replaying all available binlogs without stopping before the destructive transaction.
+    - Claiming PITR is possible without a continuous log chain and backup metadata.
+
+- id: mysql-scn-005
+  title: Partition proposal conflicts with identifier uniqueness
+  technologies: [mysql]
+  difficulty: intermediate
+  prompt: |
+    A team wants to partition a 900-million-row events table by event date so it can drop old data quickly. The existing schema uses `PRIMARY KEY (event_id)` and an external service assumes event IDs are globally unique. Several important support queries search by event ID without date. The proposal adds daily partitions for ten years.
+  approach: |
+    Evaluate the retention benefit against query and integrity constraints before writing migration SQL. MySQL requires unique keys on a partitioned table to include the partition columns, so `PRIMARY KEY (event_id)` may no longer enforce global uniqueness if partitioning is by date. A composite primary key changes references and may not satisfy the external service's guarantee. Queries without date may need to search every partition; verify pruning with actual plans.
+
+    Estimate partition count and maintenance burden for the proposed daily horizon; a smaller interval may add excessive metadata and automation work. Consider monthly or weekly ranges, a separate global ID registry, a retention archive, or an unpartitioned design with another deletion strategy. Prototype constraints and representative lookups on the target MySQL version, test partition lifecycle and backups, and confirm the organization can automate future partition creation safely.
+  red_flags:
+    - Assuming partitioning automatically speeds up event-ID lookups without the partition key.
+    - Ignoring the unique-key requirement or changing global identity semantics silently.
+    - Creating thousands of partitions without operational cost analysis.
+    - Dropping partitions before confirming retention, backup, and audit requirements.
+
+- id: mysql-scn-006
+  title: Choose MySQL or PostgreSQL for a new service
+  technologies: [mysql, postgresql, sql]
+  difficulty: intermediate
+  prompt: |
+    A team is selecting a database for a new multi-tenant service. The application has conventional transactional CRUD, some complex reporting, semi-structured metadata, managed-service requirements in two clouds, and a small operations team. One proposal says MySQL is always faster; another says PostgreSQL is always more capable. No representative benchmark or failure test exists.
+  approach: |
+    Replace categorical claims with measurable requirements. Identify transaction and isolation semantics, query patterns and skew, data constraints, JSON paths, reporting needs, extensions, schema migration frequency, CDC, backup/PITR objectives, and the actual managed products available in both clouds. Define acceptable p95/p99 latency, throughput, RTO/RPO, and operational toil rather than starting with a synthetic score.
+
+    Build representative schemas and load test both engines with the same realistic dataset and transaction mix, including concurrency, failover, restore, and migration. Review version-specific syntax, collation and type differences, and query-plan stability. Compare team expertise, monitoring and support, deployment limits, cost at the required capacity, and exit path. Choose based on evidence and organizational fit; document trade-offs and revisit if workload assumptions change.
+  red_flags:
+    - Selecting an engine from an unqualified claim about speed or features.
+    - Comparing only one read-only benchmark and omitting writes, failover, and recovery.
+    - Treating managed products as identical to self-managed upstream servers.
+    - Ignoring migration and operational skills as part of total cost.

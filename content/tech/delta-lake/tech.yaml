@@ -1,0 +1,137 @@
+slug: delta-lake
+title: Delta Lake
+category: data-engineering
+summary: An open table format that layers a transaction log, schema rules and versioned snapshots over Parquet files in object storage.
+level: core
+relations:
+  - to: parquet
+    type: foundation
+    note: Delta stores table data in Parquet; the transaction log defines which files and row-level changes belong to each committed snapshot.
+  - to: pyspark
+    type: uses
+    note: delta-spark integrates Delta transactions with Spark DataFrames and SQL, while the open protocol is implemented by other clients too.
+  - to: databricks
+    type: part-of
+    note: Databricks builds managed catalog, governance, optimization and runtime capabilities around Delta; those platform services are not all part of OSS Delta Lake.
+  - to: kafka
+    type: complements
+    note: Kafka transports event streams; Delta tables provide durable, queryable lakehouse storage for batch or streaming consumers.
+  - to: airflow
+    type: complements
+    note: Airflow orchestrates jobs that read, write and maintain Delta tables; Delta transactions do not schedule or coordinate a multi-task DAG.
+intro:
+  what: |
+    Delta Lake is an open table format for data lakes. A Delta table is not a single file or a
+    database server: it is a directory of Parquet data files plus a transaction log in
+    `_delta_log`. The log records the active files, metadata, protocol requirements and committed
+    operations. A reader reconstructs a consistent snapshot from that log rather than listing a
+    directory and treating every Parquet object as current data.
+
+    This design gives object-storage data atomic table versions, consistent reads while writers
+    modify files, schema validation, and operations such as `UPDATE`, `DELETE`, `MERGE` and time
+    travel. Delta does not make Parquet itself transactional, nor does it turn a data lake into a
+    general-purpose relational database. The transaction protocol mediates file changes and
+    readers still scan columnar data files.
+  why: |
+    Plain files are easy to share but hard to update safely. A job that overwrites a directory can
+    leave readers between old and new files, concurrent writers can race, and schema drift may
+    silently produce incompatible data. Delta's append-only commit history names the exact files
+    in each table version, allowing readers to see a complete committed state and writers to
+    validate whether their planned change is still safe.
+
+    These guarantees are especially valuable on cloud object storage, where rename is not a
+    universal atomic commit primitive and compute is often ephemeral. The log also turns table
+    changes into inspectable metadata, which supports recovery, auditing and incremental
+    processing—provided retention and client compatibility are managed deliberately.
+  problems:
+    - Make file-based lake tables readable as consistent snapshots while writes are in progress.
+    - Detect unsafe concurrent modifications instead of silently losing or mixing data.
+    - Enforce a table schema while allowing explicit, reviewed schema evolution.
+    - Express row-level changes and upserts over Parquet data without a database server.
+    - Recover or compare historical table versions within the retained-file window.
+    - Coordinate batch and streaming writes through a shared transactional table protocol.
+  where_used:
+    - Batch ETL and ELT tables on object storage, often read and written by Spark.
+    - CDC landing and serving tables using `MERGE`, change data feed, or downstream snapshots.
+    - Streaming sinks where checkpointed queries need idempotent table commits.
+    - Lakehouse data marts, feature datasets and intermediate pipeline outputs.
+    - Cross-engine data sharing when all readers and writers support the table's protocol features.
+  ecosystem: |
+    Delta's storage layer is Parquet plus `_delta_log`; Spark with the open-source `delta-spark`
+    package is a common execution client. Delta Kernel and independent implementations such as
+    delta-rs extend the ecosystem, but supported operations and table features differ by client and
+    release. A protocol-compatible reader can reconstruct a snapshot without running on
+    Databricks, yet compatibility is not implied merely by a `.parquet` directory: protocol
+    versions and enabled table features matter.
+
+    Databricks provides additional managed capabilities—such as Unity Catalog governance,
+    predictive optimization, platform-specific concurrency behavior, and runtime integrations.
+    Those should not be attributed to OSS Delta Lake without checking the specific feature and
+    version. Spark or another client still needs storage credentials, catalog configuration,
+    compatible protocol support, and a deliberate retention and maintenance policy.
+  alternatives:
+    - name: Apache Iceberg
+      note: An open table format with snapshot-based metadata and broad multi-engine adoption; compare engine support, catalog model and required operations.
+    - name: Apache Hudi
+      note: An open format with indexing and write modes designed for incremental ingestion and record-level updates; workload and engine support differ.
+    - name: Plain Parquet
+      note: Simpler when data is immutable or a single producer controls publication and table transactions are unnecessary.
+    - name: A data warehouse
+      note: Managed SQL, concurrency and governance may be preferable when lake storage control and open files are not priorities.
+  related: [parquet, pyspark, databricks, kafka, airflow]
+chapters:
+  - id: transaction-log
+    title: The Transaction Log and Commits
+    file: chapters/01-transaction-log-commits.md
+    minutes: 13
+    level: core
+  - id: acid-concurrency
+    title: ACID, Optimistic Concurrency and Conflict Resolution
+    file: chapters/02-acid-concurrency.md
+    minutes: 13
+    level: core
+  - id: schema
+    title: Schema Enforcement and Evolution
+    file: chapters/03-schema-enforcement-evolution.md
+    minutes: 12
+    level: core
+  - id: time-travel-vacuum
+    title: Time Travel and VACUUM
+    file: chapters/04-time-travel-vacuum.md
+    minutes: 12
+    level: core
+  - id: merge-cdc
+    title: MERGE, Upserts and CDC Patterns
+    file: chapters/05-merge-upserts-cdc.md
+    minutes: 14
+    level: core
+  - id: layout-maintenance
+    title: Partitioning, Compaction and OPTIMIZE
+    file: chapters/06-partitioning-compaction-optimize.md
+    minutes: 13
+    level: core
+  - id: deletion-vectors-clustering
+    title: Deletion Vectors and Liquid Clustering
+    file: chapters/07-deletion-vectors-liquid-clustering.md
+    minutes: 13
+    level: advanced
+  - id: streaming
+    title: Streaming Integration and Exactly-Once Claims
+    file: chapters/08-streaming-exactly-once.md
+    minutes: 13
+    level: advanced
+  - id: operations
+    title: Table Maintenance and Performance Operations
+    file: chapters/09-maintenance-performance-operations.md
+    minutes: 13
+    level: advanced
+  - id: formats-ecosystem
+    title: Delta, Iceberg, Hudi and Delta Outside Databricks
+    file: chapters/10-delta-iceberg-hudi-ecosystem.md
+    minutes: 14
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

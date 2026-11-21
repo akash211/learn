@@ -1,0 +1,214 @@
+- id: ans-basic-001
+  topic: inventory
+  difficulty: beginner
+  question: What does an Ansible inventory contain, and how do groups help?
+  answer: |
+    An inventory identifies managed hosts and organizes them into groups. It may be a static INI or YAML file, a directory of sources, or a dynamic inventory plugin that queries a cloud API or CMDB. Groups let a play target a role or environment such as `web` or `staging` rather than embedding individual machines in the playbook. A host can belong to more than one group, and group and host variables can supply connection and application configuration. Inspect the parsed result with `ansible-inventory -i inventory.yml --graph` or `--list`; do not assume the file's visual layout is exactly the merged inventory. Keep production boundaries explicit and do not commit passwords or private keys as ordinary inventory data.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [inventory, groups]
+
+- id: ans-basic-002
+  topic: host patterns
+  difficulty: beginner
+  question: How would you confirm the hosts a playbook pattern and limit will select?
+  answer: |
+    Run `ansible-playbook -i inventory/prod.yml site.yml --list-hosts` with the same `--limit` value you plan to use for execution. Ansible host patterns can refer to groups and individual inventory names and can combine inclusion, intersections and exclusions. For example, `web:&canary:!drained` means web hosts that are also in the canary group but not in drained. Quote patterns with punctuation so YAML or the shell does not reinterpret them. Remember that `--limit` narrows the play's `hosts:` pattern; it does not add hosts that the play did not target. Treat an empty or unexpectedly broad list as a failed precondition, especially when dynamic inventory membership can change between review and execution.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [patterns, targeting]
+
+- id: ans-basic-003
+  topic: connections
+  difficulty: beginner
+  question: Which connection variables commonly configure Ansible SSH access?
+  answer: |
+    Common host variables include `ansible_host` for the destination address, `ansible_user` for the SSH login identity, `ansible_port`, and `ansible_ssh_private_key_file` for the key path on the controller. Connection plugin behavior can also be configured in `ansible.cfg`. The inventory alias remains the name used in patterns and output even when `ansible_host` points elsewhere. SSH login and privilege escalation are separate: `become: true` elevates selected tasks after connecting and does not change the SSH account. Use host-key verification and a managed key distribution process rather than disabling verification to avoid errors. Store secrets outside ordinary committed inventory, and check that the executing controller has the expected private key and network path.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [ssh, connection]
+
+- id: ans-basic-004
+  topic: playbooks
+  difficulty: beginner
+  question: What are the main parts of an Ansible playbook?
+  answer: |
+    A playbook is a YAML document containing one or more plays. Each play selects hosts with `hosts`, can set execution options such as `become` and fact gathering, and contains ordered tasks. Each task calls a module with structured arguments; optional handlers run after tasks notify them, normally at the end of the play. Plays can also define variables and include roles or task files. The executor applies the tasks across selected hosts, usually concurrently up to the fork limit, so it is not equivalent to a shell script that completes each host serially. Descriptive play and task names make logs useful. Validate syntax with `ansible-playbook --syntax-check`, but separately inspect target hosts and test behavior because valid YAML does not establish operational safety.
+  tags: [playbooks, tasks]
+
+- id: ans-basic-005
+  topic: idempotency
+  difficulty: beginner
+  question: What does idempotency mean in Ansible and why does it matter?
+  answer: |
+    An idempotent operation converges a resource toward a requested state and has no further effect once that state holds. For example, `ansible.builtin.file` with `state: directory` ensures a directory exists, and a package task with `state: present` leaves an installed package alone on subsequent runs. This makes a playbook safer to rerun after interruption and helps distinguish meaningful changes from routine execution. Idempotency is not guaranteed for arbitrary commands: `shell: echo ... >> file` appends on every run. Prefer a purpose-built module, or provide reliable guards such as `creates` and honest `changed_when` logic for a command. Run a play twice against a test host and investigate unexpected changes on the second converge.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [idempotency, convergence]
+
+- id: ans-basic-006
+  topic: handlers
+  difficulty: beginner
+  question: When does an Ansible handler run, and why is it useful?
+  answer: |
+    A handler runs when a task reports changed and notifies it. By default, pending handlers are run at a flush point near the end of the play; repeated notifications for the same handler are coalesced. This is useful when several configuration files might change: the service can be reloaded once after all edits rather than after each task or on every playbook run. A handler is still an ordinary task, so choose a real module and make reload or restart semantics clear. It normally will not run immediately after notification; use `meta: flush_handlers` only when later tasks must observe the effect. Validate candidate configuration before reload where possible, and verify service health if successful activation matters.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [handlers, services]
+
+- id: ans-basic-007
+  topic: modules
+  difficulty: beginner
+  question: Why prefer a purpose-built module over a shell command?
+  answer: |
+    A purpose-built module accepts structured parameters and can inspect current state before changing it. For example, `ansible.builtin.package` can ensure a package is present, while `ansible.builtin.service` can manage whether a service is enabled and running. A raw command such as `apt install` may return differently across package states and does not automatically communicate the desired state. Modules usually provide better idempotency, structured return values and check-mode support. Use `ansible.builtin.command` for a command that needs no shell syntax, and `ansible.builtin.shell` only when pipes or expansions are genuinely required. Read `ansible-doc` for the installed module's parameters and limitations; module support and semantics depend on platform and version.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [modules, command]
+
+- id: ans-basic-008
+  topic: FQCN
+  difficulty: beginner
+  question: What is an FQCN and why use it in playbooks?
+  answer: |
+    An FQCN is a fully qualified collection name, written as `namespace.collection.plugin`, such as `ansible.builtin.copy` or `ansible.posix.firewalld`. It makes it clear which collection owns a module or plugin and avoids ambiguity when different collections expose similarly named modules. FQCNs also help lint tools and readers locate the correct documentation. A collection outside `ansible-core` must be installed in the controller or execution environment, so a correct-looking name does not prove the dependency is available. Declare required collections in a project requirements file, pin or bound their versions, and install them consistently in CI and production. Consult `ansible-doc` for the installed version rather than relying on memory about a parameter.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [FQCN, collections]
+
+- id: ans-basic-009
+  topic: variables
+  difficulty: beginner
+  question: Where can Ansible variables be defined, and what is a good default strategy?
+  answer: |
+    Variables can come from inventory and `group_vars` or `host_vars`, play and task variables, role defaults and vars, variable files, facts, registered results, and command-line extra vars. The precedence order is detailed and some sources have important nuances; extra vars are especially high precedence. Use role defaults for supported values consumers should override, and inventory for environment or host differences. Keep each variable's owner clear and avoid defining the same name in multiple places without a reason. Descriptive names reduce collisions. If a value is required, assert it early rather than supplying a convenient but unsafe fallback. During diagnosis, inspect the resolved value using the same inventory and invocation context as the actual run.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [variables, precedence]
+
+- id: ans-basic-010
+  topic: facts
+  difficulty: beginner
+  question: What are Ansible facts, and how do they differ from desired configuration?
+  answer: |
+    Facts are observations gathered from a managed host, often by the `ansible.builtin.setup` module. They describe properties such as the operating-system family, interfaces, memory and devices, and are available through `ansible_facts`. A playbook may use them to choose a supported package manager or platform-specific file path. Facts describe what Ansible observed; they are not declarations of what the host should become. Fact gathering adds connection work and may be disabled with `gather_facts: false` when unnecessary. Cached facts can improve efficiency but may be stale. For a minimal host without Python, bootstrap may require `ansible.builtin.raw` before normal Python-based modules can run. Refresh facts deliberately when a prior task changes relevant host properties.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [facts, setup]
+
+- id: ans-basic-011
+  topic: templating
+  difficulty: beginner
+  question: When should you use the template module rather than copy or lineinfile?
+  answer: |
+    Use `ansible.builtin.template` when Ansible owns a complete generated file that needs variables or simple Jinja control flow. Use `ansible.builtin.copy` for a static controller-side file, and `lineinfile` for a simple, well-defined single-line setting where that editing model fits the file format. Structured or order-sensitive configuration is often better managed with a full template or a format-aware module than by searching and replacing lines. Set destination ownership and mode explicitly, and validate the candidate file using the application's native parser when possible. Templates render on the controller, so controller-side lookups and target facts are distinct. Protect sensitive output with restrictive permissions and avoid exposing secrets in diffs or logs.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [template, files]
+
+- id: ans-basic-012
+  topic: loops
+  difficulty: beginner
+  question: How do you loop over multiple items in a task?
+  answer: |
+    Use the `loop` keyword with a list. Ansible executes the task for each item and exposes the current value as `item` by default. For structured records, use mappings with named fields and refer to them as `item.path` or `item.owner`; this is clearer than encoding several fields in a string. `loop_control.label` can make output shorter, but it should not be treated as a universal secret-redaction mechanism. Before adding a loop, check whether the module already accepts a list, as a single package task with multiple names is often simpler. Older `with_*` syntax remains in existing playbooks, but `loop` is the usual choice for new general-purpose looping.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [loops, tasks]
+
+- id: ans-basic-013
+  topic: conditionals
+  difficulty: beginner
+  question: How is a `when` condition written in Ansible?
+  answer: |
+    Write `when` as an expression without wrapping it in Jinja delimiters. For example, `when: ansible_facts['os_family'] == 'Debian'` conditions a task on the discovered platform family. Combine conditions only while they remain easy to read; repeated or complicated logic can be named in a variable or checked with an assertion. A `when` condition can also apply to a block or role invocation, but static imports and dynamic includes have differences in evaluation and tag behavior. Test the branch on every supported platform. Do not use a condition to silently skip a task after an unexpected failure; conditions should represent intended applicability, not hide broken assumptions.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [when, conditionals]
+
+- id: ans-basic-014
+  topic: error handling
+  difficulty: intermediate
+  question: How do `block`, `rescue` and `always` handle errors?
+  answer: |
+    Tasks inside a `block` run normally. If a task fails, `rescue` tasks can perform recovery or capture useful information, and `always` tasks run after the block whether it succeeds or fails. A block with a successful rescue is considered recovered for the play's control flow, so a rescue that only prints an optimistic message can conceal an incomplete change. An `always` task is useful for cleanup or collecting state, but it cannot execute normally when a host is unreachable. Use narrow error handling with an explicit recovery outcome. Broad `ignore_errors: true` suppresses useful signals and may leave a host partially configured while the pipeline reports success.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [errors, blocks]
+
+- id: ans-basic-015
+  topic: role structure
+  difficulty: beginner
+  question: What files and directories commonly make up an Ansible role?
+  answer: |
+    A conventional role has `tasks/main.yml`, with optional `handlers/main.yml`, `defaults/main.yml`, `vars/main.yml`, `templates/`, `files/`, and `meta/main.yml`. Tasks describe the work; handlers perform notified actions; defaults are low-precedence user-overridable values; vars are generally harder to override; templates and files hold assets; metadata can describe dependencies. A role should represent a coherent capability and document its inputs, supported platforms and side effects. Role defaults are usually the appropriate place for the public customization interface. A role is not automatically reusable or safe just because it follows the directory layout: test it against its dependencies and supported host environments.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [roles, structure]
+
+- id: ans-basic-016
+  topic: role inclusion
+  difficulty: intermediate
+  question: What is the practical difference between `import_role` and `include_role`?
+  answer: |
+    `ansible.builtin.import_role` is static: Ansible expands the role during playbook parsing. `ansible.builtin.include_role` is dynamic: Ansible evaluates the include at runtime. Dynamic inclusion can be useful when role selection depends on runtime data or when looping over role invocations; static imports can be easier to inspect and have different tag processing. Conditions, variable exposure and tags have subtleties, so do not assume they are interchangeable. Use the simplest form that expresses the required behavior, and test it with the Ansible version used by the project. An explicit `roles:` section is also clear for straightforward top-level role ordering. Keep orchestration steps visible rather than hiding critical sequencing in long dependency chains.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [roles, imports]
+
+- id: ans-basic-017
+  topic: privilege escalation
+  difficulty: beginner
+  question: What does `become` do, and how should it be scoped?
+  answer: |
+    `become: true` enables privilege escalation for tasks, commonly using sudo on Linux. Ansible first connects as the configured remote user, then requests elevated privileges according to `become_method` and related settings. It does not change the SSH login identity. Scope escalation to a play, block or task that needs it rather than applying root privilege indiscriminately. A dedicated automation account with narrow sudo policy is generally safer than direct root login. Some tasks, such as installing packages or writing system configuration, need elevation; reading application status may not. Test how the automation identity behaves in the actual target environment, including whether sudo requires a password or TTY.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [become, privilege]
+
+- id: ans-basic-018
+  topic: check mode
+  difficulty: intermediate
+  question: What does Ansible check mode tell you, and what does it not guarantee?
+  answer: |
+    Check mode, usually invoked with `--check`, asks modules that support it to predict whether they would make changes without applying those changes. Combined with `--diff`, it can show proposed file changes for compatible modules. Support is module-specific and may be partial; arbitrary shell commands generally cannot reliably predict their side effects. Tasks may also behave differently when earlier registered results are missing in a dry run. Therefore check mode is a useful preview, not a transaction, complete safety proof or substitute for testing in a disposable environment. Inspect module documentation and run tests for high-impact work. `check_mode: false` forces a task to run even during check mode and should be rare and plainly documented.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [check-mode, testing]
+
+- id: ans-basic-019
+  topic: vault
+  difficulty: beginner
+  question: What does Ansible Vault protect, and what remains your responsibility?
+  answer: |
+    Ansible Vault encrypts files or individual values at rest so a repository or artifact containing them does not immediately reveal plaintext secrets. Commands such as `ansible-vault create`, `edit`, `encrypt` and `encrypt_string` manage encrypted content. The vault password or identity must be supplied separately and protected; storing it beside the ciphertext defeats the boundary. Once decrypted for a task, values may still leak through debug output, diffs, logs, exception messages, temporary files or broadly readable target configuration. Use `no_log: true` for sensitive task output where appropriate, set restrictive file permissions and limit who can run production jobs. Vault is encryption, not a complete secrets lifecycle or authorization system.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [vault, secrets]
+
+- id: ans-basic-020
+  topic: collections
+  difficulty: intermediate
+  question: How should a project manage Ansible collection dependencies?
+  answer: |
+    Declare required collections in a project requirements file and install them into a reproducible controller environment. For example, a collection entry can include its namespace, collection name and a tested version constraint. Collections may provide modules, roles, inventory plugins and connection plugins, so the playbook's behavior can depend on their versions. Avoid ad hoc unpinned installation on a developer workstation, which can differ from CI or production. Pin or deliberately bound versions, review release notes when upgrading, and run lint and integration tests against the same execution environment used for deployment. `ansible-doc` and `ansible-galaxy collection list` help inspect local availability and documentation.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [collections, dependencies]
+
+- id: ans-basic-021
+  topic: connection versus delegation
+  difficulty: intermediate
+  question: What does `delegate_to` change about task execution?
+  answer: |
+    `delegate_to` runs a task on a different host than the current inventory host, often `localhost` for a controller-side API call or a load balancer host for a local operation. The original inventory host context still matters for variables such as `inventory_hostname`, while connection and credential requirements apply to the delegated execution location. This can change which machine needs network access and which credentials must be available. Delegation does not automatically make a task idempotent or safe to retry. When combined with `run_once`, serial batches or a non-default strategy, verify how often it executes. Model API operations as desired state when possible and test failure handling.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [delegation, execution]
+
+- id: ans-basic-022
+  topic: performance
+  difficulty: intermediate
+  question: How do forks affect Ansible performance and risk?
+  answer: |
+    The `forks` setting limits how many worker processes Ansible uses for concurrent host work. A higher value can improve throughput when many hosts are independent, the controller has capacity and the network and targets can handle more simultaneous connections. It can also increase controller memory use, SSH sessions, API requests, package-manager contention and load on fragile hosts. More forks therefore do not guarantee a faster or safer run. Measure task timing and test representative concurrency before changing the setting. Use `serial` when the goal is to limit rollout batch size rather than simply alter global concurrency. Preserve an operational stop condition if early hosts fail.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [forks, performance]
+
+- id: ans-basic-023
+  topic: serial rollouts
+  difficulty: intermediate
+  question: What is the purpose of the `serial` play keyword?
+  answer: |
+    `serial` divides the hosts in a play into batches, so Ansible completes the play for one batch before moving to the next. It supports rolling maintenance or deployment where changing every service instance at once would reduce availability. A value such as `serial: 2` processes two hosts per batch; a list can stage batch sizes. Choose batch size according to redundancy, traffic and recovery capability, and combine it with health checks and a failure policy when later batches should stop. `serial` is not a rollback mechanism and does not itself prove the first batch is healthy. Test handler timing and any `run_once` tasks with the chosen batch configuration.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [serial, rollout]
+
+- id: ans-basic-024
+  topic: tool choice
+  difficulty: intermediate
+  question: When would you choose Ansible, Terraform, or an immutable-image approach?
+  answer: |
+    Ansible is a natural fit for configuring existing hosts, packages, files and services, and for coordinating operational workflows over SSH or supported APIs. Terraform is usually better suited to provisioning and managing cloud resources such as networks, instances, disks and managed services through provider APIs, with an explicit plan and state model. A clean division is often Terraform for infrastructure lifecycle and Ansible for operating-system configuration, with one owner for each property. An immutable-image approach may be simpler when hosts can be replaced from tested images and ongoing mutation is unnecessary. That shifts effort toward image build, rollout and observability. Choose according to lifecycle and recovery needs, not a universal ranking.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [terraform, images, tools]

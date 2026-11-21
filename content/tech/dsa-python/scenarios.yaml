@@ -1,0 +1,42 @@
+- id: "dsa-scn-001"
+  title: "A live feed needs exact top-k alerts"
+  technologies: ["dsa-python", "python", "system-design"]
+  difficulty: "intermediate"
+  prompt: "A service receives millions of scored events per hour and must show the current 100 highest-scoring items. Scores can change, events may repeat, and a dashboard reads the result periodically. Explain a local algorithm and the production questions you would ask."
+  approach: "Clarify whether updates replace an item score, whether ties need deterministic ordering, and how often the full ranked output is required. For append-only events, maintain a size-k min-heap for O(log k) updates and O(k) storage, then sort the retained set for display. If existing keys change, a plain heap cannot efficiently delete or update; use versioned lazy entries with stale-entry checks or an indexed priority structure. Discuss state ownership, sharding/merging local top-k summaries, event identity, and freshness."
+  red_flags: ["Claiming a heap stores all values in sorted order.", "Ignoring update and duplicate semantics.", "Promising globally exact top-k from independently truncated shards without merging candidates."]
+- id: "dsa-scn-002"
+  title: "Merge overlapping booking windows"
+  technologies: ["dsa-python", "system-design"]
+  difficulty: "intermediate"
+  prompt: "An availability API receives a batch of busy time intervals that may be unsorted and touching. Return normalized busy ranges before checking free time."
+  approach: "Define endpoint semantics first: whether [a,b] and [b,c] overlap or merely touch, and how zero-length intervals behave. Sort by start in O(n log n), then scan once while maintaining the current merged end. Validate malformed ranges and timezone normalization before comparison. Explain O(n) output in the worst case and avoid checking every pair. If input is streamed but not ordered, exact normalization still requires buffering or external sorting."
+  red_flags: ["Merging only adjacent input records before sorting.", "Using an overlap condition without defining inclusive endpoints.", "Forgetting that sorting mutates input if using list.sort()."]
+- id: "dsa-scn-003"
+  title: "Cache a costly lookup under a strict memory limit"
+  technologies: ["dsa-python", "system-design"]
+  difficulty: "advanced"
+  prompt: "A single process repeatedly computes a costly value by key. The cache must be bounded by entry count and evict least-recently-used entries; explain implementation and operational caveats."
+  approach: "Use OrderedDict or a dictionary plus doubly linked list: get moves a hit to most-recent position, put updates or inserts, then evicts the oldest entry when capacity is exceeded. Average O(1) operations and O(capacity) entries. Clarify whether cache keys include all inputs, how invalidation works, whether concurrent access needs a lock, and whether count bounds are sufficient when values vary in size. Multi-process deployments need independent caches or shared storage and have consistency trade-offs."
+  red_flags: ["Using a list to find and remove the least-recent entry in O(n).", "No invalidation or stale-data policy.", "Treating entry-count capacity as a strict byte bound."]
+- id: "dsa-scn-004"
+  title: "Protect an endpoint from bursts and sustained overload"
+  technologies: ["dsa-python", "system-design"]
+  difficulty: "advanced"
+  prompt: "An API needs to allow short bursts but enforce a long-term request rate per customer. Propose a rate limiter and discuss distributed deployment."
+  approach: "A token bucket allows bursts up to capacity and replenishes at a configured rate. Store token balance and last-refill time; on each request refill by elapsed monotonic time up to capacity, then atomically check and consume. Define cost units, denial behavior, clock source, and whether limits are per customer or shared. A single-process implementation is O(1) but not concurrency-safe without synchronization. In a distributed service, perform the read-modify-write atomically in shared storage or accept bounded approximation; consider key expiry and hot customers."
+  red_flags: ["Using wall-clock time without considering jumps.", "A non-atomic shared counter under concurrency.", "Confusing a token bucket burst cap with a fixed-window quota."]
+- id: "dsa-scn-005"
+  title: "Find a target phrase in a large text efficiently"
+  technologies: ["dsa-python"]
+  difficulty: "intermediate"
+  prompt: "Given a long source string and a shorter required phrase, return the shortest source substring containing all required characters with multiplicity."
+  approach: "Build required character counts, then use a variable sliding window. Expand right, tracking missing characters; when valid, shrink left while recording the shortest interval. The right and left pointers each advance at most n times, giving O(n+m) expected time and O(u) counts. Preserve original characters and return an empty result if impossible. Test repeated required characters, no match, and empty target."
+  red_flags: ["Checking every substring independently.", "Ignoring multiplicity in target characters.", "Shrinking before validity and losing a potentially minimal window."]
+- id: "dsa-scn-006"
+  title: "Schedule jobs with prerequisites and identify impossible plans"
+  technologies: ["dsa-python", "system-design"]
+  difficulty: "intermediate"
+  prompt: "A batch has jobs and directed prerequisite edges. Produce a valid execution order, or report that dependencies contain a cycle."
+  approach: "Represent edges from prerequisite to dependent and compute indegrees. Kahn’s algorithm starts with all zero-indegree jobs, emits one, and decrements its outgoing neighbors. If fewer than V jobs are emitted, a cycle blocks completion. Complexity O(V+E) with adjacency lists. Ask whether multiple valid orders are acceptable, how unknown job IDs and duplicate edges are handled, and whether downstream execution needs failure propagation rather than only a static order."
+  red_flags: ["Reversing prerequisite edge direction.", "Returning a partial order as complete despite a cycle.", "Using DFS with one visited bit and incorrectly diagnosing directed cycles."]

@@ -1,0 +1,86 @@
+concepts:
+  - title: Partition is the fundamental unit
+    detail: Ordering, replication leadership, and classic consumer-group parallelism all apply at partition scope. A topic is not globally ordered across partitions.
+  - title: Key defines ordering and placement
+    detail: A stable key keeps related records together but can create a hot partition. Changing partition count may change hash placement and split a key's history.
+  - title: Offset is a position
+    detail: Offsets are partition-local bookmarks, not timestamps or business row counts; compaction and transactional filtering create gaps in visible records.
+  - title: Consumer offsets are separate state
+    detail: Group progress lives in `__consumer_offsets`; committing a position does not prove that an external side effect completed.
+  - title: High watermark and last stable offset differ
+    detail: Replication controls ordinary visibility; open transactions can hold the last stable offset behind the high watermark for `read_committed` consumers.
+  - title: Acknowledgment boundary depends on ISR
+    detail: The `acks=all` boundary depends on current ISR and `min.insync.replicas`, not simply the configured replication factor.
+  - title: Idempotence covers producer retries
+    detail: Idempotence enabled with `enable.idempotence=true` suppresses duplicate retry batches within producer semantics; it is not business-event deduplication or a cross-system transaction.
+  - title: Batch settings trade latency for efficiency
+    detail: The `batch.size` and `linger.ms` settings influence batching; tune against real payloads, p99 latency, compression, and buffer pressure.
+  - title: Poll-loop liveness matters
+    detail: The `max.poll.interval.ms` setting bounds time between polls in classic consumer behavior; long handling can trigger reassignment even when the process is alive.
+  - title: At-least-once is common
+    detail: Side effect then commit can replay after a crash. Idempotent writes or deduplication make retries safe.
+  - title: Kafka transactions have a boundary
+    detail: Transactions can atomically include Kafka output and consumer offsets; external databases and APIs need separate coordination.
+  - title: Read committed filters aborted output
+    detail: Consumers using `read_committed` hide aborted transactional records, but open transactions can delay visibility past the last stable offset.
+  - title: Retention is a recovery contract
+    detail: Keep data long enough for downtime, replay, rebuild, and recovery. If a group falls behind the log start, its old position is gone.
+  - title: Compaction keeps keyed state
+    detail: Compaction asynchronously retains latest values per key; tombstones mark deletes but eventually expire, so compacted logs are not full audit history.
+  - title: Schema compatibility is directional
+    detail: Backward and forward checks depend on format, registry policy, and deployed readers; semantic changes can break consumers while schema checks pass.
+  - title: CDC and outbox close different gaps
+    detail: A database outbox atomically records business state and intent to publish; CDC reads transaction logs, and relays still need duplicate-safe consumers.
+traps:
+  - Assuming a topic's partitions have one global order.
+  - Treating `acks=all` as acknowledgment from every configured replica regardless of ISR.
+  - Committing an offset when a record is fetched or queued instead of after durable processing.
+  - Assuming producer idempotence prevents duplicate business events or makes a database write atomic with Kafka.
+  - Treating retention as exact per-record expiry or compaction as a complete immutable event history.
+  - Lowering `min.insync.replicas` to clear errors without accepting weaker durability.
+advanced:
+  - Kafka 4.0 removes ZooKeeper; ZooKeeper deployments need a supported migration path rather than a direct mode toggle.
+  - KRaft controller quorum health and data-partition replication are separate operational planes; existing traffic can mask metadata trouble.
+  - KIP-848's newer consumer group protocol requires broker/client support and explicit rollout validation; upgrades do not automatically switch every group.
+  - KIP-405 tiered storage depends on release and implementation; remote replay latency and cleanup-policy limits require testing.
+  - KIP-932 share groups provide record-level cooperative work semantics in supported releases; they are not a drop-in replacement for ordered consumer groups.
+  - A transactional consume-transform-produce pipeline requires offsets in the transaction and `isolation.level=read_committed` for consumers that must hide aborted output.
+comparisons:
+  - a: "`acks=1`"
+    b: "`acks=all`"
+    difference: "`acks=1` waits for the leader's append; `acks=all` waits for the configured ISR condition and interacts with `min.insync.replicas`."
+  - a: Idempotent producer
+    b: Transactional producer
+    difference: Idempotence deduplicates retries per producer/partition; transactions atomically group Kafka records and, when included, input offsets.
+  - a: Consumer group
+    b: Share group
+    difference: Traditional groups assign partitions exclusively to one active member; share groups enable cooperative record-level work sharing in supported releases.
+  - a: Delete retention
+    b: Log compaction
+    difference: Delete expires eligible segments by time/size; compaction asynchronously preserves latest keyed values and tombstones.
+  - a: Kafka Connect
+    b: Kafka Streams
+    difference: Connect integrates external sources/sinks through connectors; Streams is an application library for Kafka-native transformations and state.
+  - a: Kafka Streams
+    b: Flink
+    difference: Streams embeds Kafka processing in an application; Flink runs a separate job runtime with its own checkpoint and state operations.
+  - a: Kafka
+    b: Managed work queue
+    difference: Kafka emphasizes partitioned logs, independent offsets, fan-out, and replay; a queue often provides simpler per-message acknowledgment and retry controls.
+commands:
+  - label: List consumer groups
+    code: "bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --list"
+  - label: Describe group lag and assignments
+    code: "bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group orders-v1"
+  - label: Read a topic from the beginning
+    code: "bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic orders --from-beginning"
+  - label: Inspect topic partition and replica metadata
+    code: "bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic orders"
+  - label: Produce a test record with a key
+    code: "bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic orders --property parse.key=true --property key.separator=:"
+  - label: Reset offsets with an explicit dry run
+    code: "bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --group orders-v1 --topic orders --reset-offsets --to-earliest --dry-run"
+  - label: Inspect KRaft metadata quorum status
+    code: "bin/kafka-metadata-quorum.sh --bootstrap-server localhost:9092 describe --status"
+  - label: Inspect topic configuration
+    code: "bin/kafka-configs.sh --bootstrap-server localhost:9092 --entity-type topics --entity-name orders --describe"

@@ -1,0 +1,266 @@
+[
+  {
+    "id": "api-basic-001",
+    "topic": "http semantics",
+    "difficulty": "beginner",
+    "question": "What does it mean for an HTTP method to be safe?",
+    "answer": "A safe method means the client does not request a state change as part of the method semantics. GET, HEAD, OPTIONS, and TRACE are defined as safe by RFC 9110. Safe does not mean the server performs zero side effects: logging and metrics can still occur. The important boundary is that the client did not ask to mutate the target. This lets browsers, crawlers, and caches retrieve resources without fearing that reading a link will delete or purchase something. A route that performs a destructive action through GET violates this expectation, even if its URL contains an action parameter. Review automated callers as well as human clients: prefetching and link checkers may issue GET without user intent. Put changes behind an unsafe method and test that GET has no domain mutation. In a design review, write the exact request and response pair and check what a generic HTTP client can infer without understanding your domain. Verify headers and body rules as well as the status. Consider retries after a lost response, because that is where semantic mistakes become duplicate writes.",
+    "tags": [
+      "http-semantics",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-002",
+    "topic": "http semantics",
+    "difficulty": "beginner",
+    "question": "How are idempotency and safety different?",
+    "answer": "Safety concerns whether the method requests a state change; idempotency concerns whether repeating the same request has the same intended effect as performing it once. GET is both safe and idempotent. PUT and DELETE are unsafe but idempotent: they request a change, yet repeating the request should not change the intended final state again. POST is not inherently idempotent. These properties do not require identical response codes or forbid logging each attempt. A repeated DELETE can return 404 after the first returned 204 and still leave the target absent. Use idempotency to decide whether automatic retries can be safe after an uncertain network outcome; it does not eliminate rate, latency, or side-effect concerns outside the requested effect. In a design review, write the exact request and response pair and check what a generic HTTP client can infer without understanding your domain. Verify headers and body rules as well as the status. Consider retries after a lost response, because that is where semantic mistakes become duplicate writes.",
+    "tags": [
+      "http-semantics",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-003",
+    "topic": "http semantics",
+    "difficulty": "beginner",
+    "question": "When should an API return 201, 202, or 204?",
+    "answer": "Return 201 Created when the request created a resource; a Location header commonly identifies it. Return 202 Accepted when work has been accepted but is not finished, and provide a way to observe its state, often an operation resource. Return 204 No Content when the operation succeeded and there is deliberately no response representation. They express different completion and body expectations, so they should not be treated as interchangeable success codes. For example, a synchronous create can return 201 and the new representation; a queued export can return 202 and a status URI. Keep status and body consistent: clients may act on the status before parsing JSON. A 204 response should not carry a body that clients are expected to consume. In a design review, write the exact request and response pair and check what a generic HTTP client can infer without understanding your domain. Verify headers and body rules as well as the status. Consider retries after a lost response, because that is where semantic mistakes become duplicate writes.",
+    "tags": [
+      "http-semantics",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-004",
+    "topic": "http semantics",
+    "difficulty": "intermediate",
+    "question": "Why does a 401 response need a WWW-Authenticate header, and how does 403 differ?",
+    "answer": "401 indicates that valid authentication credentials are missing or unacceptable; HTTP requires a WWW-Authenticate challenge in a 401 response. 403 indicates that the server understood the request but refuses to fulfill it, commonly because the authenticated principal lacks permission. Re-authenticating does not necessarily fix a 403. The word “Unauthorized” in 401 is historical, so it is clearer to reason about whether the caller has presented acceptable credentials and whether policy allows the operation. An API can intentionally return 404 instead of 403 when disclosing an object’s existence would leak sensitive information. Choose and document a consistent concealment policy for object-level access. Test both missing credentials and an authenticated-but-forbidden principal, including their response headers and error shapes. In a design review, write the exact request and response pair and check what a generic HTTP client can infer without understanding your domain. Verify headers and body rules as well as the status. Consider retries after a lost response, because that is where semantic mistakes become duplicate writes.",
+    "tags": [
+      "http-semantics",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-005",
+    "topic": "http semantics",
+    "difficulty": "intermediate",
+    "question": "When is PUT preferable to PATCH?",
+    "answer": "PUT requests that the target resource be created or replaced by the representation supplied. It is appropriate when the client knows the target URI and can send the complete desired state. PATCH applies a partial modification using a defined patch format and semantics; the behavior depends on that format and is not automatically idempotent. A common bug is implementing PUT as “update only keys supplied,” which makes it behave like a patch while clients expect replacement. If partial updates are required, document whether omitted fields remain unchanged, become null, or are removed, and protect concurrent changes with validators where needed. Do not choose a method from the payload shape alone. Test repeated requests and missing-field behavior, and state what a successful follow-up GET should represent. In a design review, write the exact request and response pair and check what a generic HTTP client can infer without understanding your domain. Verify headers and body rules as well as the status. Consider retries after a lost response, because that is where semantic mistakes become duplicate writes.",
+    "tags": [
+      "http-semantics",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-006",
+    "topic": "http semantics",
+    "difficulty": "intermediate",
+    "question": "What is the purpose of 409 Conflict versus 412 Precondition Failed?",
+    "answer": "409 reports a conflict with the current state of the target resource, such as attempting an invalid state transition or creating a duplicate unique name. 412 is specifically associated with a request precondition that evaluated false, commonly If-Match during an optimistic-concurrency update. Use 412 when the client explicitly says “apply this only if the representation is still revision X,” and 409 for a domain-level conflict not expressed by an HTTP precondition. Both can include a problem response explaining recovery. A client may fetch the current representation and reconcile rather than blindly retrying. Keeping the distinction lets generic clients recognize conditional-update failures while domain clients handle business conflicts. Avoid mapping every failed write to 500 or 400. In a design review, write the exact request and response pair and check what a generic HTTP client can infer without understanding your domain. Verify headers and body rules as well as the status. Consider retries after a lost response, because that is where semantic mistakes become duplicate writes.",
+    "tags": [
+      "http-semantics",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-007",
+    "topic": "uri design",
+    "difficulty": "beginner",
+    "question": "What makes an API URI resource-oriented?",
+    "answer": "A resource-oriented URI identifies a domain concept or collection, while the HTTP method expresses the requested operation. For example, `/orders/o_123` identifies an order, and GET, PATCH, or DELETE express different actions on it. `/orders` identifies the collection and can support listing or creation. A URI does not need to match a database table, and a resource may aggregate data from multiple internal systems. Stable public identifiers let clients address entities without learning internal joins or storage structure. Design around the client’s tasks and domain lifecycle. If the route exposes ORM names or requires clients to know database relationships, the API is coupling its contract to implementation. Treat the route as a durable public identifier, then review how it behaves in logs, links, caches, authorization checks, and client SDKs. Clients should not need to know database internals. The server must still validate object access even when identifiers are opaque or difficult to guess.",
+    "tags": [
+      "uri-design",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-008",
+    "topic": "uri design",
+    "difficulty": "beginner",
+    "question": "When should a collection endpoint use query parameters?",
+    "answer": "Use query parameters to select or shape a collection: filters, sort order, pagination size, or an explicit field projection. For example, `/orders?status=pending&limit=25` remains a collection URI with a selected view. Define parameter types, allowed values, default behavior, and how multiple filters combine. Do not place secrets in URLs because they can be logged or copied into history. Complex searches may exceed URL limits or expose sensitive criteria; a documented POST search endpoint can be appropriate if its query semantics are clear and it does not mutate domain state. Treat all query input as untrusted, cap expensive page sizes, and separate filtering from authorization. A caller-provided tenant filter never proves permission to read that tenant. Treat the route as a durable public identifier, then review how it behaves in logs, links, caches, authorization checks, and client SDKs. Clients should not need to know database internals. The server must still validate object access even when identifiers are opaque or difficult to guess.",
+    "tags": [
+      "uri-design",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-009",
+    "topic": "uri design",
+    "difficulty": "intermediate",
+    "question": "Should nested resources always use deeply nested paths?",
+    "answer": "No. Nest a resource when the parent provides meaningful context, scoping, or a relationship that clients naturally navigate, such as `/customers/c_1/orders`. Avoid repeating the full ancestry when the child has an independent identity and lifecycle; `/orders/o_9` can be the canonical URI. Deep paths become brittle when relationships change, can duplicate identifiers, and may complicate authorization checks. Link to related resources or return their stable IDs. A collection can be nested even when individual items have top-level canonical URIs. A useful review asks whether a child is only addressable through its parent. Keep depth modest, enforce authorization at the actual resource, and document canonical item identifiers. Treat the route as a durable public identifier, then review how it behaves in logs, links, caches, authorization checks, and client SDKs. Clients should not need to know database internals. The server must still validate object access even when identifiers are opaque or difficult to guess.",
+    "tags": [
+      "uri-design",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-010",
+    "topic": "uri design",
+    "difficulty": "intermediate",
+    "question": "Why should APIs avoid exposing secrets in URI paths or query strings?",
+    "answer": "URIs frequently appear in web server and proxy logs, browser history, analytics, referrer information, and support captures. A password, access token, personal datum, or one-time secret embedded in a URL can spread beyond the intended request path and remain available longer than expected. Use Authorization headers or request bodies according to the protocol and security design, and redact sensitive values at every logging layer. Avoid putting secrets in path identifiers as well as query parameters. TLS protects transit, but it does not prevent the URL from being logged at endpoints. If a secret has already appeared in a URL, remove it from future logs where possible and rotate or revoke it. Treat opaque IDs as identifiers, not as authorization credentials. Treat the route as a durable public identifier, then review how it behaves in logs, links, caches, authorization checks, and client SDKs. Clients should not need to know database internals. The server must still validate object access even when identifiers are opaque or difficult to guess.",
+    "tags": [
+      "uri-design",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-011",
+    "topic": "versioning",
+    "difficulty": "beginner",
+    "question": "What kinds of changes are likely to break API clients?",
+    "answer": "Removing or renaming a field, changing a field’s type or meaning, making an optional request field required, narrowing an enum, changing a default, or altering status and error behavior can break clients. Even an added response enum value may break generated clients with exhaustive switches. Compatibility depends on real client behavior, not only a schema rule. Additive optional fields are often safe for tolerant clients, but strict deserializers may reject them. A change should be reviewed against representative consumers and tests. Write down the compatibility policy and check both request and response handling. A schema diff can flag risk, but clients may rely on ordering, nullability, error details, or timing that a schema does not capture. Use real consumer behavior to decide compatibility rather than assuming every client is tolerant. Review generated clients, default values, enums, and error handling. Maintain a migration path and usage measurements so a version policy has a practical end date rather than an indefinite promise.",
+    "tags": [
+      "versioning",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-012",
+    "topic": "versioning",
+    "difficulty": "intermediate",
+    "question": "Compare URI versioning with header-based versioning.",
+    "answer": "URI versioning makes the contract visible in paths such as `/v2/orders`, which is easy to debug, route, cache, document, and test. Header or media-type versioning can keep the resource URI stable, but clients must consistently send the selector and caches must vary on it; otherwise one version’s representation could be served to another. Neither strategy removes the cost of maintaining old behavior. Choose one policy with clear compatibility guarantees, then make gateways, SDKs, logs, and OpenAPI descriptions apply it consistently. A version label is useful only if the provider preserves the promised behavior. Avoid date-based or header version strings that are accepted but have no real support policy behind them. Use real consumer behavior to decide compatibility rather than assuming every client is tolerant. Review generated clients, default values, enums, and error handling. Maintain a migration path and usage measurements so a version policy has a practical end date rather than an indefinite promise.",
+    "tags": [
+      "versioning",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-013",
+    "topic": "versioning",
+    "difficulty": "intermediate",
+    "question": "How should an API deprecate an operation?",
+    "answer": "A deprecation should identify the replacement, explain migration steps, give a realistic support or sunset window, and reach the affected consumers through channels they use. Keep the old behavior working during the announced transition, measure remaining usage with privacy-conscious telemetry, and offer a contact path for client issues. A response header or changelog entry alone may not be enough. Internal clients also need migration coordination because independent deployments create the same compatibility risk as public integrations. Do not deprecate an endpoint without knowing who owns the remaining callers. Announce the timeline early, provide examples, and verify actual version traffic before disabling the route. Use real consumer behavior to decide compatibility rather than assuming every client is tolerant. Review generated clients, default values, enums, and error handling. Maintain a migration path and usage measurements so a version policy has a practical end date rather than an indefinite promise.",
+    "tags": [
+      "versioning",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-014",
+    "topic": "pagination",
+    "difficulty": "beginner",
+    "question": "What is the main difference between offset and cursor pagination?",
+    "answer": "Offset pagination requests a position such as `limit=20&offset=40`; it is simple and supports approximate page jumps but can become expensive for deep offsets and drift when rows are inserted or removed. Cursor pagination continues from a stable ordering key, often encoded in an opaque token. It scales better for large feeds and avoids some offset shifts, but usually does not support jumping to arbitrary page numbers. Both require deterministic sorting; a unique tie-breaker prevents equal timestamps from causing duplicates or omissions. Choose based on client navigation, data size, and consistency needs. For snapshot exports, ordinary page cursors may not guarantee a point-in-time view; design a separate snapshot or export workflow. Test the exact ordering and boundary conditions at page transitions, including equal sort values and concurrent writes. Bound the amount of work per request and repeat authorization checks on every page. State whether traversal is a snapshot or only a best-effort view of a changing collection.",
+    "tags": [
+      "pagination",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-015",
+    "topic": "pagination",
+    "difficulty": "intermediate",
+    "question": "Why must a cursor pagination sort include a unique tie-breaker?",
+    "answer": "If results are sorted only by a non-unique field such as created_at, several records can share the cursor position. The next-page predicate may then skip tied items or return them again, depending on implementation. Add a unique stable key as the final sort component, and encode all relevant sort values in the cursor. The database ordering and cursor predicate must use the same direction and comparison rules. Cursor tokens should be opaque and bound to the query filters and sort order. Test equal primary sort keys, inserts, deletes, and reversed traversal. Re-check authorization for every page; a cursor is a position marker, not a permission grant. Test the exact ordering and boundary conditions at page transitions, including equal sort values and concurrent writes. Bound the amount of work per request and repeat authorization checks on every page. State whether traversal is a snapshot or only a best-effort view of a changing collection.",
+    "tags": [
+      "pagination",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-016",
+    "topic": "filtering",
+    "difficulty": "intermediate",
+    "question": "How should an API design sorting and filtering options?",
+    "answer": "Expose a documented whitelist of public filter and sort fields rather than accepting arbitrary database expressions. Define types, operators, allowed values, timezone and null behavior, and whether multiple filters combine with AND or OR. Sorting must be deterministic and should include a stable tie-breaker when paging. A misspelled filter should produce a clear validation response or follow a clearly documented ignore policy; silent failure can produce plausible but wrong results. Apply authorization constraints independently of user-provided filters. Bound expensive filters and test query plans for supported combinations. Public query syntax becomes a client contract, so adding expressive complexity should be balanced against operation cost and SDK usability. Keep public query semantics stable and separate from storage expressions. Bound costly combinations and test supported filters with realistic query plans. Authorization is always applied independently; filtering results down to a requested owner or tenant is not a substitute for an access-control decision.",
+    "tags": [
+      "filtering",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-017",
+    "topic": "caching",
+    "difficulty": "beginner",
+    "question": "How do ETag and If-None-Match reduce bandwidth?",
+    "answer": "A response can include an ETag that identifies a selected representation. When the cached response becomes stale, a client sends `If-None-Match` with that validator. If the representation has not changed, the server returns 304 Not Modified without the representation body, and the client reuses its stored copy. If it changed, the server returns the new body and a new validator. The client treats the ETag as opaque. It can represent a revision or content hash, but must change consistently when the representation changes. A 304 is useful only when the client or cache still has the old body. Test revalidation through intermediaries, and do not send a body with 304. Check behavior at the actual shared and private caches, including freshness, validators, variant selection, and personalized data. Cache directives are part of the security boundary. A correct origin response can still be unsafe if an intermediary reuses it for the wrong audience.",
+    "tags": [
+      "caching",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-018",
+    "topic": "caching",
+    "difficulty": "intermediate",
+    "question": "What is the difference between Cache-Control no-cache and no-store?",
+    "answer": "`no-store` tells caches not to store the response. `no-cache` allows storage but requires successful validation before reuse. The names are easy to confuse. `private` prevents shared caches from storing a response as shared content while allowing a private cache to store it; `public` can permit shared caching when other rules allow. These directives are policy signals, not a complete data-loss prevention mechanism: they do not erase logs or copies already saved by clients. Choose based on sensitivity, audience, and acceptable staleness. For personalized content, explicitly consider shared-cache behavior and credentials. Verify the deployed CDN and browser policy rather than assuming a framework setting reaches every cache. Check behavior at the actual shared and private caches, including freshness, validators, variant selection, and personalized data. Cache directives are part of the security boundary. A correct origin response can still be unsafe if an intermediary reuses it for the wrong audience.",
+    "tags": [
+      "caching",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-019",
+    "topic": "caching",
+    "difficulty": "intermediate",
+    "question": "When is Vary required?",
+    "answer": "Vary names request headers that influenced response selection so a cache can distinguish representations. If the body depends on `Accept-Language`, returning `Vary: Accept-Language` prevents a cache from serving one language’s response for another request. Similarly, content negotiation by Accept may require Vary. Omitting it can cause incorrect variants or, in some designs, cross-user data exposure. Varying on too many high-cardinality headers can fragment a cache and reduce hit rates, so only list genuine selection dimensions. Review every response branch and middleware layer that changes content. Test cache keys with differing headers and verify that authentication-sensitive responses are not accidentally shared. Check behavior at the actual shared and private caches, including freshness, validators, variant selection, and personalized data. Cache directives are part of the security boundary. A correct origin response can still be unsafe if an intermediary reuses it for the wrong audience.",
+    "tags": [
+      "caching",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-020",
+    "topic": "authentication",
+    "difficulty": "beginner",
+    "question": "Why is OAuth 2.0 primarily an authorization framework, not a login protocol?",
+    "answer": "OAuth 2.0 defines how a client obtains an access token representing permission to access protected resources. It separates the client from the resource owner and gives the client a token rather than the user’s password. The protocol does not standardize how the authorization server authenticates the user or define an identity claim format. OpenID Connect adds an identity layer and ID tokens for sign-in. An OAuth access token is intended for resource authorization and should not automatically be treated as proof of user identity. Keep the API’s audience and token validation explicit. If an application needs sign-in identity, use a documented identity protocol and validate its issuer, audience, signature, and nonce where applicable. Separate credential verification from the decision to allow a specific action on a specific resource. Apply least privilege and test denied cases, wrong audiences, stale permissions, and credential rotation. Keep tokens out of URLs and logs, and design revocation or expiry behavior explicitly.",
+    "tags": [
+      "authentication",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-021",
+    "topic": "authentication",
+    "difficulty": "intermediate",
+    "question": "What problem does Authorization Code with PKCE solve?",
+    "answer": "The authorization-code flow separates user interaction at the authorization server from access-token delivery to the client. The client receives a short-lived authorization code and exchanges it for tokens. PKCE adds a verifier and derived challenge so the code exchange is bound to the initiating client instance; an intercepted code alone is not enough to redeem it. This is especially important for public clients that cannot safely keep a client secret, such as native apps. Redirect URI validation and state protection remain important. Use a current security profile and exact redirect URI handling. PKCE is not a replacement for validating token issuer, audience, expiry, or the user’s authorization to an API resource. Separate credential verification from the decision to allow a specific action on a specific resource. Apply least privilege and test denied cases, wrong audiences, stale permissions, and credential rotation. Keep tokens out of URLs and logs, and design revocation or expiry behavior explicitly.",
+    "tags": [
+      "authentication",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-022",
+    "topic": "authorization",
+    "difficulty": "intermediate",
+    "question": "Why are OAuth scopes insufficient for object-level authorization?",
+    "answer": "A scope such as `orders:read` says the token may perform a class of action, but it normally does not determine which specific order the caller may access. The resource server must evaluate ownership, tenant membership, relationships, and business state for the requested object. Otherwise an authenticated user can substitute another identifier and access data outside their scope. Apply the same checks to item endpoints, nested resources, expansions, and collection results. Unguessable identifiers reduce enumeration but do not enforce permission. Test cross-tenant IDs and denied actions as deliberately as successful requests. Keep authorization checks close to the resource operation and avoid relying on client-side visibility filters. Model authorization as an action, principal, resource, and current-state decision. Test the negative path with a different tenant or object identifier; client-side filtering and unguessable IDs do not enforce the policy. Return consistent failures without disclosing sensitive resource existence.",
+    "tags": [
+      "authorization",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-023",
+    "topic": "tokens",
+    "difficulty": "intermediate",
+    "question": "What must a resource server check before trusting a JWT?",
+    "answer": "A resource server must verify the JWT signature using a trusted key and allowed algorithm, then validate claims relevant to its policy: issuer, audience, expiry, not-before when present, and any required scopes or roles. It should not accept a token merely because the payload decodes, nor fetch a key from an arbitrary URL supplied by untrusted input. Key rotation, clock skew, and revocation strategy must be considered. JWT is a token format, not an encryption guarantee; signed claims are often readable by anyone holding the token. Restrict the accepted issuer and audience to the intended trust boundary. Never log bearer tokens, and test malformed, expired, wrong-audience, and wrong-signature tokens. Decoding is not verification: validate signature, trusted issuer, intended audience, lifetime, and the claims required by authorization policy. Use an explicit allowlist of algorithms and trusted keys, and redact bearer material from every observability pipeline.",
+    "tags": [
+      "tokens",
+      "http-api"
+    ]
+  },
+  {
+    "id": "api-basic-024",
+    "topic": "api contracts",
+    "difficulty": "intermediate",
+    "question": "What does OpenAPI describe, and what does it not guarantee?",
+    "answer": "OpenAPI is a language-agnostic description of an HTTP API’s paths, operations, parameters, schemas, responses, and security mechanisms. Tools can use it for documentation, client generation, validation, and tests. The document itself does not enforce security, validate runtime requests, or guarantee implementation conformance. A syntactically valid schema can still omit important headers or describe incorrect behavior. Keep one source of truth where possible and check actual service behavior against the published contract in CI or staging. Include status codes, error schemas, pagination, conditional headers, and authentication per operation. Contract tests should cover failures and runtime semantics, not just compare a response body to a schema. An interface description is useful only when the running service and clients are checked against it. Include headers, errors, security, and pagination, then run schema and integration checks in CI. Review actual SDK behavior because syntax-valid contracts can still break deployed consumers.",
+    "tags": [
+      "api-contracts",
+      "http-api"
+    ]
+  }
+]

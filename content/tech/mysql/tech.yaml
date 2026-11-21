@@ -1,0 +1,100 @@
+slug: mysql
+title: MySQL
+category: databases
+summary: MySQL 8.x is a widely deployed relational database whose InnoDB storage engine, replication, and operational tooling reward understanding beyond SQL syntax.
+level: core
+relations:
+  - to: sql
+    type: uses
+    note: MySQL implements SQL with dialect-specific syntax and engine behaviour; this module focuses on what happens beneath a query.
+  - to: postgresql
+    type: alternative
+    note: PostgreSQL is a close relational alternative with different MVCC, indexing, and operational trade-offs.
+intro:
+  what: |
+    MySQL is a relational database system commonly deployed as the transactional core of web applications, commerce systems, and managed cloud services. Modern MySQL 8.x uses InnoDB by default: a clustered B-tree storage engine with transactions, foreign keys, crash recovery, row-level locking, and multi-version concurrency control (MVCC). MySQL 8.0 introduced features such as common table expressions, window functions, enforced CHECK constraints, roles, and functional indexes; MySQL 8.4 is the current long-term-support series. Verify feature availability and defaults against the exact server release and distribution you operate.
+
+    This module concentrates on the database beneath the SQL: InnoDB's buffer pool and redo/undo paths, how indexes shape access, how to read execution plans, and what isolation and gap locks mean for concurrent work. It then connects those mechanics to replication, partitioning, JSON, backups, monitoring, and safe schema change. Examples use real MySQL syntax and assume InnoDB unless stated otherwise. Managed services can restrict configuration and utilities, so translate the operational ideas to the provider's supported workflow.
+
+    Aurora MySQL is a distinct AWS-managed, MySQL-compatible service, not simply an ordinary MySQL server with a different name. It uses a distributed storage architecture and has service-specific replication, failover, backup, and observability behaviour. MySQL knowledge transfers, but check Aurora-specific documentation before applying assumptions about InnoDB internals or standard MySQL operations.
+  why: |
+    Many serious MySQL incidents are consequences of hidden storage and concurrency behaviour, not invalid SQL: a buffer pool that cannot keep the active working set resident, a secondary-index lookup that becomes random I/O, a transaction holding locks longer than expected, or a replica that is healthy at the process level but too far behind to serve reads. Knowing the mechanism lets you distinguish a query problem from a capacity, schema, or operations problem and choose a safe remedy rather than reaching for an unexplained setting.
+
+    MySQL also appears in several forms—from self-managed community or commercial servers to cloud-managed offerings—so transferable reasoning matters more than memorising one deployment's console. Understanding its differences from PostgreSQL helps teams choose deliberately and plan migrations around semantics, not just SQL syntax.
+  problems:
+    - Serving transactional reads and writes with durable commits and crash recovery through InnoDB.
+    - Finding rows efficiently using clustered and secondary B-tree indexes.
+    - Maintaining concurrent transactions with MVCC, row locks, and isolation-level guarantees.
+    - Replicating committed changes for read scaling, recovery, and high availability.
+    - Recovering to a known point in time from a physical or logical backup and binary logs.
+  where_used:
+    - Web application and commerce backends with high-volume transactional workloads.
+    - Managed database services such as Amazon RDS for MySQL, Cloud SQL for MySQL, and Aurora MySQL.
+    - Replicated read workloads and change-data-capture pipelines using the binary log.
+    - Embedded operational stores in products and platforms that need a mature relational ecosystem.
+  ecosystem: |
+    MySQL sits behind application connection pools and frameworks, and commonly feeds replicas, analytics systems, and CDC consumers. InnoDB is the usual storage engine; the MySQL server layer handles parsing, optimization, security, and binary logging. Tools such as MySQL Shell, `mysqldump`, and Percona XtraBackup support administration and backup, while Percona Toolkit utilities help inspect queries and perform online schema changes. HA orchestration and managed-service control planes add their own failover rules. Check engine, server, client, and provider versions together; their feature sets and operational constraints are not interchangeable.
+  alternatives:
+    - name: PostgreSQL
+      note: A general-purpose relational alternative with distinct MVCC, indexing, extension, and operational models; compare workload and ecosystem requirements rather than declaring a universal winner.
+    - name: SQLite
+      note: Embedded and operationally simple for local or single-writer workloads; it does not provide MySQL's client/server replication model.
+    - name: Aurora MySQL
+      note: AWS-managed MySQL-compatible service with a distributed storage layer and service-specific operational semantics.
+  related: [sql, postgresql]
+chapters:
+  - id: innodb-architecture
+    title: "InnoDB Architecture: Buffer Pool, Redo, Undo, and Doublewrite"
+    file: chapters/01-innodb-architecture.md
+    minutes: 15
+    level: core
+  - id: indexes
+    title: "Indexes: B+Trees, Covering, Cardinality, and Index Merge"
+    file: chapters/02-indexes.md
+    minutes: 15
+    level: core
+  - id: query-optimization
+    title: Query Optimisation and Execution Plans
+    file: chapters/03-query-optimization.md
+    minutes: 15
+    level: core
+  - id: transactions-isolation
+    title: Transactions, Isolation, MVCC, and Gap Locks
+    file: chapters/04-transactions-isolation.md
+    minutes: 15
+    level: advanced
+  - id: replication
+    title: Replication, GTIDs, Lag, and Failover
+    file: chapters/05-replication.md
+    minutes: 15
+    level: advanced
+  - id: partitioning-sharding
+    title: Partitioning and Sharding Considerations
+    file: chapters/06-partitioning-sharding.md
+    minutes: 13
+    level: advanced
+  - id: json-generated-columns
+    title: JSON Support and Generated Columns
+    file: chapters/07-json-generated-columns.md
+    minutes: 13
+    level: core
+  - id: backups-pitr
+    title: Backups and Point-in-Time Recovery
+    file: chapters/08-backups-pitr.md
+    minutes: 15
+    level: advanced
+  - id: performance-monitoring
+    title: Performance Schema and Monitoring
+    file: chapters/09-performance-monitoring.md
+    minutes: 15
+    level: advanced
+  - id: schema-migrations
+    title: Schema Design and Migration Safety
+    file: chapters/10-schema-migrations.md
+    minutes: 15
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

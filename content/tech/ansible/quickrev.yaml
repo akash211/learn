@@ -1,0 +1,90 @@
+concepts:
+  - title: Inventory defines scope
+    detail: "Static files, directories, and dynamic inventory plugins define hosts and group membership; inspect the merged view with `ansible-inventory --graph` before a production run."
+  - title: Patterns select targets
+    detail: "`hosts:` patterns and `--limit` combine; a limit narrows rather than adds targets. `--list-hosts` confirms selection without executing tasks."
+  - title: SSH login and become differ
+    detail: "`ansible_user` chooses the remote login identity; `become: true` elevates selected tasks after connecting. Use a dedicated, least-privileged account."
+  - title: Tasks call modules
+    detail: "A task supplies structured arguments to a module. Prefer state-aware modules such as `ansible.builtin.package`, `file`, `user` and `service` over shell scripts."
+  - title: Idempotency enables safe convergence
+    detail: "A converged task reports no change on a later run. Arbitrary commands need real guards and truthful `changed_when` logic, not cosmetic suppression."
+  - title: Handlers are notifications
+    detail: "A changed task can notify a handler, which normally runs at a flush point and coalesces repeated notifications. Validate config before reload."
+  - title: FQCN identifies ownership
+    detail: "Use `namespace.collection.plugin`, such as `ansible.builtin.copy`; declare and pin non-core collections in a project dependency file."
+  - title: Facts are observations
+    detail: "`ansible.builtin.setup` gathers host facts. They inform decisions but are not desired state, and cached facts may be stale."
+  - title: Role defaults form the public interface
+    detail: "Put intentionally overridable inputs in `defaults/main.yml`; use inventory for environment differences and validate required values early."
+  - title: Variables have precedence
+    detail: "The same name can be defined in many sources; extra vars have high precedence. Diagnose effective values under the exact run context."
+  - title: Templates render on controller
+    detail: "`ansible.builtin.template` renders Jinja on the controller, transfers the result and can validate a candidate with `%s` in the command."
+  - title: File ownership must be clear
+    detail: "Choose `template`, `copy`, `lineinfile` or `blockinfile` according to who owns the file or region; set owner, group and quoted mode explicitly."
+  - title: Check mode is a preview
+    detail: "`--check --diff` depends on module support and is not a transaction or guarantee that arbitrary commands have no side effects."
+  - title: Vault encrypts data at rest
+    detail: "Vault protects ciphertext; protect its password separately and prevent plaintext leaks through logs, diffs, debug messages and target files."
+  - title: Serial bounds a rollout
+    detail: "`serial` batches hosts. Pair it with health checks and a failure policy; it does not roll back already changed hosts."
+  - title: Pin the execution environment
+    detail: "Match `ansible-core`, collections, Python libraries, lint and test dependencies across development, CI and production."
+
+traps:
+  - "Assuming `--limit` makes any play safe without inspecting the resolved host list."
+  - "Using shell for package, account or service state that a built-in module models idempotently."
+  - "Setting `changed_when: false` to hide a modifying task and suppress its handler."
+  - "Treating check mode as a complete dry-run guarantee for every module and command."
+  - "Putting Vault passwords alongside ciphertext or assuming Vault prevents runtime logging leaks."
+  - "Using Ansible and Terraform or image builds to own the same configuration property."
+
+advanced:
+  - "`include_role` is dynamic and `import_role` is static; tag processing, conditions and visibility differ, so test the chosen behavior."
+  - "Pipelining can reduce SSH round trips but may interact with sudo policies that require a TTY; test with the actual become path."
+  - "`run_once` scope can interact with `serial` batches and strategy; verify whether an operation runs once per batch or play."
+  - "Delegated tasks execute from the delegate context; confirm where credentials, network access and inventory variables are resolved."
+  - "A successful `rescue` changes failure flow; use it only for real recovery or explicit handling, not to cosmetically green a failed rollout."
+  - "A Molecule second converge checks idempotency; static lint and syntax checks alone do not validate resulting service behavior."
+
+comparisons:
+  - a: ansible.builtin.command
+    b: ansible.builtin.shell
+    difference: "`command` avoids shell parsing; `shell` enables pipes and redirects but adds quoting and injection risks."
+  - a: ansible.builtin.template
+    b: ansible.builtin.copy
+    difference: "`template` renders Jinja on the controller; `copy` transfers a static source file."
+  - a: ansible.builtin.import_role
+    b: ansible.builtin.include_role
+    difference: "Static parse-time expansion versus dynamic runtime inclusion; tags, conditions and variable behavior differ."
+  - a: ansible.builtin.package
+    b: ansible.builtin.apt
+    difference: "`package` offers generic package state; `apt` exposes Debian-specific options and behavior."
+  - a: serial
+    b: forks
+    difference: "`serial` controls rollout batch size; `forks` limits concurrent worker processes across hosts."
+  - a: Ansible
+    b: Terraform
+    difference: "Ansible commonly configures guest operating systems and coordinates operations; Terraform commonly manages provider resources and lifecycle state."
+  - a: mutable configuration management
+    b: immutable image replacement
+    difference: "Repeatedly converge existing hosts versus test a versioned image and replace hosts; both need rollout, health and rollback controls."
+
+commands:
+  - label: Inspect inventory group graph
+    code: ansible-inventory -i inventory/prod.yml --graph
+  - label: List hosts selected by a play
+    code: ansible-playbook -i inventory/prod.yml site.yml --list-hosts --limit web
+  - label: Check playbook syntax
+    code: ansible-playbook -i inventory/prod.yml site.yml --syntax-check
+  - label: Preview supported changes
+    code: ansible-playbook -i inventory/stage.yml site.yml --check --diff
+  - label: Read installed module documentation
+    code: ansible-doc ansible.builtin.template
+  - label: Install declared collections
+    code: ansible-galaxy collection install -r requirements.yml
+  - label: Lint playbooks and roles
+    code: ansible-lint
+  - label: Run a bounded canary play
+    code: ansible-playbook -i inventory/prod.yml site.yml --limit canary --forks 5

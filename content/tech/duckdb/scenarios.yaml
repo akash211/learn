@@ -1,0 +1,104 @@
+[
+  {
+    "id": "duck-scn-001",
+    "title": "A local Parquet report has become slow as the folder grew",
+    "technologies": [
+      "duckdb",
+      "parquet"
+    ],
+    "difficulty": "intermediate",
+    "prompt": "A daily DuckDB report used to finish in seconds. The Parquet prefix now contains thousands of files and the run takes several minutes before returning a small aggregate. The compute host has spare CPU, but object-store request counts and planning time increased. How do you diagnose and improve it?",
+    "approach": "First reproduce against a fixed manifest and profile planning, scan, and aggregation separately. Check file count, sizes, partition layout, projected columns, filter pushdown, and remote range requests. Determine whether discovery overhead or bytes scanned dominate. Compact or rewrite into sensibly sized Parquet files, prune partitions with direct typed predicates, and materialize a local snapshot if repeated remote reads justify it. Benchmark on the same manifest and verify row counts and totals.",
+    "red_flags": [
+      "Increase threads before measuring the bottleneck.",
+      "Glob an unconstrained prefix and assume it is a stable snapshot.",
+      "Compact once but leave the writer producing thousands of tiny files.",
+      "Claim partition pruning without checking the plan or actual files read."
+    ]
+  },
+  {
+    "id": "duck-scn-002",
+    "title": "A Python dashboard exhausts memory fetching query results",
+    "technologies": [
+      "duckdb",
+      "python"
+    ],
+    "difficulty": "intermediate",
+    "prompt": "A dashboard query completes quickly in DuckDB but its Python worker is killed when it calls `fetchall()`. The query returns several million rows. Operators report that the SQL itself is fast and want to raise `memory_limit`. What would you change?",
+    "approach": "Separate engine execution from result conversion and account for Python object memory. Ask what the dashboard actually needs; aggregate, filter, and limit in SQL. If bulk rows are essential, stream Arrow record batches or write a file for pagination/download rather than constructing a giant list. Observe process RSS and DuckDB-managed memory separately, since `memory_limit` does not cover all host allocations. Set a result-size contract and test representative peak output.",
+    "red_flags": [
+      "Raise memory_limit to all host RAM without accounting for Python.",
+      "Fetch every row to render a summary dashboard.",
+      "Assume `fetchall()` is streaming.",
+      "Measure only SQL time and ignore serialization/rendering."
+    ]
+  },
+  {
+    "id": "duck-scn-003",
+    "title": "Two replicas collide while updating one DuckDB file",
+    "technologies": [
+      "duckdb",
+      "postgresql"
+    ],
+    "difficulty": "advanced",
+    "prompt": "A service was scaled from one to three replicas. Each pod opens the same mounted `analytics.duckdb` file read-write. Updates now intermittently fail with lock or transaction errors, and the team proposes a retry loop. Design a safe next step.",
+    "approach": "Clarify process boundaries and file-system locking; native DuckDB read-write ownership is not a multi-process server deployment. Stop independent writers and assign one process/job as writer, with readers opening a completed snapshot read-only if the storage supports it. Make updates transactional and idempotent, and retry only understood intra-process conflicts. If replicas must write concurrently or serve shared mutable state, move that database responsibility to PostgreSQL or another server. Test on the exact volume/OS and define backup/recovery.",
+    "red_flags": [
+      "Treat retrying lock errors as a concurrency architecture.",
+      "Assume a shared network filesystem makes DuckDB a client-server database.",
+      "Ignore whether a retry repeats external side effects.",
+      "Scale writers without a correctness and restore test."
+    ]
+  },
+  {
+    "id": "duck-scn-004",
+    "title": "A file-based ETL pipeline produces inconsistent totals on retries",
+    "technologies": [
+      "duckdb",
+      "parquet"
+    ],
+    "difficulty": "advanced",
+    "prompt": "A scheduled job reads `raw/*.parquet`, aggregates by customer, and overwrites a published Parquet directory. After a retry, totals sometimes differ because upstream files arrive during the run and consumers observe partial output. How would you make it reproducible?",
+    "approach": "Replace implicit glob discovery with a manifest, explicit partition range, or table-format snapshot, and log the exact input watermark. Write each run into a unique staging prefix; validate schema, counts, and business totals; then publish using storage semantics that are actually atomic for the target system. Define overwrite/idempotency behavior and coordinate readers. If concurrent snapshot publication is required, use an appropriate transactional table format rather than assuming COPY TO commits a directory atomically.",
+    "red_flags": [
+      "Retry the same glob and call it the same input.",
+      "Write in place and assume object-store rename is atomic.",
+      "Append the same batch on every retry.",
+      "Validate only process exit code, not result correctness."
+    ]
+  },
+  {
+    "id": "duck-scn-005",
+    "title": "A JSON feed silently changes schema",
+    "technologies": [
+      "duckdb",
+      "sql"
+    ],
+    "difficulty": "intermediate",
+    "prompt": "An event feed previously had integer `account_id` and string `event_time`. A new producer emits account identifiers with leading zeros, omits fields on some rows, and sometimes emits a timestamp with an offset. Auto-detected queries still run, but a join no longer matches some accounts. How do you repair ingestion?",
+    "approach": "Inspect representative raw records and preserve the source payload for diagnosis. Define a curated schema: account_id as VARCHAR, parse event_time with explicit offset/time-zone handling, and distinguish absent keys, JSON null, SQL NULL, and malformed values. Use typed conversion and a reject/quarantine policy for invalid records. Test old and new producer fixtures, leading-zero IDs, offset boundaries, and join counts. Version the transformation and communicate any corrected historical output.",
+    "red_flags": [
+      "Cast the account id to an integer and lose leading zeros.",
+      "Replace all missing values with empty strings.",
+      "Trust inference because the query did not error.",
+      "Ignore time-zone offsets or silently coerce malformed rows."
+    ]
+  },
+  {
+    "id": "duck-scn-006",
+    "title": "A team wants to use DuckDB as a shared analytics service",
+    "technologies": [
+      "duckdb",
+      "postgresql"
+    ],
+    "difficulty": "advanced",
+    "prompt": "A prototype embeds DuckDB in an API process and reads a persistent database. Product requirements now include dozens of independent API replicas, concurrent updates, user-specific access controls, and high availability. Which parts should remain DuckDB and which should move?",
+    "approach": "Translate requirements into process concurrency, write ownership, access-control, availability, and data-volume needs. DuckDB remains suitable for local snapshot preparation, tests, or read-only embedded analysis with a clear process owner and resource limits. It is not a shared multi-process write service; put mutable shared state behind PostgreSQL or a managed warehouse/service. Keep snapshots and analytical exports if useful, but define freshness and publication. Validate isolation, query limits, backup/restore, and failure behavior before launch.",
+    "red_flags": [
+      "Assume persistent file means shared service.",
+      "Add replicas that all write the same file.",
+      "Expose arbitrary SQL and filesystem access to tenants.",
+      "Ignore operational requirements because a local benchmark was fast."
+    ]
+  }
+]

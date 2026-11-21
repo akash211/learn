@@ -1,0 +1,106 @@
+[
+  {
+    "id": "api-scn-001",
+    "title": "Duplicate payment after a client timeout",
+    "technologies": [
+      "rest-apis",
+      "fastapi",
+      "python"
+    ],
+    "difficulty": "advanced",
+    "prompt": "A checkout client sends POST /payments and receives no response before its timeout. The processor dashboard shows a charge, but the API returned nothing. The client retries with a new request and a second charge appears. Design a safe remediation and the API behavior for future requests.",
+    "approach": "First establish whether the original request committed and reconcile the duplicate through the payment provider; do not issue more retries blindly. Then define an idempotency-key contract scoped to the caller and operation, fingerprint the request, atomically reserve the key before the effect, and return the stored outcome for same-key retries. Reject changed payloads with a clear conflict. Include an in-progress state and define retention, expiry, and behavior when downstream outcome is unknown. Propagate one operation identifier downstream and expose a reconciliation or status path. Test simultaneous duplicate requests and a response lost after commit.",
+    "red_flags": [
+      "Assuming a timeout proves the server rolled back.",
+      "Generating a fresh idempotency key on each retry.",
+      "Saving the key only after the charge, leaving a race.",
+      "Claiming exactly-once execution across systems without a defined deduplication boundary."
+    ]
+  },
+  {
+    "id": "api-scn-002",
+    "title": "Concurrent edits overwrite a newer representation",
+    "technologies": [
+      "rest-apis",
+      "python"
+    ],
+    "difficulty": "intermediate",
+    "prompt": "Two administrators GET the same customer profile. Each edits a different field. The second PUT silently replaces the first administrator’s update because it submits a complete stale representation. Users report disappearing changes but no server errors. Explain how to prevent lost updates and what clients should do after a conflict.",
+    "approach": "Introduce a strong ETag for each selected representation and require If-Match on updates, or use an equivalent explicit revision token. The server checks the precondition before applying the mutation and returns 412 when the representation has changed. The client fetches the current state, reconciles its intended edit, and submits against the new validator. If a domain conflict is not an HTTP precondition, use a documented 409 instead. Test concurrent updates, missing validators, and a request whose successful response is lost. Keep validator generation consistent with representation changes.",
+    "red_flags": [
+      "Using a weak validator where strong comparison is needed.",
+      "Blindly retrying the stale PUT.",
+      "Returning success while discarding a concurrent edit.",
+      "Confusing 409 business conflicts with 412 failed preconditions."
+    ]
+  },
+  {
+    "id": "api-scn-003",
+    "title": "Cursor pages omit records during a busy feed",
+    "technologies": [
+      "rest-apis",
+      "python"
+    ],
+    "difficulty": "intermediate",
+    "prompt": "A mobile app loads a descending activity feed using a cursor based only on created_at. Many events share a timestamp. During active traffic, some users see duplicates and others never see several events. The database team proposes adding a random cursor string. Diagnose the problem and outline a robust page contract.",
+    "approach": "The cursor key is not unique, so rows tied at the boundary cannot be ordered and resumed deterministically. Sort by created_at plus a unique stable ID, encode both values and sort direction into an opaque cursor, and make the query predicate match the ordering exactly. Bind cursor to filter/sort parameters and version its encoding. Recheck authorization on each page. Document whether inserts during traversal can appear and whether this is a snapshot. Verify index support for the filter/order combination; randomizing a cursor token does not fix ordering.",
+    "red_flags": [
+      "Adding randomness without a consistent continuation predicate.",
+      "Relying on database default order for equal timestamps.",
+      "Treating a cursor as authorization or assuming it guarantees a snapshot.",
+      "Failing to test equal sort keys and concurrent inserts."
+    ]
+  },
+  {
+    "id": "api-scn-004",
+    "title": "OAuth token works across the wrong tenant",
+    "technologies": [
+      "rest-apis",
+      "fastapi"
+    ],
+    "difficulty": "advanced",
+    "prompt": "A service validates JWT signatures and checks for the `reports:read` scope. A customer discovers that changing `/tenants/acme/reports` to `/tenants/other/reports` returns another tenant’s data. Tokens are correctly signed, have not expired, and were issued by the company identity provider. Find the security gap and propose verification tests.",
+    "approach": "The token proves a trusted issuer granted a capability, not permission for every tenant ID. Validate issuer, audience, expiration, allowed algorithms, and scope, then perform object/tenant-level authorization for the requested tenant on every route and nested resource. Derive tenant membership from trusted claims or an authorization service rather than a caller-controlled filter. Apply the policy to list, item, expansion, and export endpoints. Return 403 or a deliberate non-disclosing 404 consistently. Add cross-tenant negative tests and audit decisions without logging the bearer token.",
+    "red_flags": [
+      "Treating a valid signature as sufficient authorization.",
+      "Trusting the tenant path or query parameter as proof of membership.",
+      "Relying on unguessable IDs as access control.",
+      "Logging the token while investigating the incident."
+    ]
+  },
+  {
+    "id": "api-scn-005",
+    "title": "Gateway and service disagree on API errors",
+    "technologies": [
+      "rest-apis",
+      "cicd"
+    ],
+    "difficulty": "intermediate",
+    "prompt": "Application routes return RFC 9457 problem details, but oversized bodies and upstream timeouts are generated by a gateway as HTML. The mobile SDK expects JSON and crashes while parsing a timeout. Support cannot correlate a gateway failure with logs. Design a contract and rollout approach across layers.",
+    "approach": "Inventory errors by layer and decide which component owns each status and body. Configure the gateway to emit a safe, documented problem+json shape where feasible, preserve accurate statuses, and include an opaque correlation identifier that is queryable in protected telemetry. Do not forward raw upstream internals. Update OpenAPI and SDK error handling to accept documented problems and a defensive fallback for nonconforming intermediaries. Add integration tests through the gateway for request-size rejection, upstream timeout, and application validation. Roll out with telemetry on old clients and coordinate SDK migration.",
+    "red_flags": [
+      "Mapping all gateway failures to 200 or 500 without meaning.",
+      "Exposing stack traces or upstream hostnames.",
+      "Assuming application unit tests cover edge-generated responses.",
+      "Changing the error schema without testing deployed SDKs."
+    ]
+  },
+  {
+    "id": "api-scn-006",
+    "title": "Service-wide latency rises after adding a BFF fan-out",
+    "technologies": [
+      "rest-apis",
+      "fastapi",
+      "python"
+    ],
+    "difficulty": "advanced",
+    "prompt": "A new mobile BFF combines four downstream APIs in parallel. Its own route has a one-second timeout, but request latency rises across the cluster, worker pools saturate, and retries double traffic during a partial outage. Product asks to increase the timeout and retry every failure. Propose a resilience and observability plan.",
+    "approach": "Measure per-dependency latency, queue wait, retries, and worker saturation before adjusting timeouts. Give each call a bounded deadline within an end-to-end budget, cap concurrency and queue depth, and retry only transient failures within a shared attempt/deadline budget using backoff and jitter. Add circuit breaking or admission control for persistently failing dependencies. Decide which fan-out results are mandatory and whether optional data can be omitted explicitly. Emit route-template metrics and trace IDs without high-cardinality user labels or secrets. Test slow and unavailable dependencies, and keep liveness independent of downstream health.",
+    "red_flags": [
+      "Increasing timeouts without resource or deadline analysis.",
+      "Retrying permanent 4xx failures or multiplying retries at every layer.",
+      "Logging tokens and full payloads to obtain traces.",
+      "Letting optional enrichment block critical responses indefinitely."
+    ]
+  }
+]

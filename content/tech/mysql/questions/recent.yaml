@@ -1,0 +1,119 @@
+- id: mysql-recent-001
+  topic: query plans
+  difficulty: intermediate
+  question: How would you use MySQL 8.0 EXPLAIN ANALYZE to find a cardinality-estimation error?
+  answer: |
+    Run it only when executing the query is safe, then compare estimated and actual rows at each iterator. Find the first node where actual cardinality diverges substantially; later join work may be a consequence of that early estimate. Check whether statistics are stale, values are skewed, columns correlated, or parameter values atypical. Consider `ANALYZE TABLE`, an appropriate histogram, a query rewrite, or a composite index, then measure representative cases again. Do not add hints from one run before understanding the estimate. For example, if the optimizer expects a status predicate to match half the table but the actual value occurs in nearly every row, a join order based on that estimate can be poor. A histogram may help with skew, while correlated predicates may require a query or schema change that statistics alone cannot model. Run the analysis with representative parameter values and account for its execution cost.
+  period: "2024-2026"
+  type: representative
+  tags: [explain-analyze, optimizer, statistics]
+
+- id: mysql-recent-002
+  topic: JSON indexing
+  difficulty: intermediate
+  question: A JSON path is a frequent filter. How would you make it indexable and preserve correct type comparisons?
+  answer: |
+    First decide whether the property is truly flexible metadata or a core relational attribute. For a stable, frequently queried scalar, define a generated column using the JSON path, with an explicit type, length, null behaviour, and collation, then index it. Functional key parts are another option in supported MySQL 8.0 versions. Cast numeric properties deliberately so text extraction does not create lexical comparisons. Confirm the query can use the generated expression and inspect its plan. If the field needs joins, uniqueness, or referential integrity, a regular column may be a better model. For instance, extracting a JSON number as a character string can make values such as 9 and 100 sort lexicographically rather than numerically. A typed generated column makes the comparison contract explicit and allows a conventional index, but its collation, length, signedness, and behavior for absent keys must match application expectations. Verify that the query expression aligns with the indexed expression and inspect EXPLAIN for actual key use.
+  period: "2024-2026"
+  type: representative
+  tags: [json, generated-columns, indexing]
+
+- id: mysql-recent-003
+  topic: replication consistency
+  difficulty: advanced
+  question: How can an application provide read-after-write consistency when reads are routed to replicas?
+  answer: |
+    Define the consistency requirement first. The simplest policy routes a user's immediate post-write read to the source. A more precise GTID-aware router can wait until a chosen replica has executed the transaction's GTID before sending the read, with a bounded timeout and fallback. Alternatively, the product may explicitly accept staleness. A healthy replication thread or `Seconds_Behind_Source = 0` is not sufficient proof that a particular commit is visible. Include routing, failover, replica eligibility, and timeout behaviour in tests; otherwise a failover can silently weaken the guarantee. A concrete policy is to pin a user's session to the source for a short period after a write, then return to replica reads when the application no longer requires read-your-write behavior. A GTID wait is more targeted but needs a timeout because a lagging replica can otherwise stall requests indefinitely. The fallback must be explicit: read from the source, retry another eligible replica, or report a consistency timeout.
+  period: "2024-2026"
+  type: representative
+  tags: [replication, gtid, consistency]
+
+- id: mysql-recent-004
+  topic: failover
+  difficulty: advanced
+  question: What must a safe MySQL replica promotion procedure establish before accepting writes?
+  answer: |
+    Select an eligible replica using executed GTID or log progress and the service's data-loss policy. Fence the old source so it cannot continue accepting writes, promote the candidate, reconfigure remaining replicas, and verify client routing before reopening writes. Check transactions in flight and communicate any acknowledged commits that may be missing. DNS change alone is not fencing, and asynchronous replicas can lose recently acknowledged transactions. Test network partitions and partial failures, not only a clean process crash. A managed service's documented failover workflow may enforce different mechanics and should be tested as deployed. A promotion runbook should define the allowable recovery point, how to prevent split brain, and the exact point at which clients may write again. For example, stop or isolate the old source and revoke its write path before changing the service endpoint; DNS updates alone can leave cached clients connected. Verify GTID state, replication configuration, grants, and application health on the candidate.
+  period: "2024-2026"
+  type: representative
+  tags: [failover, replication, fencing]
+
+- id: mysql-recent-005
+  topic: MySQL 8.4 operations
+  difficulty: intermediate
+  question: What should you verify before applying a MySQL 8.4 LTS upgrade to an 8.0 deployment?
+  answer: |
+    Inventory server, client, connector, plugin, storage-engine, and backup-tool versions, then consult the official upgrade path and release notes for removed or changed behaviour. Check configuration variables, authentication and TLS requirements, SQL modes, reserved words, data dictionary compatibility, and application reliance on deprecated features. Test the upgrade with production-like data, representative query plans, replication, backup and restore, and failover. Measure startup and recovery as well as steady state. Preserve a tested rollback or forward-recovery strategy; a major-version upgrade is not complete when the daemon merely starts. An upgrade rehearsal should include application smoke tests and representative queries, not just a server startup. For example, test authentication from every production connector, backup creation and restore, replication catch-up, and failover against the target version. Compare query plans and latency for important digests because changes in statistics or defaults can alter plans without breaking SQL. Preserve evidence about unsupported plugins and configuration settings, and confirm the vendor-supported upgrade sequence for the deployment platform.
+  period: "2024-2026"
+  type: representative
+  tags: [mysql-8-4, upgrade, compatibility]
+
+- id: mysql-recent-006
+  topic: online DDL
+  difficulty: advanced
+  question: When would you choose native online DDL over gh-ost or pt-online-schema-change?
+  answer: |
+    Determine the exact table operation, server patch level, storage engine, and table properties, then test native DDL with an explicitly acceptable algorithm. Instant or in-place changes can be simpler when supported and their metadata-lock windows and resource costs fit the budget. A shadow-copy tool may be appropriate when native rebuild behaviour is too disruptive, but it adds load and cutover complexity. gh-ost and pt-online-schema-change have different binlog, trigger, foreign-key, and topology constraints. Monitor disk, workload, and replica lag, and ensure a cutover lock can be acquired within the migration's timeout policy. Native DDL should be attempted only after confirming the requested algorithm and lock behavior for that exact operation and table. For a rebuild, a shadow-copy tool can keep writes flowing but temporarily needs extra disk and adds load while changes are replicated. For example, a trigger-based migration may be unsuitable on a table with existing triggers or foreign-key relationships. Stop criteria should include disk headroom, lag, and application latency.
+  period: "2024-2026"
+  type: representative
+  tags: [online-ddl, gh-ost, pt-osc]
+
+- id: mysql-recent-007
+  topic: backup and PITR
+  difficulty: advanced
+  question: A team has daily backups but cannot restore to before an accidental delete. What backup design is missing?
+  answer: |
+    The team needs a recoverable base backup plus an unbroken, retained sequence of binary logs after that backup, with coordinates or GTID metadata identifying the starting point. Recovery should restore the base to an isolated instance and replay events up to a verified point before the delete. Confirm log retention covers the required recovery window and no files are purged while a backup or consumer needs them. Test the procedure, including selection of the event boundary, encryption keys, validation, and cutover. Daily full backups alone constrain recovery to the last available snapshot. The recovery exercise should prove the full chain from base backup through binary logs to a target immediately before a known destructive event. For example, restore a backup to a separate instance, replay to 14:31:59, and confirm the deleted row exists before considering a production cutover. Set retention to cover the longest restore delay, not just the nominal backup interval. Record the tested duration and validation checks.
+  period: "2024-2026"
+  type: representative
+  tags: [pitr, binlog, backups]
+
+- id: mysql-recent-008
+  topic: monitoring
+  difficulty: intermediate
+  question: How would you distinguish slow query execution from lock waiting in a MySQL latency incident?
+  answer: |
+    Correlate application traces and statement summaries with wait instrumentation during the incident. Inspect Performance Schema statement digests for execution counts, rows examined, and latency; inspect `data_lock_waits` and lock details for InnoDB contention, and check metadata-lock waits for DDL or long transactions. Compare CPU, storage latency, connection-pool wait, and replica lag. A high end-to-end duration may include queueing or waiting rather than expensive row processing. Capture transient lock state promptly, then trace the holder's transaction and access path. Apply a change only after the evidence identifies the bottleneck. If instrumentation shows a query is actively consuming CPU, examine its plan, rows examined, and indexing; if it is waiting, identify the lock holder and transaction age instead. For example, a short update queued behind an hours-long transaction calls for addressing the blocking transaction and transaction boundaries, not tuning the update's SQL first. Capture Performance Schema lock data while the incident is occurring, since completed waits disappear.
+  period: "2024-2026"
+  type: representative
+  tags: [performance-schema, locks, troubleshooting]
+
+- id: mysql-recent-009
+  topic: InnoDB tuning
+  difficulty: advanced
+  question: Redo pressure rises during write bursts. What evidence and options would you examine before changing redo capacity?
+  answer: |
+    Measure redo generation, checkpoint age or flushing pressure where exposed, dirty-page trends, storage latency, and sustained page-flush throughput. Determine whether the system faces short bursts or a steady write rate beyond storage capacity. On MySQL 8.0.30 and later, `innodb_redo_log_capacity` is the principal capacity variable; older releases use earlier log sizing controls. More capacity can absorb bursts and reduce checkpoint pressure but cannot fix an ongoing throughput deficit. Also inspect transaction size, index write amplification, durability settings, and storage limits. Preserve the required commit durability while testing changes. A capacity increase is useful when redo is generated in short peaks and the system later has enough idle throughput to flush pages. If checkpoint pressure remains high continuously, the underlying flush capacity or write amplification is likely the constraint. For example, measure redo generation and page flushing across a complete batch cycle, including the catch-up period after the burst. Track storage latency, dirty-page count, disk space, and crash-recovery time after changing capacity.
+  period: "2024-2026"
+  type: representative
+  tags: [redo, innodb, tuning]
+
+- id: mysql-recent-010
+  topic: partitioning design
+  difficulty: advanced
+  question: What workload and schema constraints make MySQL partitioning a poor fit?
+  answer: |
+    Partitioning is a poor fit when important queries do not constrain the partition key, because they may scan every partition; when the design requires a unique key that cannot include the partition columns; or when many partitions create management and planning overhead without a pruning or lifecycle benefit. It does not distribute server resources across machines. Examine representative plans, uniqueness and foreign-key requirements, future-partition automation, and retention operations. If the need is more write capacity than one server can provide, sharding may be relevant but introduces application-level routing and cross-shard semantics rather than solving the problem transparently. Check pruning with actual plans for the main query shapes, including requests that omit the proposed partition key. For example, date partitioning can make dropping expired history straightforward but cannot ensure an account-only lookup touches a single partition. Also verify unique-key rules, foreign-key needs, and whether new partitions will be created before incoming rows reach them.
+  period: "2024-2026"
+  type: representative
+  tags: [partitioning, schema, sharding]
+
+- id: mysql-recent-011
+  topic: transaction locking
+  difficulty: advanced
+  question: An insert blocks on a row absent from the table. How do you investigate the InnoDB lock wait?
+  answer: |
+    Check the waiting and blocking transactions in Performance Schema `data_lock_waits` and `data_locks`, then inspect each statement, index, isolation level, and transaction age. Under `REPEATABLE READ`, a locking range scan may hold next-key locks that protect a gap where the new key belongs. Foreign-key or duplicate-key checks can also involve gap locking. Confirm the actual chosen index with `EXPLAIN` and reproduce with concurrent sessions. A narrower access path or a carefully selected isolation level may reduce contention, but preserve the required invariant and test race behaviour before changing semantics. A missing row can still be protected by a gap or next-key lock when a transaction performs a locking range scan under REPEATABLE READ. For example, an insert into an indexed range may wait even though no row has that exact key. Identify the blocking statement and index, then use EXPLAIN to understand which range it scans; also check foreign-key checks and duplicate-key paths.
+  period: "2024-2026"
+  type: representative
+  tags: [gap-locks, performance-schema, isolation]
+
+- id: mysql-recent-012
+  topic: MySQL and PostgreSQL choice
+  difficulty: intermediate
+  question: How would you compare MySQL and PostgreSQL for a new transactional service without relying on generic benchmarks?
+  answer: |
+    Build a requirements matrix around correctness semantics, query patterns, data types, JSON use, constraints, indexing, extensions, replication, recovery objectives, managed-service availability, team expertise, and migration risk. Implement representative schemas and workload transactions in both candidates, including skew, concurrency, failures, and restore tests. Compare operational requirements and total lifecycle cost, not only a synthetic throughput number. Validate the exact versions and cloud offerings because their features and defaults differ. MySQL may fit an ecosystem or operational requirement; PostgreSQL may offer useful SQL or extension capabilities. The decision should follow measured workload and service needs. Use the same representative data model and transactions on both engines, then compare correctness, tail latency, and operational tasks under expected concurrency. For example, benchmark the service's actual account update and reporting query with skewed keys, then perform backup restore and failover drills. Generic benchmark results often omit schema constraints, query mix, managed-service limitations, and the team's existing expertise. Test exact supported versions and provider offerings.
+  period: "2024-2026"
+  type: representative
+  tags: [postgresql, architecture, evaluation]

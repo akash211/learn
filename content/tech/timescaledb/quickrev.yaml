@@ -1,0 +1,155 @@
+{
+  "concepts": [
+    {
+      "title": "Hypertable",
+      "detail": "Logical TimescaleDB table stored in time-ranged PostgreSQL chunks; SQL and transactions remain PostgreSQL."
+    },
+    {
+      "title": "Chunk pruning",
+      "detail": "Direct time predicates let the planner exclude chunks outside a range; distinct from per-chunk indexing."
+    },
+    {
+      "title": "Chunk interval",
+      "detail": "Choose from measured bytes, active indexes, query windows, retention, and relation overhead."
+    },
+    {
+      "title": "Space partitioning",
+      "detail": "A bounded secondary dimension can distribute data but multiplies chunk count and query fan-out."
+    },
+    {
+      "title": "Unique constraints",
+      "detail": "Unique keys generally need partition dimensions; local chunk indexes are not a global index."
+    },
+    {
+      "title": "Compression segments",
+      "detail": "Segment keys group rows; avoid nearly unique values and verify current API."
+    },
+    {
+      "title": "Compression order",
+      "detail": "Ordering often follows time; columnstore benefit depends on query and release."
+    },
+    {
+      "title": "Continuous aggregate",
+      "detail": "Materializes buckets and refreshes changed ranges; freshness depends on jobs and offsets."
+    },
+    {
+      "title": "Refresh offsets",
+      "detail": "start_offset covers late changes; end_offset leaves a tail; schedule is not an SLA."
+    },
+    {
+      "title": "Real-time aggregate",
+      "detail": "May combine materialized history with raw rows beyond watermark; defaults vary."
+    },
+    {
+      "title": "Gap filling",
+      "detail": "time_bucket_gapfill generates buckets; null, zero, LOCF, and interpolation differ."
+    },
+    {
+      "title": "LOCF",
+      "detail": "Carries the last value forward; can hide outages or carry stale data."
+    },
+    {
+      "title": "BRIN",
+      "detail": "Min/max block summaries are compact but rely on physical correlation."
+    },
+    {
+      "title": "COPY",
+      "detail": "Reduces per-row protocol overhead; batching, WAL, and idempotency still matter."
+    },
+    {
+      "title": "Retention",
+      "detail": "Chunk drops avoid row deletes but are coarse and destructive."
+    },
+    {
+      "title": "PITR",
+      "detail": "Physical base backup plus continuous WAL and extension-compatible restore."
+    }
+  ],
+  "traps": [
+    "Treating TimescaleDB as a separate database instead of a PostgreSQL extension.",
+    "Choosing chunk intervals without measuring heap and index bytes.",
+    "Expecting a unique key without partition columns to guarantee global uniqueness.",
+    "Compressing before the correction window closes.",
+    "Averaging bucket averages without weighting counts.",
+    "Treating missing or interpolated data as observed truth."
+  ],
+  "advanced": [
+    "Estimate chunk fan-out as time intervals multiplied by populated space partitions.",
+    "Use sums and counts for means; final averages and percentiles are not generally mergeable.",
+    "Retest real-time aggregate defaults and boundaries after upgrades.",
+    "Define late-data correction and repair paths for old chunks and aggregates.",
+    "BRIN selectivity depends on physical correlation; backfills can degrade it.",
+    "Restore needs compatible PostgreSQL and extension binaries/catalogs, not only pg_dump."
+  ],
+  "comparisons": [
+    {
+      "a": "Hypertable",
+      "b": "Plain PostgreSQL table",
+      "difference": "Chunk lifecycle and extension features versus simpler operations and fewer dependencies."
+    },
+    {
+      "a": "TimescaleDB",
+      "b": "Columnar warehouse",
+      "difference": "PostgreSQL transactional integration versus broad analytical scans and columnar execution."
+    },
+    {
+      "a": "B-tree",
+      "b": "BRIN",
+      "difference": "Exact ordered selective index versus lossy block summaries requiring correlation."
+    },
+    {
+      "a": "time_bucket",
+      "b": "time_bucket_gapfill",
+      "difference": "Groups existing rows versus generating missing buckets over a bounded range."
+    },
+    {
+      "a": "LOCF",
+      "b": "interpolate",
+      "difference": "Carries prior value versus estimating between observations; different assumptions."
+    },
+    {
+      "a": "pg_dump",
+      "b": "physical backup + WAL",
+      "difference": "Logical selective portability versus cluster PITR and point-in-time replay."
+    },
+    {
+      "a": "DELETE old rows",
+      "b": "Drop expired chunk",
+      "difference": "Row-level WAL and vacuum versus whole-chunk removal with coarse bounds."
+    }
+  ],
+  "commands": [
+    {
+      "label": "Check installed extension version",
+      "code": "SELECT extversion FROM pg_extension WHERE extname = 'timescaledb';"
+    },
+    {
+      "label": "Create hypertable (classic API)",
+      "code": "SELECT create_hypertable('sensor_readings', by_range('time'));"
+    },
+    {
+      "label": "Inspect time-bounded plan",
+      "code": "EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM sensor_readings WHERE time >= $1 AND time < $2;"
+    },
+    {
+      "label": "Classic compression policy example",
+      "code": "SELECT add_compression_policy('sensor_readings', INTERVAL '7 days'); -- verify version/API"
+    },
+    {
+      "label": "Classic retention policy example",
+      "code": "SELECT add_retention_policy('sensor_readings', INTERVAL '90 days'); -- inspect chunks first"
+    },
+    {
+      "label": "Create five-minute aggregate",
+      "code": "CREATE MATERIALIZED VIEW readings_5m WITH (timescaledb.continuous) AS SELECT time_bucket(INTERVAL '5 minutes', time) AS bucket, device_id, count(*) FROM sensor_readings GROUP BY bucket, device_id WITH NO DATA;"
+    },
+    {
+      "label": "Classic aggregate refresh policy",
+      "code": "SELECT add_continuous_aggregate_policy('readings_5m', start_offset => INTERVAL '30 days', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '15 minutes');"
+    },
+    {
+      "label": "Bulk ingestion",
+      "code": "COPY sensor_readings (time, device_id, temperature) FROM STDIN WITH (FORMAT csv);"
+    }
+  ]
+}

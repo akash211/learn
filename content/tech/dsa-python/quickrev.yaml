@@ -1,0 +1,155 @@
+{
+  "concepts": [
+    {
+      "title": "Expected hash lookup",
+      "detail": "Dict/set lookup is expected O(1); hashing a string costs with its length and worst-case collisions can degrade performance."
+    },
+    {
+      "title": "Amortized list append",
+      "detail": "Occasional resizing costs O(n), but a sequence of appends is amortized O(1) each."
+    },
+    {
+      "title": "Half-open intervals",
+      "detail": "For [l,r), length is r-l and prefix sums give sum = prefix[r]-prefix[l]."
+    },
+    {
+      "title": "Prefix-sum frequency",
+      "detail": "Count earlier prefix values p-k to count subarrays ending now with sum k; seed frequency[0]=1."
+    },
+    {
+      "title": "Window invariant",
+      "detail": "Update the entering item, restore validity, then update the answer; each boundary should move monotonically."
+    },
+    {
+      "title": "Monotonic stack",
+      "detail": "Each index is pushed and popped at most once, yielding O(n) total work for next-greater patterns."
+    },
+    {
+      "title": "Deque for FIFO",
+      "detail": "collections.deque popleft is O(1); list.pop(0) shifts remaining references."
+    },
+    {
+      "title": "Tree recursion space",
+      "detail": "Recursive tree routines use O(h) call frames; a skewed tree has h=O(n)."
+    },
+    {
+      "title": "BFS shortest paths",
+      "detail": "BFS first discovers a shortest path in an unweighted graph when vertices are marked on enqueue."
+    },
+    {
+      "title": "Graph traversal bound",
+      "detail": "Adjacency-list DFS/BFS is O(V+E), including disconnected vertices only if all components are started."
+    },
+    {
+      "title": "Topological cycle test",
+      "detail": "Kahn emits fewer than V vertices exactly when a directed cycle remains."
+    },
+    {
+      "title": "Union-find",
+      "detail": "Path compression plus union by size gives amortized O(alpha(V)) operations for connectivity."
+    },
+    {
+      "title": "Heap order",
+      "detail": "A heap exposes its root minimum; it is not globally sorted. Push/pop O(log n), heapify O(n)."
+    },
+    {
+      "title": "DP state definition",
+      "detail": "Define what dp[i] or dp[i][j] means before stating base cases and transitions."
+    },
+    {
+      "title": "Backtracking copy",
+      "detail": "Append path.copy() to results; retaining the mutable path aliases future changes."
+    },
+    {
+      "title": "Binary-search boundary",
+      "detail": "Maintain a monotone false/true predicate boundary and ensure every branch strictly shrinks the interval."
+    }
+  ],
+  "traps": [
+    "A nested while loop is automatically O(n^2); monotone pointers may total O(n).",
+    "Hash-table lookup is guaranteed worst-case O(1).",
+    "A heap contains every item in sorted order.",
+    "Sliding-window sum shrinking works with negative numbers.",
+    "Mark graph vertices visited only when dequeued.",
+    "Slicing and string concatenation are always constant time."
+  ],
+  "advanced": [
+    "Use lazy stale-entry checks when a heap lacks decrease-key; version entries for updates.",
+    "Binary search on answer requires a monotone feasibility predicate.",
+    "Exactly-k sliding-window counts can be atMost(k)-atMost(k-1).",
+    "A rolling DP row is safe only if all overwritten dependencies are preserved.",
+    "A bounded local top-k can be merged by taking top-k of the union of local top-k sets.",
+    "Python recursion has no tail-call optimization; iterative traversal avoids depth limits."
+  ],
+  "comparisons": [
+    {
+      "a": "BFS",
+      "b": "DFS",
+      "difference": "BFS finds shortest unweighted paths by layers; DFS is convenient for reachability and structure."
+    },
+    {
+      "a": "heap",
+      "b": "sorted list",
+      "difference": "Heap supports repeated best extraction in O(log n); sorted output requires sorting and arbitrary insertion shifts."
+    },
+    {
+      "a": "hash map",
+      "b": "sorting",
+      "difference": "Hashing gives expected linear one-shot counting; sorting costs O(n log n) but provides order and deterministic grouping."
+    },
+    {
+      "a": "sliding window",
+      "b": "prefix sums",
+      "difference": "Windows need a monotone boundary condition; prefix sums/maps support negative values and exact-sum queries."
+    },
+    {
+      "a": "memoization",
+      "b": "tabulation",
+      "difference": "Top-down caching follows reached states but adds recursion; bottom-up controls order and avoids call-stack depth."
+    },
+    {
+      "a": "adjacency list",
+      "b": "adjacency matrix",
+      "difference": "List uses O(V+E) and suits sparse traversal; matrix uses O(V^2) but tests edge existence in O(1)."
+    },
+    {
+      "a": "union-find",
+      "b": "BFS/DFS",
+      "difference": "DSU efficiently handles incremental undirected connectivity; traversal supports paths and directed reachability."
+    }
+  ],
+  "commands": [
+    {
+      "label": "Run module validator",
+      "code": "cd /home/ubuntu/projects/learn && .venv/bin/python -m backend.app.content"
+    },
+    {
+      "label": "Run focused tests",
+      "code": "pytest -q backend/tests"
+    },
+    {
+      "label": "Compile a solution file",
+      "code": "python -m py_compile solution.py"
+    },
+    {
+      "label": "Interactive Python",
+      "code": "python -i solution.py"
+    },
+    {
+      "label": "Trace execution",
+      "code": "python -m trace --trace solution.py"
+    },
+    {
+      "label": "Run with a sample input",
+      "code": "python solution.py < input.txt"
+    },
+    {
+      "label": "Count complexity with a profiler",
+      "code": "python -m cProfile -s cumulative solution.py"
+    },
+    {
+      "label": "Inspect standard-library docs",
+      "code": "python -c \"import collections, heapq, bisect; print(collections.__name__, heapq.__name__, bisect.__name__)\""
+    }
+  ]
+}

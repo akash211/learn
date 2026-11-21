@@ -1,0 +1,478 @@
+- id: tf-basic-001
+  topic: hcl and graph
+  difficulty: beginner
+  question: How does Terraform decide the order in which resources are created?
+  answer: |
+    Terraform parses the configuration and builds a dependency graph. References such as
+    `aws_subnet.private.vpc_id = aws_vpc.main.id` create an edge from the subnet to the VPC,
+    so the VPC must exist first. Terraform can create independent graph nodes in parallel;
+    source-file order does not determine operation order. Dependencies are generally reversed
+    during destruction so dependent resources are removed before their prerequisites.
+
+    Use `depends_on` only when a real dependency exists but no value reference can express it.
+    Broad explicit dependencies reduce parallelism and make plans harder to understand. Cycles
+    are invalid and should be redesigned rather than hidden. `terraform graph` can help inspect
+    an unexpectedly ordered configuration, though large graphs contain substantial detail.
+    During review, confirm the inferred relationships match the operational requirements; a
+    dependency edge controls ordering, not transactional success or service readiness.
+  tags: [hcl, dependency-graph, resources]
+
+- id: tf-basic-002
+  topic: resources and data sources
+  difficulty: beginner
+  question: What is the difference between a resource and a data source?
+  answer: |
+    A resource represents an object Terraform manages through a provider. Terraform can create,
+    update, replace or destroy it according to configuration and state. A data source reads or
+    discovers an object managed elsewhere, such as an image ID, DNS zone, or existing network.
+    Reading a data source does not normally make Terraform responsible for that object's
+    lifecycle. A resource address is tracked in state; data-source results are evaluated as
+    inputs to the configuration and may be refreshed during planning.
+
+    Choose the block according to ownership, not whether the object already exists today. If
+    Terraform should own and change the object, declare a resource and import it if necessary.
+    If another team or system owns it, use a data source or an explicit module input. Avoid
+    having two states manage the same remote object: their plans can fight, and one may delete
+    an object the other expects to own. A data lookup is also not a substitute for a stable
+    interface when passing values between modules.
+  tags: [resource, data-source, ownership]
+
+- id: tf-basic-003
+  topic: terraform workflow
+  difficulty: beginner
+  question: What does terraform init do, and when should it be run?
+  answer: |
+    `terraform init` prepares a working directory. It configures or reconnects to the backend,
+    installs providers that satisfy `required_providers`, downloads referenced modules, and
+    records provider selections and checksums in `.terraform.lock.hcl`. Run it when first using
+    a configuration, after adding or changing provider or module requirements, and when backend
+    settings change. In CI, run it explicitly before validation and planning.
+
+    Initialization is not an apply: it should not create the declared infrastructure. Backend
+    changes need care. `terraform init -migrate-state` attempts to copy existing state into the
+    new backend; `terraform init -reconfigure` accepts new backend settings without migrating
+    the prior state. Choose according to the actual intent and verify the state location. Commit
+    the lock file for root configurations, but not the generated `.terraform/` directory. Avoid
+    `-upgrade` in ordinary CI because it reevaluates provider selections; use it for a reviewed
+    dependency update and commit the resulting lock-file change.
+  tags: [init, backend, providers]
+
+- id: tf-basic-004
+  topic: state
+  difficulty: beginner
+  question: What is Terraform state, and why does Terraform need it?
+  answer: |
+    State records the association between configuration addresses and real remote objects, along
+    with attributes Terraform uses to plan future actions. For example, it maps
+    `aws_vpc.main` to a particular VPC ID. A resource declaration describes desired settings,
+    but without state Terraform cannot reliably know which existing object that address owns.
+    During planning, Terraform refreshes remote observations and compares them with configuration
+    and state to propose changes.
+
+    State is not just a disposable cache. Losing it does not remove infrastructure, but can make
+    Terraform propose duplicate resources or lose its ownership map. State can also contain
+    credentials and sensitive values returned by providers. Teams should use a protected remote
+    backend with locking, restricted access, encryption, and recovery/versioning. Never commit
+    `terraform.tfstate` or backups to source control. If state is lost or inconsistent, stop
+    concurrent runs, recover a known snapshot or import resources carefully, and inspect a full
+    plan before applying anything.
+  tags: [state, mapping, security]
+
+- id: tf-basic-005
+  topic: state backends
+  difficulty: beginner
+  question: Why use a remote backend with state locking?
+  answer: |
+    A remote backend gives a team a shared authoritative state location instead of letting each
+    developer maintain a separate local snapshot. It can centralize access controls, encryption,
+    backups or versioning, and locking. Locking prevents simultaneous Terraform writers from
+    reading the same old state and overwriting each other's updates. Backend choice should match
+    the organization's durability, identity, audit and recovery requirements.
+
+    Remote storage is not automatically secure: state may contain secrets, so restrict reads as
+    well as writes and audit access. Locking does not prevent console changes or another tool
+    from changing cloud resources, and a lock should never be forcibly removed until its owner
+    is confirmed inactive. Backend configuration is initialized separately from ordinary input
+    variables. When it changes, distinguish `terraform init -migrate-state` (move state) from
+    `-reconfigure` (use new settings without moving the old snapshot). Test restoration and
+    concurrent-run behavior, not merely successful initial setup.
+  tags: [backend, locking, collaboration]
+
+- id: tf-basic-006
+  topic: workspaces and environments
+  difficulty: intermediate
+  question: When are CLI workspaces appropriate, and when are separate directories safer?
+  answer: |
+    CLI workspaces provide multiple state instances for one configuration and backend. They can
+    be convenient when environments are genuinely the same shape, use the same access model,
+    and differ mainly by values. Commands such as `terraform workspace select staging` change
+    which state is active, so automation should verify the selected workspace before planning.
+
+    Workspaces do not create separate accounts, credentials, approval policies, or access
+    boundaries. A workspace named `prod` is not protection against a development operator using
+    production credentials. Separate root directories with separate backend keys are usually
+    clearer when environments have different ownership, topology, providers, release schedules,
+    or approvals. Thin environment roots can call shared modules to avoid copying the entire
+    implementation. The choice should make the target and blast radius obvious. A safe design
+    combines separate permissions and CI gates with explicit values; no naming convention alone
+    prevents a mistaken apply.
+  tags: [workspace, environment, isolation]
+
+- id: tf-basic-007
+  topic: variables and types
+  difficulty: beginner
+  question: Why should Terraform input variables have explicit types?
+  answer: |
+    Explicit types describe a module's contract and catch invalid inputs before provider calls.
+    A `string`, `number`, `list(string)`, `map(object({...}))` or another constraint tells both
+    Terraform and the caller what shape is expected. Descriptions explain purpose; defaults make
+    an input optional, while a variable with no default is required. A known structured type is
+    usually better than `any`, which defers errors and hides the interface.
+
+    Add variable validation for stable business invariants, such as supported environment names
+    or a positive size, and provide a useful error message. Avoid duplicating provider schemas
+    in ways that reject valid future values. Critical environment choices often should not have
+    a convenient default that silently targets the wrong system. Values can be supplied through
+    variable files, command-line flags, or `TF_VAR_` environment variables; CI should make the
+    chosen source explicit. Keep secret values out of committed tfvars files and protect the
+    state and plan where those values may persist.
+  tags: [variables, types, validation]
+
+- id: tf-basic-008
+  topic: locals and outputs
+  difficulty: beginner
+  question: What roles do locals and outputs play in a Terraform module?
+  answer: |
+    Locals name derived expressions inside a module, such as a standardized resource name or a
+    merged tag map. They are not inputs and do not create resources. Outputs expose selected
+    results to a parent module, a human using the root, or a later controlled workflow. A child
+    output such as `module.network.private_subnet_ids` becomes part of the child module's public
+    interface and can create dependency edges when consumed elsewhere.
+
+    Use locals to avoid repeating straightforward expressions, but do not hide important
+    environment decisions in complex transformations. Outputs should be stable and minimal;
+    exposing every provider attribute couples callers to implementation details. Mark a secret
+    output `sensitive = true` to redact common CLI display, but remember the value can remain in
+    state. Outputs are not a secret manager or a secure cross-environment transport. Document
+    their meaning and preserve useful types, and prefer passing an explicit output into another
+    module rather than relying on hidden lookup conventions.
+  tags: [locals, outputs, modules]
+
+- id: tf-basic-009
+  topic: modules
+  difficulty: beginner
+  question: What makes a Terraform module reusable and maintainable?
+  answer: |
+    A reusable module has a focused responsibility, a clear set of typed inputs, and a small
+    stable output interface. It groups resources that share ownership or lifecycle, documents
+    meaningful choices, and avoids hidden side effects. A root module composes child modules and
+    supplies environment-specific values, so a reviewer can see how network, service and data
+    layers connect. Pass IDs and settings through outputs and inputs rather than having modules
+    discover one another through implicit naming conventions.
+
+    Reuse is not measured by the number of resources hidden behind a module. A giant module with
+    dozens of booleans for unrelated architectures is difficult to reason about; a module for
+    every trivial resource adds indirection. Test common configurations and invalid inputs, pin
+    remote module sources to explicit versions or immutable Git refs, and document destructive
+    behavior. Extracting existing resources changes their Terraform addresses, so add `moved`
+    blocks or carefully migrate state and verify the plan to avoid accidental replacement.
+  tags: [modules, interfaces, composition]
+
+- id: tf-basic-010
+  topic: providers and versions
+  difficulty: beginner
+  question: What is the purpose of .terraform.lock.hcl?
+  answer: |
+    `.terraform.lock.hcl` records selected provider versions and package checksums for a root
+    configuration. Version constraints in `required_providers` define which releases are
+    permitted; the lock file records the specific selection made during initialization. Commit
+    the lock file so developers and CI use consistent provider packages. Checksums help verify
+    that installed packages match the expected distribution.
+
+    The lock file is not a lock on every module's source code, and it does not guarantee a
+    provider release is safe or bug-free. Review provider changelogs and plans when updating.
+    `terraform init -upgrade` intentionally reevaluates selections within the configured
+    constraints and can update the lock file; run it as a deliberate dependency change. Use
+    `terraform providers lock -platform=...` to prepare checksums for additional execution
+    platforms where needed. Do not commit `.terraform/`, which contains generated downloads,
+    and do not omit the lock file in a team root simply because constraints seem precise.
+  tags: [providers, lock-file, reproducibility]
+
+- id: tf-basic-011
+  topic: planning and applying
+  difficulty: beginner
+  question: What is the difference between terraform plan and terraform apply?
+  answer: |
+    `terraform plan` calculates and displays proposed actions by comparing configuration, state
+    and provider observations. It does not normally execute the planned resource changes. It is
+    the review point for creates, in-place updates, replacements and destroys. `terraform apply`
+    executes a plan, performing provider API operations and updating state as operations
+    complete. Applies can partially succeed before an error, so failure does not imply no change.
+
+    For controlled workflows, create a saved plan with `terraform plan -out=tfplan`, inspect it
+    with `terraform show tfplan`, then apply that exact artifact using `terraform apply tfplan`.
+    Protect the artifact because it may contain sensitive values. A saved plan can become stale
+    if state or configuration assumptions change, and Terraform may reject it. CI should bind
+    the plan to the reviewed commit, backend, root and environment. Never review one plan and
+    apply a newly generated, different plan without a new approval.
+  tags: [plan, apply, review]
+
+- id: tf-basic-012
+  topic: drift
+  difficulty: intermediate
+  question: What is infrastructure drift, and how should a team handle it?
+  answer: |
+    Drift is a difference between Terraform's declared configuration and the remote object's
+    observed settings, often caused by a console edit, another automation system, or provider
+    normalization. A normal plan refreshes remote observations and shows proposed actions. If
+    the configuration still says the old value, Terraform may propose reverting the external
+    change. First determine whether the change was intentional and whether Terraform is the
+    authoritative owner of that field.
+
+    If the external change should remain, update configuration to match it and reconcile state
+    through a reviewed plan. `terraform plan -refresh-only` can propose state updates based on
+    current observations without proposing infrastructure changes, but it does not update HCL;
+    follow it with a configuration change. If the change was unauthorized, review the plan to
+    restore the declared value and consider access-control improvements. Scheduled plans can
+    detect drift, but Terraform is not a continuous watcher. Do not auto-apply every drift
+    finding without assessing operational intent and risk.
+  tags: [drift, refresh, ownership]
+
+- id: tf-basic-013
+  topic: imports
+  difficulty: intermediate
+  question: How do you bring an existing cloud object under Terraform management?
+  answer: |
+    Establish ownership first: confirm that no other Terraform state or tool manages the object.
+    Write a resource block at the intended address, then use an `import` block with the provider's
+    documented import ID format, or use `terraform import ADDRESS ID` in an older workflow. For
+    example, an import block maps an existing bucket ID to `aws_s3_bucket.logs`. Run a plan to
+    inspect the import and any follow-on changes.
+
+    Import only creates the state association; it does not create the remote resource or
+    automatically produce a perfect configuration. You may need to inspect attributes and align
+    HCL with actual settings. Generated configuration can help start, but should be cleaned up
+    and reviewed. Two states managing one object can issue conflicting changes or deletion, so
+    ownership must be unique. Back up state before state-changing work, use a lock, and check the
+    final plan for unwanted replacement. Treat import IDs and lifecycle semantics as provider-
+    specific rather than assuming all resources use names or ARNs in the same way.
+  tags: [import, state, adoption]
+
+- id: tf-basic-014
+  topic: count
+  difficulty: beginner
+  question: When is count a good repetition mechanism?
+  answer: |
+    `count` is a good fit when instances are genuinely interchangeable and their numeric index
+    is an acceptable identity, such as a fixed number of identical workers. It creates addresses
+    like `aws_instance.worker[0]` and `aws_instance.worker[1]`, and `count.index` can distinguish
+    them. It can also implement a simple optional singleton with `count = condition ? 1 : 0`,
+    although consumers must handle a zero-or-one collection.
+
+    The risk is index shifting. If a list drives count and an item is inserted or removed in the
+    middle, later indexes may now refer to different logical objects, causing replacement or
+    unexpected diffs. For independently named objects such as buckets, users, subnets or
+    environments, `for_each` with stable keys is usually safer. Choose based on identity, not
+    brevity. If migrating from count to keyed instances, use `moved` blocks or a controlled state
+    move and inspect the plan so Terraform does not destroy and recreate valuable resources.
+  tags: [count, repetition, state-address]
+
+- id: tf-basic-015
+  topic: for_each
+  difficulty: beginner
+  question: Why is for_each often preferable to count for named resources?
+  answer: |
+    `for_each` identifies instances by map keys or set members, yielding addresses such as
+    `aws_s3_bucket.data["analytics"]`. Adding or removing a key affects that named instance,
+    rather than shifting numeric indexes. A map also carries per-instance configuration, so a
+    bucket can have a versioning flag or subnet a CIDR associated with its stable key. This makes
+    plans easier to relate to business objects.
+
+    Keys must be known during planning and should be stable, non-secret identifiers. A key based
+    on a computed resource ID may not be available until apply; a secret key can leak through
+    addresses and logs. Sets discard ordering and duplicates, so they are appropriate only when
+    order does not matter. Changing a key changes state identity and may look like destroy plus
+    create; add a `moved` block for a rename and verify the plan. Use `count` when numeric identity
+    genuinely matches the domain rather than selecting `for_each` automatically in every case.
+  tags: [for-each, map, identity]
+
+- id: tf-basic-016
+  topic: dynamic blocks
+  difficulty: intermediate
+  question: What does a dynamic block do, and when should it be avoided?
+  answer: |
+    A `dynamic` block generates repeated nested blocks inside a resource or data-source block
+    from a collection. Its label must be a nested block type accepted by the provider schema;
+    its `for_each` selects the items, and its `content` defines each generated block's arguments.
+    An iterator name defaults to the block label, or can be set explicitly for clarity. For
+    example, it can generate repeated ingress rules in a security-group resource.
+
+    It does not create independent Terraform resources and cannot bypass provider validation.
+    Use it when the provider schema requires repeated nested blocks and the repetition makes the
+    module interface clearer. Avoid deeply nested dynamics and conditional trickery: the
+    effective configuration becomes hard to review and debug. If the provider accepts a normal
+    list or map argument, that is often simpler. Type the input carefully, keep examples
+    realistic, and test the generated configuration. A dynamic construct should reduce repetition
+    without hiding what security or network rules are actually being produced.
+  tags: [dynamic-block, nested-blocks, hcl]
+
+- id: tf-basic-017
+  topic: sensitive values
+  difficulty: beginner
+  question: Does marking a Terraform value sensitive keep it out of state?
+  answer: |
+    No. `sensitive = true` primarily marks a value for redaction in common CLI output, reducing
+    accidental display in plans and applies. Terraform and the provider still use the value, and
+    it may be stored in state or a saved plan. Users who can read those artifacts may recover it.
+    Sensitivity can propagate through expressions, and outputs containing secrets should also be
+    marked sensitive.
+
+    Protect state with restricted backend access, encryption, audit and recovery controls; protect
+    plan artifacts and logs as well. Prefer short-lived provider identity and have applications
+    retrieve runtime secrets from a managed secret store rather than passing secret values through
+    Terraform. Avoid putting secrets in resource names, tags or `for_each` keys, which may be
+    visible even when a separate attribute is sensitive. Some Terraform and provider versions
+    support ephemeral values or write-only arguments, but verify exact support before relying on
+    reduced persistence. If a secret leaks, rotate it; hiding or deleting one log is not sufficient.
+  tags: [sensitive, state, secrets]
+
+- id: tf-basic-018
+  topic: version constraints
+  difficulty: intermediate
+  question: How do provider version constraints differ from a locked provider selection?
+  answer: |
+    A provider constraint in `required_providers` defines a range that is acceptable, such as
+    `version = "~> 5.0"`. Terraform must find a selection satisfying constraints from all modules.
+    The lock file records the concrete provider version chosen during initialization, along with
+    checksums for package verification. Constraints communicate compatibility; the lock file
+    gives a root repeatable installation for a particular selected release.
+
+    Commit `.terraform.lock.hcl` so CI and developers use the same provider selection. Run
+    `terraform init -upgrade` intentionally to reconsider versions within the allowed range, then
+    review release notes, plans and changed lock entries. A pin prevents surprise upgrades but
+    can freeze bugs, so schedule updates. Note that `~> 5.0` and `~> 5.2.0` allow different
+    ranges. Provider locking does not lock remote module source content in the same manner, so
+    pin module versions or Git refs separately. Pin the Terraform CLI version too; provider
+    compatibility does not guarantee the CLI itself is fixed.
+  tags: [versions, constraints, lock-file]
+
+- id: tf-basic-019
+  topic: aliases and providers
+  difficulty: intermediate
+  question: How do provider aliases help, and how are they passed to child modules?
+  answer: |
+    A provider alias creates an additional configuration for the same provider, often targeting
+    another account, region, or endpoint. A resource can select it with `provider = aws.dr`,
+    making the target context visible. This is useful for multi-region deployments or a central
+    account with a recovery-region resource. Credentials should still come from identity chains
+    or environment mechanisms, not hard-coded keys in HCL.
+
+    Child modules normally inherit the root's default provider configuration. A non-default
+    alias must be passed explicitly in the module block's `providers` map, and the child must
+    declare the provider requirement. Otherwise, a module may try to use an unintended default
+    context or fail initialization. Keep account and region choices in the root and review them
+    alongside the plan. Use distinct environment identities and least privilege so a staging
+    pipeline cannot accidentally apply with production authority. Provider aliases clarify API
+    routing; they do not by themselves create security isolation or separate state.
+  tags: [providers, alias, module]
+
+- id: tf-basic-020
+  topic: replacement and lifecycle
+  difficulty: intermediate
+  question: What does a resource replacement in a Terraform plan mean?
+  answer: |
+    A replacement means the provider schema or configured values require Terraform to destroy
+    and recreate a remote object rather than update it in place. Plans show this through delete
+    and create actions, often with symbols indicating whether the old object is removed before or
+    after the new one is created. Either order can matter: create-before-destroy may reduce
+    downtime but can fail if names must be unique or quotas prevent overlap.
+
+    Inspect which argument forces replacement, whether the resource stores data, and what depends
+    on its ID. Check the target state and environment before approving. Lifecycle settings such as
+    `create_before_destroy` or `prevent_destroy` alter behavior but do not make an unsafe change
+    automatically safe; they may create conflicts or block legitimate operations. Review backups,
+    migration and rollback options for databases or persistent resources. Terraform apply is not
+    transactional, so a replacement can partially fail. A plan's concise diff should lead to an
+    operational impact assessment, not just a syntax review.
+  tags: [replacement, lifecycle, plan]
+
+- id: tf-basic-021
+  topic: state commands
+  difficulty: intermediate
+  question: What is the difference between terraform state mv and state rm?
+  answer: |
+    `terraform state mv SOURCE DESTINATION` changes an address mapping in state while keeping
+    the remote object associated. It is used for a resource rename or module refactor when the
+    object still has the same owner. A declarative `moved` block can express such an address
+    migration in configuration and is easier to review and repeat across team workflows.
+
+    `terraform state rm ADDRESS` removes Terraform's state association but does not destroy the
+    remote object. It is appropriate only when intentionally handing off ownership or preparing
+    a separate import; otherwise the next plan may try to create a duplicate. Both are state
+    surgery and should be performed with a state backup, a lock, no concurrent applies and a
+    follow-up full plan. Verify the exact address and object ID first. Never confuse removing an
+    object from state with deleting it from the cloud API. If the mapping is accidentally removed,
+    re-import or restore carefully rather than applying a plan that creates duplicates.
+  tags: [state, mv, rm]
+
+- id: tf-basic-022
+  topic: validation and tests
+  difficulty: beginner
+  question: What can terraform validate prove, and what can it not prove?
+  answer: |
+    `terraform validate` checks whether initialized configuration is syntactically valid and
+    internally consistent, including many type and argument errors. It can catch malformed HCL,
+    invalid references, or arguments that do not match the provider schema. It is a valuable fast
+    check, often run after `terraform fmt -check` and initialization in CI.
+
+    It does not prove that credentials work, a resource can be created in the target account,
+    quotas are available, a plan is safe, or the desired service behavior is correct. It also
+    does not detect every security or organizational policy violation. Use `terraform plan` to
+    inspect provider-resolved changes, policy-as-code to enforce guardrails, tests for module
+    behavior and controlled integration tests for real API behavior. Protect plan artifacts
+    because they may contain sensitive values. Even a successful plan cannot guarantee a later
+    apply will succeed if external state changes or APIs fail. Validation is one layer of a
+    testing strategy, not a production approval by itself.
+  tags: [validate, testing, ci]
+
+- id: tf-basic-023
+  topic: imports and state ownership
+  difficulty: intermediate
+  question: Does terraform import create or modify the imported remote object?
+  answer: |
+    Import primarily associates an already-existing remote object with a Terraform resource
+    address in state; it is not a resource creation operation. The import ID format depends on
+    the provider and resource type. You must have a matching resource declaration and should run
+    a plan afterward to see whether Terraform proposes changes to align the object with HCL.
+    Declarative `import` blocks make the mapping visible in configuration and can fit reviewable
+    automation.
+
+    Import does not guarantee the configuration captures every setting or that the remote object
+    is safe to change. Review provider docs, inspect actual attributes and update HCL carefully.
+    Confirm no other state already manages the object, since duplicate ownership can cause
+    conflicting updates or deletion. Back up state and lock it before imperative state changes.
+    If the goal is only to stop managing an object, `state rm` forgets it without deleting it;
+    an import has the opposite ownership purpose. Do not assume import is a complete migration
+    strategy for dependencies or access policies around the object.
+  tags: [import, ownership, plan]
+
+- id: tf-basic-024
+  topic: state boundaries
+  difficulty: intermediate
+  question: How should a team choose what belongs in one Terraform state?
+  answer: |
+    State boundaries should follow ownership, lifecycle, change frequency, access needs and blast
+    radius. Resources that must be changed together and share operators can fit in one state.
+    Separating a network foundation from an application database may reduce contention, let
+    different teams control access, and limit the effect of a mistaken plan. Smaller states are
+    easier to review, but splitting every resource creates cross-state dependencies and extra
+    coordination.
+
+    Decide how consumers obtain shared values: explicit pipeline inputs, a published interface,
+    or remote-state reads with tightly limited access. Remote state can expose more information
+    than the consumer needs, including sensitive values, so it should not be a general service
+    discovery bus. Use separate roots and backend keys for environments with different approval
+    or credential boundaries. Make the state owner and recovery procedure clear. The goal is a
+    comprehensible failure domain, not the maximum possible number of state files or a single
+    state containing the entire organization.
+  tags: [state, architecture, blast-radius]

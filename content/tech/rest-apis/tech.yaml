@@ -1,0 +1,102 @@
+slug: rest-apis
+title: REST APIs
+category: version-control-apis
+summary: Design HTTP APIs with resource-oriented URIs, reliable contracts, clear security boundaries, and production-safe behavior.
+level: core
+relations:
+  - to: fastapi
+    type: uses
+    note: FastAPI exposes HTTP resources and contracts; HTTP semantics and API design remain framework-independent.
+  - to: python
+    type: uses
+    note: Python services commonly implement API validation, serialization, clients, and asynchronous request handling.
+  - to: cicd
+    type: complements
+    note: Contract checks and compatibility tests in CI help keep published API behavior stable across deployments.
+intro:
+  what: |
+    A REST API is a network interface that exposes resources through representations and a uniform set of HTTP semantics. In practical systems, an API is more than a collection of JSON routes: methods describe intent, status codes communicate outcomes, headers control caching and concurrency, and resource identifiers provide stable links to domain concepts. REST is an architectural style, while HTTP is a protocol with standardized behavior; well-designed APIs use HTTP's built-in semantics rather than inventing replacements for every endpoint.
+
+    This module focuses on the design decisions that make APIs predictable for clients and safe to evolve. It covers URI and resource modelling, versioning, pagination, caching, security, errors, retries, contracts, and operational boundaries. Examples use JSON and familiar HTTP messages, but the principles apply across languages and frameworks.
+  why: |
+    APIs become dependencies. A mobile application, partner integration, browser client, or background job may outlive the team that created a service. Clear semantics reduce client-specific workarounds, let intermediaries cache or retry safely, and make behavior testable before deployment. Ambiguous contracts create duplicated business logic, accidental data loss, security gaps, and breaking changes that are expensive to coordinate.
+
+    Good API design is therefore a reliability and product concern, not a naming exercise. It makes expected behavior discoverable, constrains unsafe operations, and gives operators enough evidence to diagnose failures without exposing sensitive internals.
+  problems:
+    - Provide a stable interface between independently deployed clients and services.
+    - Represent domain resources and their relationships with discoverable identifiers.
+    - Communicate success, validation failure, conflicts, and temporary faults consistently.
+    - Make retries, caching, concurrency, and rate control safe and explicit.
+    - Evolve schemas and behavior while preserving existing client integrations.
+  where_used:
+    - Public and partner-facing services consumed by browsers, mobile apps, and other companies.
+    - Internal service-to-service integrations and platform APIs.
+    - Backend-for-frontend layers that shape service data for a specific user experience.
+    - Webhooks, control planes, and administrative interfaces built on HTTP.
+    - Testable contracts that run in CI alongside implementation and client checks.
+  ecosystem: |
+    REST APIs sit on top of HTTP and URI standards, with JSON often used as a representation format. OpenAPI can describe paths, operations, schemas, and security requirements; it does not itself guarantee that implementation behavior matches the description. Frameworks such as FastAPI and Django provide routing and validation, while gateways and reverse proxies may handle transport-level policies. OAuth 2.0 is an authorization framework, JWT is a token format, and TLS protects data in transit; these are related but distinct concerns. CI/CD complements API design by checking schema changes, compatibility, and generated clients before release.
+  alternatives:
+    - name: GraphQL
+      note: Useful when clients need flexible graph-shaped queries and a shared schema, with different caching and authorization trade-offs.
+    - name: gRPC
+      note: A strongly described RPC protocol suited to controlled service-to-service environments and efficient typed messaging.
+    - name: WebSockets
+      note: Suited to persistent bidirectional communication rather than ordinary request-response resource access.
+  related: [fastapi, python, cicd, system-design]
+chapters:
+  - id: http-semantics
+    title: "HTTP Semantics: Methods, Status Codes, and Idempotency"
+    file: chapters/01-http-semantics.md
+    minutes: 12
+    level: core
+  - id: resource-modelling-uri-design
+    title: Resource Modelling and URI Design
+    file: chapters/02-resource-modelling-uri-design.md
+    minutes: 12
+    level: core
+  - id: versioning-strategies
+    title: API Versioning Strategies
+    file: chapters/03-versioning-strategies.md
+    minutes: 11
+    level: core
+  - id: pagination-filtering-sorting
+    title: "Pagination, Filtering, and Sorting"
+    file: chapters/04-pagination-filtering-sorting.md
+    minutes: 12
+    level: core
+  - id: caching
+    title: HTTP Caching and Conditional Requests
+    file: chapters/05-caching.md
+    minutes: 13
+    level: advanced
+  - id: authn-authz
+    title: Authentication and Authorization
+    file: chapters/06-authentication-authorization.md
+    minutes: 14
+    level: advanced
+  - id: error-contracts
+    title: Error Contracts and Problem Details
+    file: chapters/07-error-contracts.md
+    minutes: 11
+    level: core
+  - id: rate-limiting-retries
+    title: "Rate Limiting, Retries, and Idempotency Keys"
+    file: chapters/08-rate-limiting-retries.md
+    minutes: 13
+    level: advanced
+  - id: api-contracts
+    title: "OpenAPI Contracts, Validation, and Compatibility"
+    file: chapters/09-api-contracts.md
+    minutes: 13
+    level: advanced
+  - id: production-concerns
+    title: "Production Concerns: Resilience and API Boundaries"
+    file: chapters/10-production-concerns.md
+    minutes: 14
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

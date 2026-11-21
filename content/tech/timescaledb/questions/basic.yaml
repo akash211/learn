@@ -1,0 +1,266 @@
+[
+  {
+    "id": "tsdb-basic-001",
+    "topic": "hypertables",
+    "difficulty": "beginner",
+    "question": "What is a hypertable, and how does it differ from a plain PostgreSQL table?",
+    "answer": "A hypertable is a TimescaleDB logical table whose rows are stored in physical chunks partitioned by time and optionally another dimension. Applications query the logical relation with ordinary SQL; the extension routes inserts and can prune chunks for bounded time predicates. Each chunk remains PostgreSQL storage with PostgreSQL transactions, WAL, indexes, and operational limits. A plain table is simpler and can be adequate; hypertables add value when time-oriented chunk lifecycle, compression, aggregates, or retention materially help.\n\nOperationally, check how migrations, catalog tooling, and schema changes interact with the logical relation; code that assumes one physical table can miss chunk-specific behavior. Keep application queries directed at the hypertable rather than hard-coding chunk names.\n\nA hypertable should therefore be selected for lifecycle and data-layout benefits, not merely because timestamps appear in a schema. Keep extension compatibility in deployment tests.",
+    "tags": [
+      "hypertables",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-002",
+    "topic": "chunking",
+    "difficulty": "beginner",
+    "question": "What does chunk pruning do, and which query shape helps it?",
+    "answer": "Chunk pruning excludes physical chunks whose time ranges cannot match a query. It reduces relations and rows PostgreSQL inspects for narrow windows over long history. Use a direct half-open predicate such as `time >= $start AND time < $end`. Wrapping the partition column in a function, omitting a bound, or using incompatible casts can weaken pruning. Pruning is separate from indexing: surviving chunks may still need scans. Verify actual plans and buffers with realistic parameters.\n\nTest a narrow recent interval, a range crossing a chunk boundary, and an unbounded query. Compare planned and actual chunk counts so a pruning regression is visible before it becomes a costly historical scan.\n\nUse the exact application predicate, including parameter types, because casts and function wrappers can change planner proofs. Check both planned chunks and actual loops.",
+    "tags": [
+      "chunking",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-003",
+    "topic": "chunk sizing",
+    "difficulty": "intermediate",
+    "question": "How would you choose an initial chunk interval?",
+    "answer": "Estimate bytes per second including heap and index overhead, then choose an interval yielding manageable chunk size and count. Consider active working set, query windows, retention precision, compression age, and the number of chunks across the retention horizon. Measure actual sizes after representative ingestion; average row width misses indexes, TOAST, and bloat. Small chunks multiply relation and policy overhead; huge chunks weaken granularity. Test adjacent choices under peak ingestion and largest expected queries, tracking size distribution and outliers.\n\nRevisit the estimate when row width, index set, or peak rate changes. Measure median and tail chunk sizes because one skewed tenant can create a hot chunk even when the system-wide average looks healthy.\n\nA useful starting target is a measured chunk size whose active indexes fit the practical cache budget, then validate it under concurrent ingestion and background jobs.",
+    "tags": [
+      "chunk-sizing",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-004",
+    "topic": "space dimensions",
+    "difficulty": "intermediate",
+    "question": "When is a space partitioning dimension useful, and what is its cost?",
+    "answer": "A space dimension can distribute data by a bounded key when time-only chunking leaves a concrete write or access bottleneck. It is not a recommendation to create a partition per tenant or device. If there are S space partitions and T time intervals, chunk count can approach S×T. Every chunk adds catalog, index, planning, lock, and maintenance overhead, while time-range queries may fan out across space partitions. Benchmark both paths and use the simpler one-dimensional design unless evidence justifies the extra cost.\n\nAccount for sparse combinations too: configured partition counts can create many relations across the time horizon even if not every key is active. Query fan-out and maintenance can dominate the intended distribution benefit.\n\nTreat the dimension count as a capacity decision and include empty or lightly populated combinations in catalog planning. Do not equate more partitions with more throughput.",
+    "tags": [
+      "space-dimensions",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-005",
+    "topic": "uniqueness",
+    "difficulty": "intermediate",
+    "question": "Why must a hypertable unique key account for partition columns?",
+    "answer": "Indexes are local to physical chunks, so enforcing uniqueness on a key that may appear in different chunks would require a global index or cross-chunk coordination. TimescaleDB therefore applies partition-key requirements to unique indexes and primary keys; exact rules depend on version and space dimensions. A key such as `(device_id, time, sequence_no)` can represent event identity. A generated globally unique ID does not imply that a local unique constraint on it is supported as a hypertable-wide guarantee. Make `ON CONFLICT` match a valid constraint.\n\nKeep the business identity explicit in schema and producer contracts. If table-wide uniqueness is required on a non-partition key, a separate lookup or deduplication design may be necessary; do not infer it from generated values.\n\nFor retry-safe ingestion, the database constraint must encode the same identity rule as the producer. Otherwise duplicate handling can vary across time boundaries.",
+    "tags": [
+      "uniqueness",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-006",
+    "topic": "compression",
+    "difficulty": "intermediate",
+    "question": "Why are segment-by and order-by choices important for compressed data?",
+    "answer": "Segmenting groups rows with the same chosen dimension, allowing queries filtering on it to isolate groups and repeated values to compress well. Device or tenant may work when queries filter there and groups are large enough; a unique event ID creates tiny groups. Ordering sorts within compressed storage, often by time for range analytics. These choices affect compression and skipping, not general-purpose B-tree behavior. Benchmark real queries and verify syntax: older releases use `timescaledb.compress*` settings, while newer releases may expose columnstore/Hypercore APIs.\n\nEvaluate both storage ratio and representative query latency. Include filtered scans, full time-range aggregates, and point lookups, because a layout that helps one can be neutral or harmful for another.\n\nCompression ratio alone is insufficient: include conversion duration, temporary disk, WAL, and replica catch-up in the decision. Preserve a path for corrections.",
+    "tags": [
+      "compression",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-007",
+    "topic": "compression policy",
+    "difficulty": "beginner",
+    "question": "What is a compression policy for, and why not compress data immediately?",
+    "answer": "A compression or columnstore policy converts eligible older chunks from an ingest-friendly row layout to a compact analytical layout. It can reduce storage and help queries reading few columns, but conversion consumes CPU and I/O and may change update behavior. Keep a mutable hot window for late arrivals and corrections. If a chunk continues receiving updates, conversion can cause churn or version-specific limitations. Schedule conversion after the correction horizon, monitor job backlog and replica lag, and test before broad rollout. Compression is not a backup.\n\nInclude late writes in policy tests. Monitor conversion backlog and failures, and retain disk headroom for conversion while normal ingestion and backups continue.\n\nSchedule conversion after normal lateness and corrections. A policy job is asynchronous, so observe its actual success and backlog rather than assuming age alone guarantees completion.",
+    "tags": [
+      "compression-policy",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-008",
+    "topic": "continuous aggregates",
+    "difficulty": "beginner",
+    "question": "What is a continuous aggregate, and when does it help?",
+    "answer": "A continuous aggregate materializes a grouped query—often `time_bucket` plus metrics—over a hypertable and refreshes affected ranges. It helps when dashboards repeatedly compute the same summaries from large raw history. Consumers read a smaller result instead of reprocessing every event. It adds storage, refresh scheduling, freshness semantics, and invalidation handling; it is not necessarily current if a job lags or fails. Historical corrections outside its refresh window need repair. Store composable measures: counts and sums combine, but averaging averages is generally incorrect without counts.\n\nTest with uneven sample rates, nulls, and late corrections. Compare against raw SQL over identical intervals; a smaller result is useful only if its metric semantics are correct.\n\nKeep component statistics needed for future rollups. A view containing only a final average may be adequate for display but insufficient for accurate daily or monthly summaries.",
+    "tags": [
+      "continuous-aggregates",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-009",
+    "topic": "refresh policy",
+    "difficulty": "intermediate",
+    "question": "How do start_offset and end_offset affect a continuous aggregate refresh policy?",
+    "answer": "In the classic `add_continuous_aggregate_policy` API, `start_offset` sets how far behind current time the job refreshes, while `end_offset` leaves a recent tail out of the materialized refresh window. The schedule interval controls eligibility, not a freshness guarantee. Set the start offset to cover late arrivals and corrections; use an end offset that allows ingestion and buckets to settle. Exact defaults and syntax depend on version. Monitor duration, retries, and lag, and ensure the bounded refresh window can finish reliably.\n\nA policy can run frequently yet remain behind if each refresh outlasts its cadence. Monitor duration and backlog, then reduce the window or add capacity when lag grows.\n\nThe refresh range must include expected historical corrections. For older edits, define a manual refresh or repair workflow and monitor the resulting freshness.",
+    "tags": [
+      "refresh-policy",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-010",
+    "topic": "real-time aggregates",
+    "difficulty": "intermediate",
+    "question": "What does real-time aggregation add to a continuous aggregate?",
+    "answer": "Real-time aggregation combines materialized history with raw hypertable data newer than the materialization watermark, reducing the wait for scheduled refreshes to include new observations. It can help dashboards that need a recent tail. It does not guarantee immediate consistency: visibility, job scheduling, configuration defaults, and extension version matter. Querying the raw tail also adds work and latency. Check whether it is enabled, inspect the plan, and compare freshness against cost. If disabled, applications must accept refresh delay or query raw data separately.\n\nCheck the watermark boundary for duplicate or missing buckets when materialized and raw results combine. State freshness requirements as measurable lag, not merely a setting being enabled.\n\nTest whether the newest raw interval overlaps or leaves a gap at the materialized watermark. Compare output to source rows immediately after policy runs.",
+    "tags": [
+      "real-time-aggregates",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-011",
+    "topic": "gap filling",
+    "difficulty": "beginner",
+    "question": "How does time_bucket_gapfill differ from time_bucket?",
+    "answer": "`time_bucket` groups rows into aligned intervals but emits only buckets with source rows. `time_bucket_gapfill` can generate missing buckets over a specified range, producing a regular series. It is supported in particular query contexts and commonly needs explicit start and finish bounds. Empty buckets typically yield null aggregates; null is different from zero and should remain unless zero is the correct domain meaning. Gapfill output grows with bucket count and grouping cardinality. Check version-specific signatures and boundary behavior.\n\nEstimate bucket count times group count before allowing broad dashboard ranges. Limit requests or coarsen bucket width if generated rows could overwhelm the database or response.\n\nSet an output limit for highly dimensional series. A regular grid can be much larger than the sparse input, affecting query cost and API payload size.",
+    "tags": [
+      "gap-filling",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-012",
+    "topic": "locf",
+    "difficulty": "intermediate",
+    "question": "When is locf appropriate, and what can make it misleading?",
+    "answer": "`locf` means last observation carried forward: a missing bucket receives the latest known non-null value. It can suit a state or slowly changing gauge that remains valid until updated. A seed or preceding sample may be needed for a range beginning with a gap; exact arguments vary by release. LOCF is an assumption, not a measurement. It can hide outages or carry stale values too long. Bound the age, expose a quality indicator, and preserve observed-versus-filled semantics instead of using it as cosmetic cleanup.\n\nExpose the age of a carried value or mark it as filled so consumers can distinguish assumptions from fresh observations. A maximum carry duration prevents stale state appearing current.\n\nLOCF is safest for state-like values with a known validity period. For rates, events, or rapidly changing measures, carrying the value forward can distort meaning.",
+    "tags": [
+      "locf",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-013",
+    "topic": "interpolation",
+    "difficulty": "intermediate",
+    "question": "What is interpolation in a gap-filled series, and what risk should be exposed?",
+    "answer": "`interpolate` estimates missing values between known observations, commonly with a linear rule. It may suit a smoothly varying signal when gaps are short and the method matches domain assumptions. Supported signatures and types vary by version. The risk is fabricating plausible data across an outage or discontinuity. A smooth line can conceal missing telemetry or a step change. Bound the maximum gap, label estimates, and use raw observations for alarms or compliance unless interpolation is explicitly accepted. Test range edges where neighboring points may be absent.\n\nInterpolate only across a domain-approved maximum gap and retain provenance for generated points. An estimate should not silently become a measured input to alerts or billing.\n\nConsider edge behavior separately: interpolation may lack a prior or subsequent observation at the requested boundary. Such buckets should remain explicitly unknown.",
+    "tags": [
+      "interpolation",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-014",
+    "topic": "brin",
+    "difficulty": "intermediate",
+    "question": "When is a BRIN index useful for time-series data?",
+    "answer": "BRIN stores summaries such as minimum and maximum values for ranges of heap pages, rather than entries per row. It is small and inexpensive when physical row order correlates with timestamps. Queries can skip block ranges whose summaries cannot match, making BRIN useful for append-oriented chunks. It is lossy and rechecks tuples. Late arrivals and backfills may widen ranges and reduce pruning. `pages_per_range` trades index size for granularity. BRIN is not a point-lookup replacement for B-tree; compare plans and buffers under realistic disorder.\n\nInspect physical correlation after historical imports, not only during append ingestion. A large backfill can reorder pages enough that a previously useful BRIN no longer excludes ranges.\n\nBRIN works best when block summaries remain narrow. Inspect actual rechecks after backfills and tune pages_per_range only after confirming correlation is the limiting factor.",
+    "tags": [
+      "brin",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-015",
+    "topic": "composite indexes",
+    "difficulty": "intermediate",
+    "question": "How should you choose column order in a composite B-tree index?",
+    "answer": "Put equality-filter columns first when those filters dominate, followed by range or ordering columns. `(device_id, time DESC)` supports device equality then a time range and recent-first order. B-trees rely mainly on the leftmost prefix, so this is not equivalent to `(time, device_id)` for time-only searches. Choose order from query shapes and selectivity. Chunk pruning is separate. Each index adds insert, WAL, disk, and maintenance cost across chunks. Validate with `EXPLAIN (ANALYZE, BUFFERS)` on recent and historical ranges.\n\nCompare candidates with actual prepared statements and parameter distributions. A plan good for a common device may be poor for a rare key or broad historical interval.\n\nA wider composite index costs more to maintain and cache. Keep the smallest key that supports the important filters and required ordering.",
+    "tags": [
+      "composite-indexes",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-016",
+    "topic": "skip scan",
+    "difficulty": "advanced",
+    "question": "Can B-tree skip scan eliminate the need to index time first?",
+    "answer": "Not reliably. Some newer PostgreSQL versions may use skip scan when a leading index column has few distinct values, but usefulness depends on statistics, selectivity, server version, and planner costs. It is not a guarantee that `(tenant_id, time)` performs like `(time, tenant_id)` for time-only queries. TimescaleDB inherits PostgreSQL planning behavior subject to compatibility. Test the exact deployed versions and inspect `EXPLAIN`; design around dominant predicates instead of assuming an optimizer optimization applies to high-cardinality keys or broad ranges.\n\nTreat skip scan as a plan to observe, not a design guarantee. If it disappears after statistics or server changes, the chosen index order must still meet latency needs.\n\nPlanner support is version-dependent and statistics-sensitive. Treat a skip-scan plan as an optimization opportunity, not a stable contract for application latency.",
+    "tags": [
+      "skip-scan",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-017",
+    "topic": "COPY ingestion",
+    "difficulty": "beginner",
+    "question": "Why is COPY often preferred over one INSERT per row for bulk ingestion?",
+    "answer": "`COPY` streams many rows with less per-row parsing and protocol overhead than an individual `INSERT` per record. It is often effective for large loads; multi-row inserts also reduce round trips for smaller batches. Use bounded transactions and buffers: tiny batches pay repeated commits, while enormous transactions increase rollback, snapshot, and recovery costs. Keep production indexes enabled in benchmarks and measure WAL, replica lag, and end-to-end latency. `COPY` does not provide deduplication or business validation; staging may be appropriate.\n\nCOPY improves bulk transfer, but callers still need backpressure, validation, and replay semantics. Measure transaction sizes and acknowledgement ordering under outage and recovery.\n\nFor broker consumers, acknowledge offsets only after database commit. Bounded buffers and replayable batches make outages recoverable without unbounded memory growth.",
+    "tags": [
+      "COPY-ingestion",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-018",
+    "topic": "upserts",
+    "difficulty": "intermediate",
+    "question": "What should be true before using ON CONFLICT on a hypertable?",
+    "answer": "A valid unique constraint or index must match the `ON CONFLICT` target and satisfy hypertable partition-key rules for the installed version. A global guarantee on a key excluding partition dimensions cannot generally be inferred from local chunk indexes. Upserts cost more than appends: PostgreSQL checks conflicts, may lock rows, and updates write new MVCC versions with WAL and index effects. Use stable event identity and define whether duplicates are ignored or corrections replace values. Benchmark conflict rates and prevent stale retries overwriting newer events.\n\nDefine deterministic conflict behavior under replay: specify which version wins and whether event time or source sequence establishes ordering. A delayed retry must not overwrite newer state.\n\nConflict updates are writes, not free deduplication. They generate MVCC versions and can create lock contention when many producers resend the same key.",
+    "tags": [
+      "upserts",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-019",
+    "topic": "downsampling",
+    "difficulty": "beginner",
+    "question": "Why is averaging averages usually incorrect when rollups have different sample counts?",
+    "answer": "An unweighted average of averages gives each bucket equal influence, even if one has ten measurements and another a thousand. The correct mean is total sum divided by total non-null count. Store each bucket sum and count, combine those, then divide. Null semantics matter: `count(*)` counts rows, while `count(value)` counts non-null measurements. Use the denominator matching the metric. Hierarchical aggregates should retain mergeable components and be validated against raw calculations across uneven buckets and partial intervals.\n\nStore components needed for later rollups and document null handling. Compare irregularly sampled intervals against raw measurements to catch weighting mistakes.\n\nChoose whether summaries represent all rows or only non-null values. That choice affects counts, means, and comparisons between raw and aggregated results. Test partial buckets separately.",
+    "tags": [
+      "downsampling",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-020",
+    "topic": "retention",
+    "difficulty": "intermediate",
+    "question": "Why is dropping old chunks preferable to deleting rows one at a time?",
+    "answer": "Dropping a chunk removes a physical relation and its indexes, avoiding row-by-row deletes that generate WAL, dead tuples, and vacuum work. It is efficient when retention aligns with chunk boundaries and whole expired chunks can be removed. Retention is coarse: a chunk overlapping the cutoff may remain until the whole chunk is old enough, depending on policy. Review candidate chunks and ensure aggregates or archives are complete. A dropped chunk is destructive; recovery depends on backups and WAL.\n\nReview chunk boundaries and archive or aggregate completion before deletion. Policy schedules mean actual removal time can differ from the nominal horizon.\n\nIf exact expiration is a legal requirement, verify whether whole-chunk boundaries meet it. A row-level deletion policy has different WAL and vacuum costs.",
+    "tags": [
+      "retention",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-021",
+    "topic": "late data",
+    "difficulty": "intermediate",
+    "question": "How should a system handle events arriving long after event time?",
+    "answer": "Define allowed lateness and correction policy. Hypertable routing uses event time, so a late row may target an old chunk that is compressed or near retention expiry. Decide whether to accept, quarantine, update, or reject it visibly. Keep the mutable window long enough for normal lateness and refresh aggregates across expected corrections. For older changes, schedule targeted refresh and handle compressed-chunk capabilities by version. Test late writes during compression and retention rather than assuming arrival time controls lifecycle.\n\nTrack event-time lag as a distribution and alert when it exceeds the correction horizon. This makes policy windows evidence-based and exposes producer clock failures.\n\nLate records may target chunks near retention or already columnar. Test the intended handling against the installed release and make rejected events observable.",
+    "tags": [
+      "late-data",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-022",
+    "topic": "backups",
+    "difficulty": "intermediate",
+    "question": "Does pg_dump provide point-in-time recovery for TimescaleDB?",
+    "answer": "No. `pg_dump` is a logical export at a consistent snapshot; it supports selective restore and migration but does not replay WAL to an arbitrary point in time. The extension must be installed and compatible on the destination, following extension-specific guidance. PITR generally uses a physical base backup plus continuous WAL archiving and tested recovery. Logical dumps aid portability; physical backup plus WAL supports cluster recovery. Test an isolated restore and query hypertables and aggregates.\n\nA restore drill includes extension installation, configuration, and representative queries, not only `pg_restore` completion. Record achieved recovery time and latest recoverable point.\n\nKeep the extension package and restore steps in the runbook. A logically valid dump can still fail to restore usable hypertables when target binaries are missing.",
+    "tags": [
+      "backups",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-023",
+    "topic": "upgrades",
+    "difficulty": "advanced",
+    "question": "What should be checked before upgrading PostgreSQL or TimescaleDB?",
+    "answer": "Treat PostgreSQL major and extension upgrades as related but distinct changes. Inventory server/extension versions, dependent extensions, policies and jobs, custom objects, and packages. Review the current compatibility matrix for paths, required libraries, preload settings, and pre/post steps. Test the sequence on a recent clone, including restore, plans, columnstore data, aggregate refresh, and failover. `ALTER EXTENSION ... UPDATE` may be part of migration, not a substitute for instructions. Keep primary, standby, and recovery hosts compatible and retain a rollback plan.\n\nKeep extension packages aligned across failover and recovery hosts. Include job metadata and aggregate refresh checks in release validation alongside application smoke tests.\n\nDo not mix extension package versions casually across replicas. Confirm provider support, standby promotion, and recovery-host compatibility before the maintenance window.",
+    "tags": [
+      "upgrades",
+      "timescaledb"
+    ]
+  },
+  {
+    "id": "tsdb-basic-024",
+    "topic": "alternatives",
+    "difficulty": "beginner",
+    "question": "When might plain PostgreSQL be a better choice than TimescaleDB?",
+    "answer": "Plain PostgreSQL is simpler when data is modest, retention is straightforward, and native partitioning plus ordinary indexes meet needs. It avoids an extension dependency and suits environments that restrict extensions. TimescaleDB helps when chunk management, compression, continuous aggregates, and policies materially reduce engineering effort. A columnar store may better serve huge broad scans and concurrent analytics. Consider restore and upgrade skill, provider support, and operational capacity as well as query speed. Choose the least complex system that meets workload and recovery requirements.\n\nInclude recoverability, extension availability, and team familiarity in the decision record. Re-evaluate when workload evidence changes rather than adopting a technology by trend.\n\nCompare operational costs as well as query speed: extension packaging, upgrades, backup restore, and team on-call knowledge can outweigh a modest benchmark gain.",
+    "tags": [
+      "alternatives",
+      "timescaledb"
+    ]
+  }
+]

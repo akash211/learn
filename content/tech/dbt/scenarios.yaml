@@ -1,0 +1,89 @@
+- id: dbt-scn-001
+  title: A revenue mart passes CI but doubles its totals
+  technologies: [dbt, sql, snowflake]
+  difficulty: advanced
+  prompt: |
+    A new `fct_order_revenue` model joins orders to order items and passes its `not_null` and `unique` tests. After deployment, the BI dashboard reports nearly double the expected revenue. The upstream order table has one row per order, the item table has several rows per order, and the author aggregated neither side before joining. The merge request is green and the model is a public mart used by several dashboards.
+  approach: |
+    First define the intended grain: one row per order or one row per order item. Inspect join cardinality and compare row counts before and after the join; the order total repeats once per item. Decide whether revenue should be computed from line amounts or whether the output must aggregate item rows back to one order. Avoid summing a header total after a one-to-many join.
+
+    Add tests that match the chosen grain: a unique order key if order-level, or a composite/order-item key if line-level. Add a reconciliation against the source or an independently computed total, plus a unit test fixture with one order and multiple items to expose fan-out. Review downstream dashboard assumptions and the contract before changing the mart shape. Build in an isolated target, compare aggregates by date and status, then deploy and confirm dashboard totals. A green CI result only proves the assertions that were actually written.
+  red_flags:
+    - Treating the unique test pass as proof that the measure is correct.
+    - Fixing the dashboard aggregation without correcting the duplicated model grain.
+    - Dropping rows to force totals without tracing join keys and business rules.
+
+- id: dbt-scn-002
+  title: A late-arriving event is missing from an incremental fact table
+  technologies: [dbt, sql, redshift]
+  difficulty: advanced
+  prompt: |
+    An incremental `fct_events` model filters with `event_time > (select max(event_time) from {{ this }})` and uses `append`. A partner sends some events several days late, and an analyst finds a missing record whose event time is older than the latest row already in the target. The model has been running successfully for months, and a full refresh would be expensive.
+  approach: |
+    Separate event time from arrival/change time and confirm what the source exposes. If there is a reliable ingestion timestamp or CDC cursor, use it to discover new arrivals; otherwise choose a bounded lookback that covers observed lateness and explicitly account for the tail. `append` will not update or deduplicate already-present keys, so assess rerun and duplicate risk before widening the filter. A supported `merge` with a truly unique event key may allow corrections to replace prior rows; test that against the adapter.
+
+    Define repair options for data older than the routine lookback: targeted date-range rebuild, partition replacement, periodic reconciliation or controlled full refresh. Compare affected windows to source counts and aggregates, and add a test or monitor for late-event rates. Implement in staging and rerun the same interval twice to confirm idempotency. Do not change the filter and assume the historical table self-corrects; rows that were previously missed need an explicit backfill or repair.
+  red_flags:
+    - Switching `>` to `>=` without considering duplicates and still missing older dates.
+    - Assuming append handles updates or idempotent retries.
+    - Running an unbounded full refresh in production without cost and recovery review.
+
+- id: dbt-scn-003
+  title: A slim CI job stopped building a changed model
+  technologies: [dbt, git]
+  difficulty: advanced
+  prompt: |
+    Pull requests use `dbt build --select state:modified+ --state target` and defer unchanged upstream models to production. A recent refactor changes a shared macro and a mart's contract, but the CI job reports “no nodes selected.” The job downloads the previous production manifest into `target/`, then runs dbt in the same project where the current invocation writes artifacts. Some PRs build in a reused schema.
+  approach: |
+    Investigate state inputs and output paths first. The current invocation may overwrite the baseline manifest, and the artifact may be from the wrong environment or revision. Download the prior production `manifest.json` to a dedicated immutable state directory and direct current artifacts to a separate target directory. Run `dbt ls --select state:modified+ --state path/to/state` to inspect selection before building.
+
+    Confirm that the current project parses with the expected Core and adapter versions and that the macro and contract modifications appear in the manifest comparison. State selection is based on dbt resource comparison, not Git filenames alone; version-specific behavior matters. Check deferral mappings and avoid reusing a PR schema that another job can overwrite. Ensure tests are selected and that the selected set has required relations. Add a full-build or broader scheduled check to catch hidden assumptions, and pin artifact identifiers to the production commit and environment.
+  red_flags:
+    - Widening every selector before checking whether the baseline manifest was overwritten.
+    - Assuming `state:modified+` is identical to Git's changed-files list.
+    - Sharing one mutable state/target path across concurrent jobs.
+
+- id: dbt-scn-004
+  title: A unit test passes but a contracted mart deploy fails
+  technologies: [dbt, postgresql]
+  difficulty: intermediate
+  prompt: |
+    A SQL unit test for `dim_accounts` passes on static fixtures, and a developer's local `dbt run` succeeds. Production `dbt build` fails contract enforcement after a new `account_status` column was added. The YAML contract declares `varchar` but the selected adapter reports `text`; the model is incremental, and the target schema was not altered by the previous deployment.
+  approach: |
+    Determine the precise mismatch from the contract error and check how the adapter normalizes data types and aliases. Compare the compiled query's output columns with the YAML contract; do not assume a fixture unit test validates the deployed target schema. Review the model's existing incremental relation and `on_schema_change` configuration. For enforced incremental contracts, choose an explicitly supported schema-change policy such as `append_new_columns` or `fail`, then plan how the existing target gains the new column.
+
+    Test the migration using a clone or isolated schema with representative pre-change data. Confirm contract types, target schema, downstream consumers and adapter behavior. If removing or changing a column is breaking, coordinate versioning or a consumer migration rather than forcing the contract to pass. Add CI using the same adapter and configuration as production. Unit tests validate transformation logic; contract enforcement validates structure at build time; both signals matter but cover different failure modes.
+  red_flags:
+    - Disabling the contract because the unit test passed.
+    - Assuming YAML type aliases work identically across adapters without checking compiled or runtime behavior.
+    - Dropping the production incremental table as the first fix without a migration and recovery plan.
+
+- id: dbt-scn-005
+  title: Source freshness is green but a dashboard is stale
+  technologies: [dbt, airflow, sql]
+  difficulty: intermediate
+  prompt: |
+    The daily `dbt source freshness` command reports all configured sources as fresh. A sales dashboard has not changed since yesterday. The declared `loaded_at_field` is a warehouse ingestion timestamp, and the source table's most recent partition loaded successfully, but a separate regional feed failed before populating one business-critical partition. No model test checks partition completeness, and the dashboard is declared as an exposure without an owner.
+  approach: |
+    Explain why freshness can pass: it measures recency of the configured timestamp, not completeness across partitions or business coverage. Inspect ingestion logs and source partitions by region and date, then identify whether the missing feed is an ingestion incident or a transformation filter issue. Add an appropriate completeness check or source/model test, possibly scoped by expected partitions, and connect the check to the orchestrator's gate or alert policy.
+
+    Validate that freshness uses the correct arrival-time signal and thresholds, but do not overload it to prove completeness. Verify downstream model results and dashboard refresh path. Assign an exposure owner and keep `depends_on` declarations accurate so impact and responsibility are visible. Route the alert to ingestion owners and document the recovery/backfill procedure. Rebuild affected models after the source partition is repaired, then reconcile regional totals. State clearly which signal checks arrival, which checks data shape, and which confirms business completeness.
+  red_flags:
+    - Treating a green freshness status as proof that all records or partitions arrived.
+    - Changing the freshness threshold without identifying the missing partition.
+    - Assuming the exposure itself runs or validates the dashboard.
+
+- id: dbt-scn-006
+  title: A snapshot missed a customer's intermediate change
+  technologies: [dbt, postgresql]
+  difficulty: advanced
+  prompt: |
+    A customer changed their address twice on Monday. A daily snapshot using the timestamp strategy ran Sunday and Tuesday, but the source table stores only the latest address and the update timestamp is reliable. Analysts expected to reconstruct both Monday addresses for an audit. The snapshot table contains the Sunday and Tuesday states but not the short-lived intermediate address.
+  approach: |
+    Clarify the capture model: snapshots record states observed at invocation time, not every source mutation between invocations. A daily snapshot cannot recover a value that was overwritten before the next run. Increasing snapshot frequency can reduce, but not eliminate, the observation gap; it is unsuitable when exact audit history is required.
+
+    Identify an authoritative source of change events such as CDC, an append-only audit table or a domain event log that captures each mutation with event time and entity key. Build the required history from that feed, preserving source ordering and handling late events. Keep the dbt snapshot for current-state history if useful, but describe its resolution honestly and do not present it as complete event-time history. Reconcile keys and timestamps, test repeated events and out-of-order arrival, and update downstream as-of models to distinguish observed validity from business-effective validity. Coordinate audit requirements with data governance before changing retention or snapshot configuration.
+  red_flags:
+    - Claiming the snapshot is corrupt when it captured the source values it could observe.
+    - Changing the strategy from timestamp to check without addressing missed intermediate states.
+    - Fabricating the missing address from later state or asking analysts to infer it.

@@ -1,0 +1,216 @@
+- id: kafka-basic-001
+  topic: architecture
+  difficulty: beginner
+  question: What is a Kafka topic, and how do partitions change its ordering model?
+  answer: |
+    A topic is a named stream of records, such as `orders`. Kafka divides a topic into partitions, and each partition is an ordered append-only log. A record receives an offset within its partition; consumers can rely on that order when they read the partition.
+
+    A multi-partition topic does not have a single total order. Records in different partitions may be read at different speeds and there is no defined ordering between them. A key commonly sends related records to the same partition, preserving per-key order while spreading different keys across partitions. That makes partitioning both a scaling and a correctness decision. If a business rule requires all events for an account to be ordered, use the account identifier as a stable key and ensure the consumer processes that partition sequentially. Kafka does not automatically sort records by timestamp across partitions.
+  tags: [topic, partition, ordering]
+- id: kafka-basic-002
+  topic: architecture
+  difficulty: beginner
+  question: What does an offset identify, and why is it not a simple record count?
+  answer: |
+    An offset identifies a position in one partition's log. It is not globally unique without the topic and partition, and it is not necessarily a dense row number. Compaction can remove older records while later offsets remain, and transactional consumers may skip aborted records. Therefore, offset 100 does not mean there are exactly 100 business events before it.
+
+    Consumer groups store committed positions separately from the data log, usually in Kafka's internal `__consumer_offsets` topic. A committed offset conventionally points to the next record the group should read. If record 41 has been processed, the consumer commonly commits 42. This is a checkpoint, not proof that a database write or other business effect happened. To diagnose lag, compare a consumer position with the partition end offset, but treat the difference as an offset distance rather than elapsed time or exact work count.
+  tags: [offsets, consumer-groups, lag]
+- id: kafka-basic-003
+  topic: architecture
+  difficulty: intermediate
+  question: What are partition leaders, followers, and the in-sync replica set?
+  answer: |
+    Each replicated partition has one leader and one or more followers. The leader serves writes and normally serves consumer fetches. Followers fetch from the leader and maintain copies of its log. This is replication for durability and availability, not automatically a pool of extra write capacity.
+
+    The in-sync replica set (ISR) contains replicas considered sufficiently caught up according to Kafka's replication rules. The ISR matters because `acks=all` waits for the required replication condition among the current ISR, while `min.insync.replicas` can reject writes if too few replicas remain in sync. If a follower falls far behind, it can leave the ISR; the partition may still have a leader but has less fault tolerance. Operators should distinguish an under-replicated partition from a partition with no leader. Replication factor, producer acknowledgment settings, and minimum ISR together define the practical write availability and durability tradeoff.
+  tags: [replication, ISR, durability]
+- id: kafka-basic-004
+  topic: architecture
+  difficulty: intermediate
+  question: What are log segments, and how do they relate to indexes and retention?
+  answer: |
+    A partition's log is stored as a series of files called segments. The active segment receives new records; when a size or time threshold is reached, Kafka rolls to a new segment. Closed segments can later be deleted by retention or rewritten by the log cleaner for compaction. Segmenting lets Kafka expire a bounded chunk of history rather than rewriting an entire partition for every retention decision.
+
+    Index files help locate offsets and timestamps without scanning from the beginning of the log. They are sparse, so Kafka finds a nearby index entry and scans a short range to the requested record. Indexes can be rebuilt; the record log is the source of truth. Retention cleanup is asynchronous and segment-granular, not a per-record timer, so records may remain beyond the nominal retention age until a segment becomes eligible and cleanup runs. Segment size and roll settings affect this granularity.
+  tags: [segments, indexes, retention]
+- id: kafka-basic-005
+  topic: producers
+  difficulty: beginner
+  question: Explain the producer `acks` settings and their tradeoffs.
+  answer: |
+    `acks` controls how much acknowledgment the producer waits for before considering a send successful. With `acks=0`, the client does not wait for a broker response, so it cannot know whether the broker accepted the record. With `acks=1`, the leader acknowledges after appending locally; a leader failure before replication can lose an acknowledged record. With `acks=all` (also spelled `-1`), the leader waits for the required condition among the current in-sync replicas.
+
+    `acks=all` is not necessarily “every replica ever configured.” Combine it with the topic replication factor and `min.insync.replicas`. For example, if the minimum ISR cannot be met, the broker rejects writes rather than accepting weaker durability. The tradeoff is availability: a cluster with too few healthy replicas may stop writes. Choose based on loss tolerance, and test both leader failure and reduced ISR behavior.
+  tags: [producer, acks, durability]
+- id: kafka-basic-006
+  topic: producers
+  difficulty: intermediate
+  question: What does `enable.idempotence` protect against, and what does it not protect against?
+  answer: |
+    `enable.idempotence=true` lets the producer attach sequence information to batches so the broker can recognize and suppress duplicate retries from that producer. It addresses an important uncertain outcome: a broker may have appended a batch even though the acknowledgment was lost, prompting the producer to retry. Idempotence helps prevent that retry from creating a second log entry.
+
+    It is not a global deduplication service. It does not prevent an application from deliberately sending the same business event twice, does not coordinate unrelated producer instances, and does not make writes to Kafka and an external database atomic. The producer's retries and in-flight settings must be compatible with idempotence, and the client enforces constraints. For atomic output across Kafka partitions or coupled input offsets, use transactions. For external side effects, use idempotency keys or an outbox/inbox design.
+  tags: [idempotence, retries, producer]
+- id: kafka-basic-007
+  topic: producers
+  difficulty: intermediate
+  question: How do `batch.size` and `linger.ms` affect producer behavior?
+  answer: |
+    The producer groups records into batches, typically per partition. `batch.size` sets a target size for an individual batch, while `linger.ms` allows the client to wait briefly for more records to arrive and fill it. A fuller batch amortizes request overhead and often compresses better, which can improve efficiency under sustained traffic.
+
+    Waiting has a cost: `linger.ms` can add latency, especially when traffic is sparse, and a large `batch.size` does not help if records rarely arrive together. Buffered records also consume memory. If brokers are slow or unavailable, the producer buffer can fill and sends can block up to configured limits or fail. Tune from representative payloads and traffic patterns, watching request latency, producer queue time, buffer pressure, and end-to-end tail latency. Do not optimize batch fullness alone when the application has a strict response-time objective.
+  tags: [batching, latency, throughput]
+- id: kafka-basic-008
+  topic: producers
+  difficulty: intermediate
+  question: Why does the record key matter beyond identifying a value?
+  answer: |
+    A non-null key is commonly hashed by the producer's partitioner to select a partition. Records with the same key therefore tend to land in the same partition, where their order is preserved. For an account update stream, using the account ID as key is a natural way to preserve per-account order and let consumers process different accounts in parallel.
+
+    The key also influences load distribution. A popular key can create a hot partition while others are idle; a random key spreads load but loses the same-key ordering boundary. Key choice also affects compacted topics, where Kafka uses keys to retain latest state. Increasing partition count may change the mapping of keys and split a key's history across partitions. Treat keys as part of the data contract: stable identity, serialization, privacy, and expected distribution matter as much as the value schema.
+  tags: [key, partitioning, ordering]
+- id: kafka-basic-009
+  topic: consumers
+  difficulty: beginner
+  question: How does a consumer group divide work, and what limits its parallelism?
+  answer: |
+    A consumer group is a set of consumers sharing one group ID and coordinating their read progress. Under the traditional consumer-group model, each partition is assigned to at most one active member at a time. Different groups have independent offsets, so separate applications can read the same topic without advancing one another's progress.
+
+    A group cannot usefully parallelize more active partition work than there are partitions. If a topic has six partitions, a seventh group member may be idle, although a member can own several partitions. Partition count therefore bounds group parallelism, but increasing it has costs in metadata, file management, reassignment, and recovery. It also can change key-to-partition mapping. Choose partitions based on expected throughput, ordering boundaries, consumer scale, broker capacity, and recovery objectives rather than only the current number of consumer processes.
+  tags: [consumer-groups, partitions, parallelism]
+- id: kafka-basic-010
+  topic: consumers
+  difficulty: intermediate
+  question: What is the difference between `max.poll.interval.ms` and `session.timeout.ms`?
+  answer: |
+    Both settings relate to consumer-group liveness, but they protect against different failure modes. `session.timeout.ms` participates in the coordinator's detection of a member that has stopped heartbeating. Heartbeats can indicate membership even while application code is busy. `max.poll.interval.ms` bounds how long a consumer using the classic polling behavior can go without calling `poll()` again; it detects a member that is alive but is not making application progress through its poll loop.
+
+    If a batch takes too long to process, the consumer may exceed `max.poll.interval.ms`, lose its assignment, and trigger a rebalance. Raising timeouts can mask a slow or blocked handler, while overly small values cause unnecessary evictions during normal pauses. Bound work per poll, tune `max.poll.records`, avoid blocking indefinitely on downstream systems, and observe processing time and poll gaps. Exact behavior depends on client and group protocol version, so verify effective settings for the deployed client.
+  tags: [consumer, polling, timeouts]
+- id: kafka-basic-011
+  topic: consumers
+  difficulty: intermediate
+  question: Why can committing offsets too early lose data, while committing too late duplicate work?
+  answer: |
+    A committed offset tells the group where to resume; it is not a transaction with the application's side effect. If a consumer commits after fetching but before processing, then crashes, Kafka resumes after records whose work never completed. This is data loss from the application's perspective. If it processes a record and the side effect succeeds, but the process crashes before committing, Kafka re-delivers it after restart. That is duplicate work, the normal at-least-once failure window.
+
+    Many systems choose at-least-once processing and make the sink idempotent, for example by writing with a stable event ID and enforcing uniqueness. Manual commits after successful processing make the boundary explicit. For parallel processing, do not commit past unfinished earlier offsets in a partition: later records may finish first, but a commit beyond the gap can skip the earlier record after a crash. Exactly-once across an external database requires additional coordination or deduplication.
+  tags: [offset-commit, at-least-once, idempotency]
+- id: kafka-basic-012
+  topic: consumers
+  difficulty: intermediate
+  question: What causes a consumer-group rebalance, and how can an application respond safely?
+  answer: |
+    A rebalance changes which group members own which partitions. It can happen when a consumer joins or leaves, crashes or misses liveness limits, changes its subscription, or when topic partition metadata changes. The coordinator and assignment strategy distribute partitions again. Some protocols temporarily revoke all assignments; cooperative strategies can move only the partitions that need to change, reducing disruption.
+
+    Rebalances are not necessarily data loss, but they pause or interrupt work and can cause duplicate processing if side effects completed before offset commits. Consumer code should handle partition-revocation callbacks, stop dispatching new work for revoked partitions, finish or safely abandon in-flight work, and commit only completed contiguous offsets. Frequent rebalances suggest a root cause such as slow processing, GC pauses, unstable networks, or deployment churn. Increasing timeouts without finding that cause may only delay the next incident.
+  tags: [rebalance, consumer-groups, recovery]
+- id: kafka-basic-013
+  topic: delivery-semantics
+  difficulty: intermediate
+  question: Compare at-most-once and at-least-once consumer processing.
+  answer: |
+    At-most-once processing commits progress before performing the side effect. If the process then crashes, Kafka starts after the committed position and the effect may never happen. This avoids repeats but can lose work. It can be appropriate for data that is explicitly disposable, such as some telemetry, but should not be an accidental default for business events.
+
+    At-least-once processing performs the side effect first and commits the offset afterward. A crash between those steps makes Kafka deliver the record again, so the effect may occur more than once. In exchange, the consumer does not intentionally skip unprocessed records. Many reliable systems prefer at-least-once plus idempotent sink writes, event IDs, or deduplication. Kafka transactions can coordinate Kafka input offsets and output records, but not an arbitrary external API or database. Always describe the guarantee at a stated system boundary.
+  tags: [delivery-semantics, offsets, idempotency]
+- id: kafka-basic-014
+  topic: delivery-semantics
+  difficulty: advanced
+  question: How do Kafka transactions support a consume-transform-produce pipeline?
+  answer: |
+    A transactional producer can write output records and include the consumer's input offsets in the same Kafka transaction. The consumer disables automatic commits, processes its input, begins a producer transaction, sends output, stages offsets with `sendOffsetsToTransaction()`, and commits. If the transaction aborts, its output and included offset advancement are not visible as committed work, allowing the input to be processed again.
+
+    To hide aborted output records, downstream consumers must use `isolation.level=read_committed`. A stable `transactional.id` lets Kafka fence an older producer instance if a replacement takes over, but it must be unique per logical active producer. Keep transactions bounded: an open transaction can hold back read-committed visibility in affected partitions. The guarantee covers Kafka records and offsets, not a separate database write or HTTP call. For those, use idempotent effects, an outbox, or a system-specific coordinated transaction.
+  tags: [transactions, exactly-once, isolation]
+- id: kafka-basic-015
+  topic: retention
+  difficulty: beginner
+  question: What is the difference between delete retention and log compaction?
+  answer: |
+    Delete retention expires old log segments according to time or size limits, commonly configured with `retention.ms` and `retention.bytes`. It is useful when consumers need a bounded replay window. Cleanup is asynchronous and works on whole segments, so a record may remain beyond the exact age threshold until its segment is eligible.
+
+    Compaction retains the latest value for each key as eligible segments are cleaned. It is useful for changelog or current-state topics that a consumer can read to reconstruct the newest value per entity. A null-valued record is a tombstone indicating deletion, but tombstones eventually expire too. Compaction is asynchronous and does not instantly erase every older value. A compacted topic is not necessarily a full audit history; if every transition matters, retain an immutable event stream or archive separately. `compact,delete` combines policies but still has defined retention bounds.
+  tags: [retention, compaction, tombstones]
+- id: kafka-basic-016
+  topic: retention
+  difficulty: intermediate
+  question: Why should a team define a replay window before setting topic retention?
+  answer: |
+    Retention determines how long the log remains available for a consumer to recover. The required window is not just the normal lag: include planned maintenance, a prolonged downstream outage, incident investigation, a full rebuild, and the time needed to backfill. If a group's stored position falls behind the log start offset, it cannot simply resume from the old point; operators must choose a new position or recover from an archive.
+
+    Size and time policies can interact, and byte limits generally apply per partition. A high-volume partition can hit a size-based bound before the nominal time horizon. Estimate data volume with actual compression and replication factor, plus indexes, segment overhead, broker recovery headroom, and future growth. If long retention is costly on local disks, consider remote tiering or a separate archive, but test replay latency and service-specific limits. Retention is a recovery contract as much as a storage setting.
+  tags: [retention, replay, capacity]
+- id: kafka-basic-017
+  topic: schema-management
+  difficulty: intermediate
+  question: What does a Schema Registry do, and what does it not do automatically?
+  answer: |
+    A Schema Registry stores versioned schemas, associates identifiers with subjects, and can enforce configured compatibility rules when a schema is registered. Client serializers and deserializers use the registry to encode records with schema references and decode them later. Avro and Protobuf are common formats, but Kafka itself stores bytes and does not require a registry or one schema language.
+
+    The broker does not automatically validate every application record just because a registry exists. Producers and consumers need the right serializers, registry configuration, and subject strategy. A registry compatibility check is also not proof that field meaning, units, privacy classification, or business rules remain correct. Teams should test old and new producer-consumer combinations, retain schema versions needed to decode stored data, secure registry access, and monitor lookup failures. A structurally compatible change can still be semantically breaking.
+  tags: [schema-registry, schemas, compatibility]
+- id: kafka-basic-018
+  topic: schema-management
+  difficulty: intermediate
+  question: Explain backward and forward schema compatibility in a rolling deployment.
+  answer: |
+    Backward compatibility means a new reader can read data written with an older schema. Forward compatibility means an older reader can read data written with a newer schema. Full compatibility combines those directions for the versions checked by the registry policy; transitive modes may check more than the immediately previous version. Exact rules differ by format and registry implementation.
+
+    In a rolling deployment, old and new producers and consumers can coexist. Adding an optional field with a suitable default may let a new reader handle old data, while older readers may ignore an unknown field; but this depends on format and compatibility mode. Changing a field's type or meaning can break consumers even when a schema registration passes. A safe rollout considers all reader-writer pairings, deploys compatible consumers before relying on new producer fields, and uses a new event version or topic for genuinely breaking changes. Verify with real serialized examples and retained historical data.
+  tags: [compatibility, evolution, deployment]
+- id: kafka-basic-019
+  topic: kafka-connect
+  difficulty: beginner
+  question: What are Kafka Connect source and sink connectors?
+  answer: |
+    Kafka Connect is a framework for integrating Kafka with external systems. A source connector reads from an external source and produces Kafka records; a sink connector consumes Kafka records and writes them to an external destination. Connect workers manage connector configuration, task placement, offsets, status, and REST administration.
+
+    Connectors split work into tasks when their implementation and the external system support parallelism. Increasing `tasks.max` does not guarantee more throughput; a connector may have one task or be limited by a database or API. Distributed workers coordinate through internal Kafka topics for configuration, offsets, and status, which need durable settings and appropriate replication. Converters handle record serialization, while Single Message Transforms perform lightweight changes. Connector delivery semantics, retries, and exactly-once support are specific to the connector and destination; the framework cannot make arbitrary external writes atomic by itself.
+  tags: [connect, connectors, integration]
+- id: kafka-basic-020
+  topic: kafka-connect
+  difficulty: intermediate
+  question: How does Debezium CDC differ from periodically querying a database table?
+  answer: |
+    Change data capture reads a database's transaction log or equivalent change stream to capture committed inserts, updates, and deletes. Debezium connectors commonly run in Kafka Connect and publish change events that include row data plus source metadata such as operation and log position. A snapshot may first establish current table state, after which the connector streams ongoing changes from a consistent database position.
+
+    Periodic polling asks for current rows that match a query, often using a timestamp or increasing ID. Polling can miss deletes, depend on reliable update timestamps, and add query load; CDC can preserve changes more directly but requires database-specific log permissions, retention, and operational care. If the connector falls behind and the database purges required log segments, it may need a new snapshot or recovery action. Consumers must understand snapshot versus stream events, delete/tombstone behavior, schema evolution, and duplicate tolerance rather than treating every message as a plain row.
+  tags: [CDC, Debezium, database]
+- id: kafka-basic-021
+  topic: stream-processing
+  difficulty: intermediate
+  question: When is Kafka Streams a good fit, and how is it different from an external engine?
+  answer: |
+    Kafka Streams is a client library embedded in an application, particularly useful for Kafka-centric transformations, joins, and stateful aggregations where a team wants to deploy processing with its service. It reads and writes Kafka topics, uses partitions to distribute work, and can keep local state stores backed by Kafka changelog topics for recovery. It avoids a separate stream-processing cluster in the usual model, but the application still owns deployment, scaling, state restoration, and observability.
+
+    External engines such as Flink or Spark Structured Streaming have their own job runtimes and checkpoint models. They may fit richer event-time processing, multiple sources, lakehouse integration, or an organization's existing compute platform. Compare checkpoint and sink semantics, state size, recovery time, and operational skill—not only latency claims. Kafka Streams' exactly-once support covers Kafka input, state, and output under supported configuration, not an arbitrary external database side effect.
+  tags: [Kafka-Streams, Flink, processing]
+- id: kafka-basic-022
+  topic: operations
+  difficulty: intermediate
+  question: What does an under-replicated partition indicate, and what should an operator check?
+  answer: |
+    An under-replicated partition has fewer replicas caught up than the topic's desired replication factor. It may still have a leader and accept traffic, but it has reduced fault tolerance. If more replicas fail, the partition can become unavailable. If the ISR falls below `min.insync.replicas`, producers using `acks=all` may see writes rejected rather than accepted with weaker durability.
+
+    Investigate whether the problem affects one broker or the cluster: disk latency and free space, network throughput, replica fetcher errors, broker request queues, CPU and garbage collection, and maintenance or reassignment activity. A follower might be slow to fetch or repeatedly leave the ISR. Do not clear the alert by lowering the minimum ISR unless the durability tradeoff is explicitly accepted. Monitor ISR shrink/expand events and distinguish a partition with fewer healthy replicas from one with no leader, because the latter is unavailable for ordinary operations.
+  tags: [under-replicated, ISR, operations]
+- id: kafka-basic-023
+  topic: operations
+  difficulty: advanced
+  question: What is KRaft, and what operational change did Kafka 4.0 make?
+  answer: |
+    KRaft is Kafka's Raft-based metadata management mode. A controller quorum maintains cluster metadata such as broker membership and topic/partition configuration, replacing ZooKeeper's former metadata role. Brokers still replicate the data logs separately; the controller quorum is not simply another copy of every topic partition.
+
+    Kafka 4.0 is the first major Kafka release that runs without ZooKeeper and removes ZooKeeper mode. A cluster still using ZooKeeper cannot be upgraded by merely changing a flag; it must follow a supported migration and upgrade path, typically using a bridge release and validating version-specific procedures. Operators should monitor controller quorum health and metadata operations as well as data-broker health. Existing brokers may serve some traffic while metadata operations are impaired, so “producers work right now” does not prove the control plane is healthy. KRaft changes architecture and upgrade operations, not the need to plan failure domains and recovery.
+  tags: [KRaft, Kafka-4, controllers]
+- id: kafka-basic-024
+  topic: design-patterns
+  difficulty: intermediate
+  question: What problem does the transactional outbox pattern solve?
+  answer: |
+    A service that updates a database and publishes a Kafka event has a dual-write problem. If it commits the database first and crashes before publishing, the state changes but consumers never hear about it. If it publishes first and the database transaction rolls back, consumers see an event for a change that did not happen. Kafka producer idempotence cannot make a separate database commit atomic with a Kafka append.
+
+    The transactional outbox writes the business change and an outbox row in the same database transaction. A relay or CDC connector later reads committed outbox rows and publishes them to Kafka. This makes the business update and intent to publish atomic, but the relay can still publish a row more than once after a failure. Consumers should deduplicate by stable event ID or make effects idempotent. The outbox also needs retention, monitoring for oldest unpublished rows, schema governance, and a tested replay procedure.
+  tags: [outbox, dual-write, CDC]

@@ -1,0 +1,164 @@
+- id: k8s-scn-001
+  title: A rollout is stuck with new Pods never becoming Ready
+  technologies: [kubernetes, docker]
+  difficulty: intermediate
+  prompt: |
+    A team deploys a new API version through a Deployment. The rollout creates new Pods, but they
+    remain unready and the old ReplicaSet stays active. `kubectl rollout status` times out. The
+    new container logs show no crash, and the Service still has some working endpoints. The team
+    proposes deleting all Pods and retrying the apply.
+  approach: |
+    Preserve evidence and determine whether the failure is scheduling, startup or readiness.
+    Inspect `kubectl describe deployment`, ReplicaSet status, Pod conditions, recent Events and
+    `kubectl logs --previous` where relevant. Check the actual image digest, command, mounted
+    ConfigMaps/Secrets, probe path and port, and whether the new application can connect to its
+    dependencies. Inspect Service EndpointSlices to confirm old ready Pods still receive traffic.
+
+    Compare the new and previous templates, including resource requests, security context and
+    readiness behavior. If the new release is bad, use `kubectl rollout undo deployment/<name>`
+    or revert the source-of-truth change, then verify the rollback and endpoint recovery. Fix the
+    specific health/configuration issue and rehearse a rollout with adequate surge capacity. Avoid
+    relying on Pod deletion because the Deployment will recreate the same failing template.
+  red_flags:
+    - Deleting all Pods before checking the owning Deployment and preserving events.
+    - Treating a successful image pull or Running phase as readiness.
+    - Increasing probe thresholds without determining why the application is unready.
+    - Rolling back the manifest without confirming endpoint recovery.
+
+- id: k8s-scn-002
+  title: Service DNS resolves but requests fail after a network policy change
+  technologies: [kubernetes]
+  difficulty: intermediate
+  prompt: |
+    After a namespace applies default-deny ingress and egress NetworkPolicies, a web API can
+    resolve the database Service name but times out connecting to it. The database Pods are
+    Ready, the Service has EndpointSlices, and requests from a privileged diagnostics Pod succeed.
+    The team is unsure whether to change the Service or remove all policies.
+  approach: |
+    Map the source Pod labels and namespace, destination Pod labels, protocol and port. Confirm
+    which CNI enforces NetworkPolicy, then inspect every policy selecting the source and target:
+    policies are additive, and both egress from the client and ingress to the database must allow
+    the flow. DNS resolving proves only name lookup, not TCP reachability. The privileged test
+    Pod may have different labels, namespace or policy exemptions, so reproduce from a Pod with
+    the application's identity.
+
+    Add the narrow rule for required DNS and database traffic, with correct selectors and port,
+    then test allowed and denied paths. Check whether policy changes propagate through the CNI and
+    inspect its agent telemetry or logs. Preserve a least-privilege posture rather than deleting
+    all policies. Document application dependencies and add a policy test to namespace onboarding.
+  red_flags:
+    - Assuming DNS success proves the network path to the database is open.
+    - Testing only from a privileged or differently labeled diagnostics Pod.
+    - Removing every policy instead of adding the minimum required traffic rule.
+    - Assuming every CNI enforces NetworkPolicy identically.
+
+- id: k8s-scn-003
+  title: A StatefulSet Pod cannot attach its volume after a zone change
+  technologies: [kubernetes]
+  difficulty: advanced
+  prompt: |
+    A three-replica database StatefulSet uses one PVC per Pod. A node is drained during
+    maintenance, and `db-2` is recreated but stays Pending with a volume attachment event. The
+    cluster has nodes in multiple zones; the PVC is bound to a volume in one zone. The operator
+    considers deleting the PVC to trigger new storage.
+  approach: |
+    Do not delete the claim. Inspect the Pod's Events, PVC, PV, StorageClass, CSI driver status,
+    volume attachment resources and node topology. Determine whether the new node is in the
+    volume's zone, whether the CSI driver can detach from the old node, and whether the StatefulSet
+    scheduling policy permits placement in the required topology. A bound claim's data is more
+    valuable than a quick reschedule.
+
+    If the volume is healthy and zone-bound, restore or make eligible a node in that topology and
+    let attach complete, following storage vendor guidance for stuck attachments. Confirm the
+    database's replica/quorum state and application recovery before forcing detach. Then review
+    StorageClass binding mode, topology spread and maintenance procedure; `WaitForFirstConsumer`
+    can help with future dynamic provisioning. Verify backups and restore drills independently.
+  red_flags:
+    - Deleting the PVC without confirming reclaim policy and data-loss risk.
+    - Forcing volume detach while the old node may still be writing.
+    - Treating StatefulSet as a replication or backup mechanism.
+    - Ignoring zone topology when choosing replacement nodes.
+
+- id: k8s-scn-004
+  title: HPA adds replicas but the new Pods remain Pending
+  technologies: [kubernetes]
+  difficulty: advanced
+  prompt: |
+    An HPA scales an API from two replicas to ten during a traffic peak. The original Pods are
+    Ready, but most new Pods remain Pending. Cluster dashboards show moderate average CPU. The
+    team proposes increasing node autoscaler maximums, but the Pods use required zone affinity,
+    large memory requests and a PVC-backed cache.
+  approach: |
+    Inspect HPA metrics and conditions, then describe a Pending Pod to read scheduler Events.
+    Compare effective requests, node allocatable capacity, quota, selectors, taints, affinity,
+    PVC binding and storage topology. Average CPU utilization does not show whether requests fit
+    or whether memory and placement constraints can be met. Check if the node provisioning system
+    can create a node matching all constraints and whether cloud quota or zone capacity is
+    available.
+
+    Decide whether the desired replica count is safe for downstream databases and the cache
+    volume's semantics. If constraints are accidental, revise them; if deliberate, provision
+    compatible capacity or adjust scaling targets and service load shedding. Test scale-up delay,
+    startup time and max replicas. Do not simply raise node maximums without understanding why
+    existing capacity is infeasible.
+  red_flags:
+    - Equating moderate CPU usage with available schedulable capacity.
+    - Increasing autoscaler limits before reading FailedScheduling events.
+    - Scaling an application beyond database or storage capacity.
+    - Ignoring the PVC's access mode and topology.
+
+- id: k8s-scn-005
+  title: CEL policy rollout blocks deployment requests across namespaces
+  technologies: [kubernetes]
+  difficulty: advanced
+  prompt: |
+    A platform team introduces a ValidatingAdmissionPolicy to require approved image repositories.
+    After binding it with Deny, deployments in several namespaces fail. The expression checks
+    regular containers but not init containers, and the error output shows some requests failing
+    evaluation when optional labels are absent. A production delivery pipeline is blocked.
+  approach: |
+    Use the policy and binding status, API error details and audit logs to identify whether each
+    denial is a false validation result or an expression evaluation error. Confirm match rules,
+    namespace scope, object kinds, versions and optional-field handling. Review both application
+    and init-container images and any trusted platform sidecars. Temporarily change the binding to
+    Warn or Audit, or narrow the binding to a test scope, using the platform's approved emergency
+    procedure; do not remove unrelated policy controls.
+
+    Fix CEL guards for absent fields and make the allowed repository rule explicit. Test representative
+    creates and updates, including missing labels and multiple containers, in a non-production
+    cluster. Reintroduce Deny incrementally, monitor policy errors and document rollback. Include
+    an exception process that is scoped, expiring and auditable rather than a broad permanent bypass.
+  red_flags:
+    - Treating policy creation as enforcement without understanding the binding.
+    - Ignoring evaluation errors or optional-field handling in CEL.
+    - Applying a broad fail-closed policy without a staged rollout and rollback path.
+    - Allowing arbitrary permanent exemptions to unblock delivery.
+
+- id: k8s-scn-006
+  title: Node consolidation saves cost but disrupts a latency-sensitive service
+  technologies: [kubernetes]
+  difficulty: advanced
+  prompt: |
+    A cluster's node provisioning controller consolidates underused nodes overnight. Cloud spend
+    falls, but a latency-sensitive service experiences short error spikes when several Pods move.
+    It has three replicas, a PDB with `minAvailable: 2`, and strict zone spread. Some Pods take
+    time to drain because they finish in-flight requests. An engineer suggests disabling all
+    consolidation permanently.
+  approach: |
+    Correlate request errors with node disruption events, Pod termination timestamps, scheduler
+    placement, readiness transitions and load-balancer endpoint changes. Confirm whether the
+    PDB allowed the evictions, whether replacement nodes became ready before old nodes drained,
+    and whether hard topology rules left sufficient capacity in each zone. Validate the app's
+    termination grace period and preStop behavior against actual request duration. A PDB is not a
+    guarantee against all node failures and does not fix insufficient replicas or slow startup.
+
+    Tune disruption budgets and consolidation delay for the workload's recovery cost, and reserve
+    capacity for replacement and rollout surge. Consider a dedicated or less aggressive pool if
+    justified by latency requirements, with explicit cost ownership. Test controlled node drains
+    and consolidation in a staging environment, then monitor error rate, eviction and cost. Avoid
+    both extremes: disabling all optimization forever or allowing savings to override availability.
+  red_flags:
+    - Treating a PDB as protection from every failure path.
+    - Ignoring zone spread and replacement capacity when changing disruption policy.
+    - Eliminating consolidation without quantifying cost or service impact.
+    - Reducing termination grace below the time needed to drain requests.

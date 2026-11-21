@@ -1,0 +1,91 @@
+slug: dsa-python
+title: DSA with Python
+category: programming
+summary: A question-heavy guide to recognizing, proving, and implementing core data-structure and algorithm patterns in Python.
+level: core
+relations:
+  - to: python
+    type: uses
+    note: Python supplies the language and standard-library tools used to implement and analyze these algorithms.
+  - to: system-design
+    type: complements
+    note: Algorithmic fundamentals complement system-level design by making individual components correct and efficient.
+intro:
+  what: |
+    This is a practical interview drill book for data structures and algorithms in Python. It teaches reusable patterns—hashing, pointers, monotonic structures, graph traversal, dynamic programming, and more—then applies them to classic questions with runnable standard-library solutions. Explanations make invariants, assumptions, complexity, and edge cases explicit.
+  why: |
+    Interview problems test more than recall: candidates translate a statement into a model, choose a suitable structure, justify correctness, and write code that survives boundaries and duplicates. Repeated practice makes those steps deliberate.
+  problems:
+    - Choosing data structures and deriving their actual operation costs.
+    - Recognizing a useful pattern and proving its assumptions hold.
+    - Implementing classic solutions without hidden quadratic work or boundary bugs.
+    - Explaining time, auxiliary space, mutation, and assumptions precisely.
+    - Practicing representative current screen patterns without inventing company reports.
+  where_used:
+    - Software engineering interviews and coding screens.
+    - Production code that needs predictable performance and clear correctness arguments.
+    - Algorithm reviews, mentorship, and problem-solving assessments.
+  ecosystem: |
+    The module uses core Python collections and standard-library modules such as collections, heapq, and bisect. It builds on Python fundamentals and complements system design: this material focuses on local algorithmic correctness and cost, while architecture considers how components work together.
+  alternatives:
+    - name: Language-agnostic pseudocode
+      note: Useful for discussing ideas, but runnable Python keeps semantics and implementation details visible.
+    - name: Specialized algorithm texts
+      note: Offer broader formal coverage; this guide prioritizes common interview patterns and drills.
+  related: [python, system-design]
+chapters:
+  - id: complexity-patterns
+    title: Complexity Analysis and Patterns to Recognise
+    file: chapters/01-complexity-patterns.md
+    minutes: 12
+    level: core
+  - id: arrays-strings-hashing
+    title: Arrays, Strings and Hashing
+    file: chapters/02-arrays-strings-hashing.md
+    minutes: 12
+    level: core
+  - id: two-pointers-window
+    title: Two Pointers and Sliding Window
+    file: chapters/03-two-pointers-window.md
+    minutes: 12
+    level: core
+  - id: stacks-queues-monotonic
+    title: Stacks, Queues and Monotonic Patterns
+    file: chapters/04-stacks-queues-monotonic.md
+    minutes: 12
+    level: core
+  - id: linked-lists
+    title: Linked Lists
+    file: chapters/05-linked-lists.md
+    minutes: 12
+    level: core
+  - id: trees-bst
+    title: 'Trees and BSTs: Traversals and Recursion Templates'
+    file: chapters/06-trees-bst.md
+    minutes: 12
+    level: core
+  - id: heaps-topk-streaming
+    title: Heaps, Top-K and Streaming
+    file: chapters/07-heaps-topk-streaming.md
+    minutes: 12
+    level: core
+  - id: graphs
+    title: 'Graphs: BFS, DFS, Topological Sort and Union-Find'
+    file: chapters/08-graphs.md
+    minutes: 12
+    level: core
+  - id: recursion-backtracking-dp
+    title: Recursion, Backtracking and Dynamic Programming
+    file: chapters/09-recursion-backtracking-dp.md
+    minutes: 12
+    level: core
+  - id: sorting-search-bits
+    title: Sorting, Binary Search and Bit Tricks
+    file: chapters/10-sorting-search-bits.md
+    minutes: 12
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

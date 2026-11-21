@@ -1,0 +1,183 @@
+- id: tf-scn-001
+  title: A reviewed plan suddenly replaces the production database
+  technologies: [terraform]
+  difficulty: advanced
+  prompt: |
+    A pull request changes a reusable database module to use a newer provider version. CI's plan
+    reports an in-place update to the database instance class and replacement of the storage
+    resource. The team expected no downtime, and the database contains customer records. The
+    change author says the provider upgrade is routine and asks to apply before the maintenance
+    window closes. The state is remote and locked, but no recent restore test is documented.
+  approach: |
+    Do not approve based on the claim that the upgrade is routine. Bind the plan to the exact
+    commit, root, backend and provider lock selection, then identify which argument forces
+    replacement and whether the plan changes or replaces the database versus attached storage.
+    Read the provider upgrade notes and inspect the resource lifecycle and dependencies. Establish
+    backup freshness, recovery-point objectives, restore test evidence, snapshots, maintenance
+    behavior and an application failover plan. Confirm whether the replacement is an intended
+    migration, an accidental default/schema change, or a state/configuration mismatch.
+
+    If replacement is not intended, adjust configuration or pin/upgrade in a separate reviewed
+    step and produce a fresh plan. If required, stage it in a representative environment, rehearse
+    data migration, obtain an explicit production approval, and schedule a window with monitoring
+    and rollback criteria. Test state restoration separately; restoring state alone does not roll
+    back cloud changes. Apply only the artifact that was reviewed and verify database health and
+    application behavior afterward.
+  red_flags:
+    - Applying immediately because the provider upgrade is described as routine.
+    - Treating a successful plan as proof that data is backed up or recoverable.
+    - Using `-target` to hide the replacement without understanding dependencies.
+    - Restoring old state as though it reverses an already completed cloud replacement.
+
+- id: tf-scn-002
+  title: Two CI jobs collide while applying the same remote state
+  technologies: [terraform, cicd]
+  difficulty: advanced
+  prompt: |
+    Two pull requests merge close together. Separate CI jobs initialize the same backend key,
+    both plan from the same state serial, and then one apply reports a lock error while the other
+    completes. An engineer sees the lock and proposes `terraform force-unlock` so the queued job
+    can continue. It is unclear whether the first job is still running, and the remote plan
+    artifacts are available to both workflows.
+  approach: |
+    Pause new applies and determine the state backend, lock owner, lock ID, active CI run and
+    whether the successful job completed its state write. Do not force-unlock until the owner is
+    confirmed inactive; unlocking a live apply risks concurrent state writes. Confirm the lock
+    mechanism is configured for every client, and inspect CI logs and state version/serial without
+    exposing state contents unnecessarily. A saved plan may be stale after the first apply; do
+    not apply it merely because it was previously approved.
+
+    Once no writer is active, acquire the normal workflow lock, inspect a fresh full plan for the
+    intended commit against current state, and require review of changed actions. Add CI
+    concurrency serialization keyed by backend/root/environment and retain backend locking as an
+    independent guard. Restrict plan artifact access and bind each artifact to its commit and
+    state target. Document the recovery procedure and monitor for partial apply effects. The
+    objective is one authoritative writer and a current plan, not just clearing the visible lock.
+  red_flags:
+    - Running `terraform force-unlock` without verifying the lock owner stopped.
+    - Applying an old saved plan after state has advanced.
+    - Disabling backend locking to make CI stop waiting.
+    - Assuming CI job serialization replaces backend locking for manual runs.
+
+- id: tf-scn-003
+  title: Adopt a manually created network without recreating it
+  technologies: [terraform]
+  difficulty: intermediate
+  prompt: |
+    A team has a production VPC created manually two years ago. New Terraform configuration
+    declares a VPC and several subnets with names that look similar, but the first plan proposes
+    creating all of them. Another root may already read the VPC ID through a data source. The
+    team wants Terraform ownership without downtime or duplicate networks, and the existing
+    route tables and security boundaries are incompletely documented.
+  approach: |
+    First identify the true remote IDs, account, region and current ownership. Inspect all state
+    files, repository references and existing automation to ensure no other state manages the
+    VPC or subnets. The data source in another root may be a consumer rather than an owner; map
+    the dependency and agree on a handoff. Inventory routes, gateways, CIDRs, tags, security
+    groups and dependent services using cloud APIs and audit records.
+
+    Write resource declarations that accurately represent existing settings, then add declarative
+    import blocks using the provider's documented IDs. Plan and review every import and any
+    follow-on update. Do not apply configuration that would create a second VPC. Consider
+    importing one layer at a time with a protected state backup, locking and explicit owner
+    coordination. Update consumers to a published interface or controlled state output only
+    after ownership is clear. Run a full plan after adoption and verify there is no unintended
+    replacement. Record the resulting state owner, backend key and recovery procedure.
+  red_flags:
+    - Applying the initial create plan because the new resource names look similar.
+    - Importing into a second state while another root still manages the same objects.
+    - Assuming import automatically discovers all remote settings and dependencies.
+    - Deleting the production network as a way to make the Terraform plan consistent.
+
+- id: tf-scn-004
+  title: A secret is redacted in logs but exposed in state
+  technologies: [terraform, cicd]
+  difficulty: advanced
+  prompt: |
+    A Terraform module accepts a database password marked `sensitive = true`. The CLI output
+    appears redacted, but a security review finds the password in a downloaded state snapshot and
+    a saved plan artifact retained by CI for months. A developer stored the value in a checked-in
+    environment tfvars file. The database is live, and access logs for the artifacts are incomplete.
+  approach: |
+    Treat the value as exposed. Rotate the database credential and update the consumer safely,
+    then revoke or expire the old credential. Remove the secret from the current repository and
+    assess history, forks, backups, state versions, plans, logs and artifact access; deleting a
+    file does not erase prior copies. Restrict and shorten artifact retention, secure state reads,
+    enable audit and encryption, and review who accessed the exposed files. Avoid placing raw
+    values in incident tickets or further CI output.
+
+    Redesign delivery: use a secret manager and short-lived identity, ideally letting the runtime
+    retrieve the password instead of passing it through Terraform. If Terraform must handle it,
+    use an approved secret input channel and verify the exact provider/Terraform behavior for
+    persistence. `sensitive` is output redaction, not encryption or removal from state. Remove
+    secrets from tracked tfvars and add scanning/pre-commit controls. Test state and plan access
+    paths, update incident procedures, and document residual exposure with security owners.
+  red_flags:
+    - Saying the value is safe because Terraform printed only `(sensitive value)`.
+    - Merely deleting the Git file without rotating the password.
+    - Uploading the state and plan to a public issue for investigation.
+    - Granting everyone state read access to simplify credential rotation.
+
+- id: tf-scn-005
+  title: for_each key changes threaten to replace a fleet
+  technologies: [terraform]
+  difficulty: intermediate
+  prompt: |
+    A module manages 40 storage buckets using `for_each` keys derived from a team's display names.
+    A naming cleanup changes capitalization and punctuation, and the plan shows 40 destroys plus
+    40 creates. Several buckets have retention requirements and external consumers. The author
+    says the cloud names will be unchanged after normalization and proposes applying to fix the
+    addresses.
+  approach: |
+    Stop the apply. Terraform state addresses use the `for_each` keys, so a key rename is an
+    identity change even if the remote bucket name normalizes to the same string. Inspect the
+    full plan, current state addresses, actual bucket IDs and provider lifecycle behavior. Check
+    for data retention and object locks, cross-account references, DNS/config consumers and
+    constraints on duplicate names. The plan may be destructive and cloud APIs may not permit a
+    second object with the same name.
+
+    Replace display-name keys with stable semantic identifiers that survive presentation edits.
+    Add a `moved` block mapping each old address to its new key, or perform a carefully reviewed
+    state move for the exact instances. Plan again and confirm Terraform proposes address moves
+    or no-op updates rather than deletion and recreation. Ensure values and object IDs still map
+    correctly, then test the refactor on a non-production copy. Add validation that keys are
+    unique and document their state identity. Renaming keys should be handled like a state
+    migration, not as a harmless cosmetic cleanup.
+  red_flags:
+    - Applying all replacements because the remote names appear unchanged.
+    - Assuming `for_each` key order or capitalization has no state significance.
+    - Using `-target` on an arbitrary subset without checking dependent resources.
+    - Ignoring retention policy and external consumers of the buckets.
+
+- id: tf-scn-006
+  title: Choose an infrastructure-as-code tool for a multi-team platform
+  technologies: [terraform, cicd, kubernetes, ansible]
+  difficulty: advanced
+  prompt: |
+    A platform organization currently uses Terraform for cloud foundations, Kubernetes manifests
+    for in-cluster workloads, and Ansible for some guest configuration. Teams propose adopting
+    OpenTofu for licensing reasons, Pulumi for application teams that prefer TypeScript, and a
+    cloud CDK for a new account factory. Several tools may touch IAM, clusters and networking.
+    Leaders ask for one standard before the next quarter, but there is no inventory of resource
+    ownership or state migration constraints.
+  approach: |
+    Begin with inventory rather than a tool vote. Map each resource and managed field to one
+    authoritative owner, state/backend, team, credential and lifecycle. Identify duplicated
+    ownership, shared state dependencies, provider coverage, policy requirements, developer
+    skills, deployment approvals and support obligations. Keep Kubernetes controllers responsible
+    for their intended in-cluster objects and decide explicitly where Terraform or another tool
+    provisions cluster-level infrastructure. Ansible can remain for guest configuration if that
+    boundary is deliberate.
+
+    Compare Terraform, OpenTofu, Pulumi and the CDK against these operational criteria, including
+    provider/module compatibility, state interoperability, licensing, lock and policy workflow,
+    testing and recovery. Run a representative pilot that imports or reads real-like resources,
+    produces a reviewed plan, tests identity and verifies rollback/recovery; do not use a toy
+    example alone. Avoid two tools writing the same object. If multiple tools are adopted, define
+    integration contracts and ownership tags. Phase migration root by root, preserve state
+    backups, and document a rollback path before production changes.
+  red_flags:
+    - Choosing solely on language preference or a short hello-world demonstration.
+    - Running two IaC tools against the same state or remote resource without a migration plan.
+    - Assuming similarly named commands guarantee state and provider compatibility.
+    - Rewriting all platform code before mapping ownership and recovery requirements.

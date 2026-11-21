@@ -1,0 +1,86 @@
+concepts:
+  - title: Reconciliation
+    detail: Controllers compare desired spec with observed status and repeatedly converge the system; API acceptance is not workload readiness.
+  - title: Pod as scheduling unit
+    detail: Containers in a Pod share network identity and can share volumes; Pods themselves are replaceable.
+  - title: Controller ownership
+    detail: Change the Deployment or StatefulSet template, not an ephemeral Pod managed by it.
+  - title: Deployment and ReplicaSet
+    detail: Deployments manage interchangeable replicas and template rollouts through ReplicaSets.
+  - title: Stateful identity
+    detail: StatefulSets provide ordinal identities and claim association, not database replication or backups.
+  - title: Service endpoints
+    detail: Services give stable access to label-selected Pods; inspect EndpointSlices when traffic has no backends.
+  - title: DNS scope
+    detail: Service names resolve through cluster DNS; cross-namespace clients need a qualified name.
+  - title: Gateway API model
+    detail: GatewayClass selects the controller, Gateway defines listeners, and HTTPRoute maps requests to backends.
+  - title: ConfigMap lifecycle
+    detail: Mounted values can update eventually; environment variables are fixed when a container starts.
+  - title: Secret encoding
+    detail: Base64 is not encryption; restrict Secret access and protect etcd, backups and delivery workflows.
+  - title: Requests vs limits
+    detail: Requests affect scheduling; CPU limits throttle, while memory limits can trigger OOM kills.
+  - title: QoS classes
+    detail: Guaranteed, Burstable and BestEffort summarize request/limit configuration, not immunity from eviction.
+  - title: Probe semantics
+    detail: Readiness gates normal traffic, liveness restarts, and startup delays the other probes during initialization.
+  - title: Taint/toleration
+    detail: Taints repel Pods; tolerations permit placement but do not attract Pods to a node.
+  - title: Topology spread
+    detail: Spread constraints balance matching Pods across node or zone domains; hard spread can block scheduling.
+  - title: PVC storage lifecycle
+    detail: A PVC requests storage; StorageClass, CSI implementation, topology and reclaim policy determine behavior.
+traps:
+  - A successful apply means Pods are ready and serving traffic.
+  - A Service object necessarily has healthy endpoints.
+  - Secret base64 data is confidential or encrypted at rest by default.
+  - A toleration schedules a Pod onto a particular node.
+  - QoS Guaranteed means a Pod cannot be OOM-killed or evicted.
+  - A PDB protects against node crashes, every deletion path and bad rollouts.
+advanced:
+  - Treat admission policies and webhooks as API-write-path dependencies; stage enforcement and retain a rollback plan.
+  - Account for restartable sidecars overlapping init phases when sizing effective Pod requests.
+  - Test the joint effect of node affinity, topology spread, PVC zones, rollout surge and autoscaling.
+  - Use least-privilege RBAC and remember Pod-creation access may expose namespace Secrets.
+  - Measure resource use and throttling; CPU requests and limits have different scheduling and runtime semantics.
+  - Define storage RPO/RTO and practice restores; PV persistence alone does not provide backup or replication.
+comparisons:
+  - a: Deployment
+    b: StatefulSet
+    difference: Deployment replicas are interchangeable; StatefulSet Pods have stable ordinals and can retain per-identity claims.
+  - a: ClusterIP Service
+    b: Ingress or Gateway
+    difference: A Service gives a stable in-cluster backend endpoint; Ingress/Gateway configures external or shared L7 routing through a controller.
+  - a: readiness probe
+    b: liveness probe
+    difference: Readiness affects traffic eligibility; liveness failure restarts the container after thresholds.
+  - a: request
+    b: limit
+    difference: Requests guide scheduling and resource accounting; limits constrain runtime use with CPU throttling or memory OOM behavior.
+  - a: taint
+    b: node affinity
+    difference: Taints repel Pods unless tolerated; affinity selects or prefers nodes based on labels.
+  - a: HPA
+    b: node autoscaler
+    difference: HPA changes Pod replica count; node autoscaling changes available machine capacity.
+  - a: Ingress
+    b: Gateway API
+    difference: Ingress is a narrower HTTP routing API; Gateway API separates infrastructure and route roles with extensible resources.
+commands:
+  - label: Inspect workloads and node placement
+    code: kubectl get deploy,rs,pods -n apps -o wide
+  - label: Read Pod events and conditions
+    code: kubectl describe pod <pod-name> -n apps
+  - label: Read the previous crashed container's logs
+    code: kubectl logs <pod-name> -c <container> -n apps --previous
+  - label: Inspect Service backends
+    code: kubectl get endpointslice -l kubernetes.io/service-name=<service> -n apps
+  - label: Check rollout completion
+    code: kubectl rollout status deployment/<name> -n apps
+  - label: Check resource metrics when Metrics API exists
+    code: kubectl top pod -n apps --containers
+  - label: Check current identity authorization
+    code: kubectl auth can-i get secrets -n apps
+  - label: Find recent namespace events
+    code: kubectl get events -n apps --sort-by=.metadata.creationTimestamp

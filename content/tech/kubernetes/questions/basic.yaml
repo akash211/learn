@@ -1,0 +1,239 @@
+- id: k8s-basic-001
+  topic: architecture
+  difficulty: beginner
+  question: What does Kubernetes do, and what is its main control-loop idea?
+  answer: |
+    Kubernetes is a platform API and set of controllers for running workloads across a group of machines. You declare desired state, such as three replicas of a container image, and controllers continually compare that request with what is currently observed. They create, replace or update objects to reduce the difference. If a process exits, kubelet can restart its container; if a Pod disappears, a workload controller may create a replacement. This is reconciliation, not a one-time deployment script.
+
+    The model does not guarantee that an application is correct or that capacity exists. A Deployment can keep creating Pods that fail their health check, and the scheduler cannot place Pods when no node satisfies their constraints. Kubernetes automates lifecycle mechanics; operators still define health, data recovery, capacity, security and safe rollout behavior.
+  tags: [control-plane, reconciliation]
+
+- id: k8s-basic-002
+  topic: architecture
+  difficulty: beginner
+  question: What are the core control-plane components responsible for?
+  answer: |
+    The API server validates and exposes Kubernetes objects. etcd stores cluster state. The scheduler assigns newly created, unbound Pods to eligible nodes, while controller processes reconcile higher-level objects such as Deployments, nodes and endpoints. In managed clusters, a provider usually operates these control-plane components, but add-ons and application resources remain the user's responsibility.
+
+    On each worker, kubelet watches Pods assigned to that node, starts containers through a CRI-compatible runtime, mounts volumes and reports status. The runtime executes OCI containers; the CNI plugin provides Pod networking. These are distinct responsibilities, so knowing the failing component narrows debugging. An API outage may stop new operations while some existing containers continue running, but it does not make the application highly available or preserve its data automatically.
+  tags: [api-server, scheduler, kubelet]
+
+- id: k8s-basic-003
+  topic: pods
+  difficulty: beginner
+  question: What is a Pod, and why is it the smallest scheduling unit?
+  answer: |
+    A Pod is a wrapper around one or more containers that share a network identity, including a Pod IP, and can share mounted volumes. Containers in the same Pod can communicate through localhost. The scheduler places the Pod as one unit, so its containers share a node and lifecycle boundary. This fits a main process plus a tightly coupled helper that must be co-located.
+
+    A Pod is not the same as a container and is not normally the durable object an operator manages. Its IP and name can change when it is replaced, and deleting a bare Pod does not preserve desired replicas. Controllers such as Deployments and StatefulSets create Pods from templates. Put independently scalable components in separate Pods and connect them with a Service rather than grouping an entire application into one Pod.
+  tags: [pod, containers, lifecycle]
+
+- id: k8s-basic-004
+  topic: deployments
+  difficulty: beginner
+  question: How does a Deployment keep replicas running and roll out a new version?
+  answer: |
+    A Deployment describes a Pod template and replica target. Its controller creates a ReplicaSet, which maintains the requested number of matching Pods. When the template changes, the Deployment creates a new ReplicaSet and scales old and new sets according to its rollout strategy. This allows controlled replacement and provides rollout history for template revisions.
+
+    A Deployment does not guarantee application availability by itself. Readiness probes determine whether Pods should receive normal Service traffic, and rollout settings such as `maxUnavailable` and `maxSurge` define temporary capacity trade-offs. A bad image or failing readiness check can stall the rollout. Rollback restores an earlier Pod template, but cannot reverse an incompatible database migration or external side effect. Observe `kubectl rollout status` and inspect ReplicaSets and Events.
+  tags: [deployment, replicas, rollout]
+
+- id: k8s-basic-005
+  topic: workload-controllers
+  difficulty: beginner
+  question: When would you choose StatefulSet rather than Deployment?
+  answer: |
+    Choose a StatefulSet when replicas need stable ordinal identity, stable network names, or a persistent volume claim associated with each replica. Pods commonly have names like `db-0` and `db-1`, and a headless Service can provide per-Pod DNS records. This is useful for systems whose members have identity or data ownership requirements.
+
+    A StatefulSet is not a database operator: it does not implement quorum, replication, backups, leader election or safe schema migration. It supplies identity and lifecycle primitives, while the application or an operator must manage data consistency. Claims may outlive the StatefulSet, so deletion and scale-down require a retention plan. Use a Deployment for interchangeable replicas that can be replaced with new identities; do not choose StatefulSet merely because a workload writes files.
+  tags: [statefulset, persistent-storage]
+
+- id: k8s-basic-006
+  topic: workload-controllers
+  difficulty: beginner
+  question: What is a DaemonSet used for?
+  answer: |
+    A DaemonSet aims to run a Pod on every eligible node, or on the subset selected by its scheduling rules. When a matching node is added, the controller creates its Pod; when the node is removed, the associated Pod is removed. Common uses include node-level log collectors, network components, storage agents and monitoring agents.
+
+    It is not a fixed replica-count controller like a Deployment. The number of Pods follows node eligibility, so changes to node labels, taints or selectors affect rollout coverage. DaemonSet Pods can require host access or elevated permissions, which makes them sensitive infrastructure. Scope host mounts and capabilities narrowly, and verify update strategy and readiness before replacing agents across all nodes. Plan resource requests and rollout behavior for node replacement.
+  tags: [daemonset, node-agents]
+
+- id: k8s-basic-007
+  topic: services
+  difficulty: beginner
+  question: Why use a Service instead of connecting directly to Pod IP addresses?
+  answer: |
+    Pod addresses are not stable: a controller may replace a Pod after a crash, rollout or node failure, and the replacement can have a different IP. A Service provides a stable virtual endpoint and selects matching Pods through labels. EndpointSlices track the current backends, and cluster networking directs Service traffic to eligible endpoints.
+
+    The Service decouples clients from replica count and Pod replacement. Its selector must match the intended labels; a Service object can exist while having no endpoints. Check both with `kubectl get service` and `kubectl get endpointslice`. A Service does not verify application correctness, authenticate clients or guarantee that every backend is healthy beyond configured readiness semantics. Use `ClusterIP` for internal access and choose an external exposure mechanism deliberately.
+  tags: [service, endpoints, discovery]
+
+- id: k8s-basic-008
+  topic: networking
+  difficulty: beginner
+  question: What is the difference between Ingress and Gateway API?
+  answer: |
+    Ingress is a Kubernetes API for HTTP and HTTPS routing rules. It requires an Ingress controller, which watches the object and configures a proxy or cloud load balancer. The Ingress resource alone does not implement traffic handling, and controller-specific annotations often determine behavior beyond the portable API.
+
+    Gateway API is a newer, role-oriented set of resources: GatewayClass identifies an implementation, Gateway defines listeners, and routes such as HTTPRoute define traffic rules and backends. It supports richer portable routing patterns, but its CRDs and controller must be installed and implementation support varies. Neither API is an automatic substitute for a Service; route backends typically reference Services. Check controller status and support docs instead of assuming the cluster has a controller installed.
+  tags: [ingress, gateway-api, routing]
+
+- id: k8s-basic-009
+  topic: dns
+  difficulty: beginner
+  question: How do Pods normally find a Service by name?
+  answer: |
+    A cluster DNS service, commonly CoreDNS, publishes records for Services. Pods can usually resolve a same-namespace Service by its short name. A client in another namespace can use a qualified name such as `api.payments` or `api.payments.svc.cluster.local`; the cluster domain can vary. DNS gives a name-to-address mapping, not permission to connect.
+
+    Troubleshoot in layers: verify the Service and its selector, inspect EndpointSlices, then test name resolution from a suitable Pod and check its resolver configuration. If the name resolves but a connection fails, investigate ports, network policies, endpoints and application listeners. `localhost` refers to the current Pod network namespace, not another Service. DNS success at one moment also does not prove the target application is healthy or reachable through ingress. Check client search paths and resolver errors too.
+  tags: [coredns, service-discovery]
+
+- id: k8s-basic-010
+  topic: configuration
+  difficulty: beginner
+  question: When should a ConfigMap be used, and how does a change reach a Pod?
+  answer: |
+    A ConfigMap stores non-confidential configuration separately from an image. A Pod can consume its keys as environment variables or mount values as files. This lets one artifact run with different environment settings and keeps configuration reviewable. ConfigMaps are namespaced, so the Pod must reference an object in its own namespace.
+
+    Mounted volumes are updated eventually, but an application must reload the file to use the new contents. A ConfigMap consumed as environment variables does not update inside an already running process when the object changes; restart or roll out the Pod. `subPath` mounts do not refresh like ordinary projected mounts. Configuration updates need a release and reload plan, and should not contain credentials; use a Secret or external secret mechanism for confidential values.
+  tags: [configmap, rollout]
+
+- id: k8s-basic-011
+  topic: secrets
+  difficulty: beginner
+  question: Are Kubernetes Secrets encrypted, and what controls protect them?
+  answer: |
+    A Kubernetes Secret is an API object intended for confidential data, but base64 encoding in its YAML is only an encoding and is not encryption. Data stored in etcd may require explicit encryption-at-rest configuration unless the managed provider supplies it. Restrict RBAC access to Secrets, protect backups, audit reads where possible, and avoid committing live values into source control.
+
+    A user who can create arbitrary Pods in a namespace may often arrange to expose Secrets from that namespace, even without direct Secret listing permission. Therefore, Pod creation is itself a sensitive permission. Prefer a secret manager or controlled encrypted delivery workflow, rotate credentials, and avoid logging environment values. Secret volumes and environment references also require an application reload or restart strategy when credentials rotate.
+  tags: [secrets, rbac, encryption]
+
+- id: k8s-basic-012
+  topic: resources
+  difficulty: beginner
+  question: How do CPU and memory requests differ from limits?
+  answer: |
+    A request is primarily a scheduling and resource-accounting value. The scheduler places a Pod only where its requests fit within node allocatable resources. A container may use more than its CPU request when spare capacity exists. A limit is an enforcement boundary: CPU limits cause throttling, while memory limits can lead to an out-of-memory kill when the kernel encounters pressure.
+
+    Requests should reflect measured needs and expected load, not idle usage alone. Low requests can make scheduling appear efficient but increase contention and eviction risk; excessive requests strand capacity and can make Pods Pending. Limits are not guaranteed safe ceilings for the application: a too-low CPU limit harms latency and a too-low memory limit causes restarts. Include sidecars, initialization behavior and runtime overhead in sizing.
+  tags: [requests, limits, scheduling]
+
+- id: k8s-basic-013
+  topic: resources
+  difficulty: beginner
+  question: What are the Kubernetes QoS classes?
+  answer: |
+    Kubernetes assigns each Pod one of three QoS classes based on CPU and memory requests and limits: Guaranteed, Burstable or BestEffort. Guaranteed requires every container to have positive CPU and memory requests and limits, with request equal to limit for each resource. BestEffort has no CPU or memory request or limit. Other cases are Burstable.
+
+    QoS gives a useful pressure-risk signal but is not a promise that a Pod cannot be terminated. Kubelet eviction decisions also consider whether usage exceeds requests, Pod priority and relative usage; a container can be killed for exceeding its own memory limit. Node-pressure eviction is distinct from API eviction and does not honor a PDB. Inspect actual QoS with Pod status rather than inferring from the Deployment manifest, because admission defaults can change resource values.
+  tags: [qos, eviction, requests]
+
+- id: k8s-basic-014
+  topic: probes
+  difficulty: beginner
+  question: Explain readiness, liveness and startup probes.
+  answer: |
+    A readiness probe asks whether a Pod should receive normal Service traffic. If it fails, the Pod is removed from ready endpoints but the container is not restarted. A liveness probe asks whether kubelet should restart a container; repeated failure triggers a restart. A startup probe allows slow-starting applications time to initialize before liveness and readiness checks begin.
+
+    These probes should represent different conditions. A liveness check that depends on a database can cause every replica to restart during a database outage, amplifying the incident. Readiness may include dependency checks but must avoid removing all capacity for a transient shared failure. Use short timeouts and realistic thresholds, and make the check cheap. Probe success does not prove the complete external traffic path is working.
+  tags: [readiness, liveness, startup]
+
+- id: k8s-basic-015
+  topic: scheduling
+  difficulty: beginner
+  question: What do node selectors, affinity and tolerations do?
+  answer: |
+    A `nodeSelector` is a hard requirement that a node have specified labels. Node affinity expresses hard required rules or soft preferences. Pod affinity attracts Pods near other matching Pods, while anti-affinity discourages or forbids co-location using topology domains such as hostnames or zones. These rules affect which nodes are feasible or preferred.
+
+    A toleration does not select a node; it allows a Pod to run despite a matching taint. Combine a toleration with a selector or affinity when a workload should use a dedicated pool. Hard placement rules can leave Pods Pending during node or zone failures, while preferences allow flexibility. Inspect actual node labels, taints and scheduler Events before adding constraints, and protect sensitive labels from unauthorized changes. Review placement after node-pool or topology changes.
+  tags: [affinity, taints, scheduling]
+
+- id: k8s-basic-016
+  topic: topology
+  difficulty: intermediate
+  question: What does a topology spread constraint accomplish?
+  answer: |
+    A topology spread constraint guides the scheduler to distribute matching Pods across failure domains such as zones or nodes. It uses a label selector to decide which Pods count, a topology key to define domains, and `maxSkew` to set how uneven the distribution may be. `DoNotSchedule` makes the constraint hard; `ScheduleAnyway` prefers balanced placement while allowing scheduling when balance is impossible.
+
+    Spread improves resilience only when enough eligible domains and capacity exist. A hard rule can make a new replica Pending during a zone outage or rollout surge. Multiple constraints combine, so each must be satisfied. The selector must match the intended workload; a selector that excludes existing replicas can produce surprising placement. Use labels actually present on nodes and decide whether domain availability or strict balance matters more during failure.
+  tags: [topology, availability, scheduling]
+
+- id: k8s-basic-017
+  topic: storage
+  difficulty: beginner
+  question: How do a PV, PVC and StorageClass relate?
+  answer: |
+    A PersistentVolume represents storage available to the cluster. A PersistentVolumeClaim is a namespaced request for capacity and access characteristics. A Pod references the claim, while a StorageClass describes how a provisioner can create storage dynamically. A CSI driver commonly implements the backend-specific provision, attach and mount operations.
+
+    A claim can remain Pending if the class is missing, the driver cannot provision the request, or topology and access requirements cannot be satisfied. StorageClass names and behavior are cluster-specific. Access modes describe mount behavior, not application-level write safety. A PV reclaim policy may delete or retain the backing volume when a claim is released; inspect it before deleting claims. Persistent storage is not a backup, so test application-consistent restores and document recovery ownership.
+  tags: [pvc, pv, csi]
+
+- id: k8s-basic-018
+  topic: storage
+  difficulty: intermediate
+  question: Does a StatefulSet provide durable and highly available data?
+  answer: |
+    A StatefulSet provides stable Pod ordinals and can associate each ordinal with its own PVC through a volume claim template. If a Pod is recreated, the controller can reconnect its identity to the corresponding claim. The actual data durability depends on the storage backend, reclaim policy, topology and failure domain. A single persistent disk does not become replicated merely because it is used by a StatefulSet.
+
+    StatefulSet also does not implement a database's quorum, leader election, replication, backup or recovery protocol. The application or a database operator must provide those semantics. Plan what happens on scale-down and deletion, because claims may remain after the controller is removed. Define backups and restore tests, monitor storage health, and check compatibility between old and new application versions during rolling upgrades.
+  tags: [statefulset, recovery, storage]
+
+- id: k8s-basic-019
+  topic: autoscaling
+  difficulty: intermediate
+  question: How does an HPA decide how many replicas to run?
+  answer: |
+    The Horizontal Pod Autoscaler periodically reads metrics and adjusts a target's scale, commonly a Deployment or StatefulSet. A CPU utilization target is measured relative to CPU requests, so missing or inaccurate requests make the signal ineffective or misleading. HPA depends on a metrics source such as metrics-server for resource metrics or an adapter for custom and external metrics.
+
+    Autoscaling is a feedback loop, not an instant response guarantee. Metric delay, startup time, readiness, stabilization and scale policies affect timing. Set minimum replicas for availability and maximum replicas based on downstream capacity and cost. A queue-depth or concurrency metric may track demand better than CPU, but its meaning and error handling must be clear. Check HPA conditions and events when scaling stalls rather than only raising `maxReplicas`.
+  tags: [hpa, metrics, scaling]
+
+- id: k8s-basic-020
+  topic: disruption
+  difficulty: intermediate
+  question: What does a PodDisruptionBudget protect against?
+  answer: |
+    A PodDisruptionBudget sets a minimum available count or maximum unavailable count for selected Pods during certain voluntary disruptions using the Kubernetes Eviction API. It can protect application availability during actions such as a node drain when evictions are honored. Its selector must match exactly the workload replicas intended to be protected, and allowed disruptions show current headroom.
+
+    A PDB does not prevent node crashes, every form of direct deletion, kubelet node-pressure eviction or a bad rollout. It does not create spare replicas; a strict budget can block maintenance if the application is already unhealthy. Deployment rolling updates and PDBs govern different paths. Coordinate replica count, readiness, rollout strategy and drain capacity, and inspect PDB status before maintenance. Document the drain procedure and test it before a planned upgrade.
+  tags: [pdb, maintenance, availability]
+
+- id: k8s-basic-021
+  topic: debugging
+  difficulty: beginner
+  question: What is the first workflow for a Pod stuck in Pending?
+  answer: |
+    Start with `kubectl describe pod <name> -n <namespace>` and read recent Events. `FailedScheduling` messages may identify insufficient requested CPU or memory, unmatched node selectors, taints without tolerations, topology constraints, quota or volume binding problems. Then compare the Pod's actual admitted spec with node labels, allocatable resources, taints and PVC status.
+
+    Pending is a broad phase, not a diagnosis; it can also include image pulling or storage preparation after scheduling. Check `kubectl get pod -o wide`, `kubectl get nodes`, PVCs and namespace quotas. Repeatedly deleting the Pod does not fix an unsatisfied constraint and can erase useful context. If an autoscaler is installed, confirm the Pod constraints match a pool it can provision and that provider quota and availability permit that capacity.
+  tags: [pending, events, scheduler]
+
+- id: k8s-basic-022
+  topic: debugging
+  difficulty: beginner
+  question: What does CrashLoopBackOff mean, and how do you investigate it?
+  answer: |
+    `CrashLoopBackOff` is a restart backoff state after a container exits repeatedly. It is a symptom, not a root cause. Inspect `kubectl describe pod` for exit reason, probe failures and Events, then read current and prior logs with `kubectl logs <pod> -c <container> --previous`. Check command and arguments, mounted configuration, permissions, dependencies and resource limits.
+
+    An OOM kill, application exception, bad secret, missing file or overly aggressive liveness probe can all produce repeated restarts. Identify the last termination reason and timing before changing the workload. Restarting or deleting the Pod may briefly hide the failure while losing useful evidence. Once a cause is found, update the controller's template or configuration source rather than patching an ephemeral Pod. Compare termination timestamps with rollout and node events to find correlations.
+  tags: [crashloop, logs, diagnosis]
+
+- id: k8s-basic-023
+  topic: security
+  difficulty: intermediate
+  question: What is the role of RBAC in a Kubernetes cluster?
+  answer: |
+    Role-Based Access Control authorizes API operations for authenticated identities. A Role defines permissions in one namespace; a ClusterRole can define permissions usable cluster-wide or bound in a namespace. RoleBindings and ClusterRoleBindings attach those permissions to users, groups or service accounts. RBAC is additive, so access results from all applicable bindings and there are no deny rules.
+
+    Use least privilege: grant only required verbs and resources, prefer namespace roles, and avoid routine `cluster-admin`. Secret reads are sensitive, and permission to create Pods can also expose namespace Secrets by mounting them. Use dedicated service accounts and inspect effective access with `kubectl auth can-i`. RBAC does not secure network traffic or isolate workloads from the shared node kernel; pair it with admission policy and network controls.
+  tags: [rbac, least-privilege, service-account]
+
+- id: k8s-basic-024
+  topic: security
+  difficulty: intermediate
+  question: How does NetworkPolicy help secure workload traffic?
+  answer: |
+    NetworkPolicy expresses allowed ingress and egress for selected Pods, often using namespace and Pod selectors, ports and protocol. A common approach is default-deny followed by explicit rules for required application paths, DNS and monitoring. This can reduce lateral movement and make communication intent reviewable.
+
+    Policy objects only have an effect when the installed CNI enforces NetworkPolicy. Semantics and supported features should be checked for that implementation. Policies are additive, and selector scope can be confusing; a rule that blocks DNS may look like a service-discovery failure. NetworkPolicy controls network reachability, not identity authentication, encryption or authorization inside an application. Test policies in a non-production namespace and verify both allowed and denied flows before broad rollout. Record the owning team and emergency review path.
+  tags: [network-policy, cni, security]

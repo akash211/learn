@@ -1,0 +1,98 @@
+slug: timescaledb
+title: TimescaleDB
+category: databases
+summary: A PostgreSQL extension for time-series workloads that adds hypertables, chunk management, compression, continuous aggregates, and lifecycle policies.
+level: core
+relations:
+  - to: postgresql
+    type: foundation
+    note: TimescaleDB runs inside PostgreSQL and builds on its SQL, transactions, indexes, WAL, backups, and operations.
+  - to: sql
+    type: uses
+    note: Hypertables and analytics are queried with PostgreSQL SQL plus TimescaleDB functions such as time_bucket.
+  - to: kafka
+    type: complements
+    note: Kafka can buffer or distribute event streams before consumers batch writes into TimescaleDB; it is not a replacement for durable database storage.
+intro:
+  what: |
+    TimescaleDB is a PostgreSQL extension for time-series and event workloads. It is not a separate database server or an alternative SQL engine: it uses PostgreSQL's parser, transactions, WAL, roles, planner, drivers, and operational tools. You connect to PostgreSQL and use ordinary tables, constraints, indexes, and SQL, with TimescaleDB adding hypertables, time-oriented chunk management, compression or columnar storage features, continuous aggregates, and lifecycle policies. The core design lets an application retain the familiar relational model while making very large time-partitioned datasets easier to ingest and query.
+
+    A hypertable is a logical relation whose data is divided into physical chunks. The extension routes inserts to chunks and can prune chunks for time-bounded queries. Features and exact syntax have evolved across TimescaleDB releases, especially compression terminology and support for particular PostgreSQL versions, so verify the installed extension version and current documentation before relying on a feature.
+  why: |
+    Time-series tables grow continuously, are usually written in event-time order, and are commonly queried over bounded time ranges. A single conventional table can work well for a long time, but retention, indexes, vacuum, and scans become harder as it grows. TimescaleDB automates much of the partition lifecycle and provides database-native rollups and storage policies without requiring every application to manage thousands of tables. It does not eliminate PostgreSQL's resource limits or make every analytics query cheap; operational design and representative benchmarks still matter.
+  problems:
+    - Routing high-volume timestamped inserts into bounded physical chunks.
+    - Pruning irrelevant time ranges during reads and lifecycle maintenance.
+    - Compressing older, mostly immutable measurements while retaining SQL access.
+    - Maintaining derived time-bucket summaries incrementally.
+    - Retaining or tiering data without issuing enormous row-by-row deletes.
+  where_used:
+    - Metrics, observability, IoT telemetry, market data, and device measurements.
+    - Event tables where PostgreSQL joins and transactional semantics remain valuable.
+    - Applications that need recent raw data plus longer-range rollups in one SQL system.
+  ecosystem: |
+    TimescaleDB runs as an extension within PostgreSQL. Applications use standard PostgreSQL drivers and SQL, while the extension supplies functions and policies. Kafka or another stream broker may decouple producers from database ingestion; it complements rather than replaces database durability and query semantics. PostgreSQL expertise remains essential for indexing, connection management, WAL, backups, replication, and upgrades. For wide scans over huge historical datasets, a dedicated columnar warehouse or lakehouse may be a better analytical destination.
+  alternatives:
+    - name: Plain PostgreSQL partitioned tables
+      note: Prefer when native range partitioning and a small amount of custom lifecycle automation meet the workload without extension dependencies.
+    - name: ClickHouse or a columnar warehouse
+      note: Prefer for broad scans and high-concurrency analytical aggregation where columnar execution outweighs relational OLTP integration.
+    - name: Kafka plus stream processor
+      note: Prefer for stateful streaming transformations and event fan-out; retain a database or object store for queryable history.
+  related: [postgresql, sql, kafka]
+chapters:
+  - id: hypertables-chunking
+    title: Hypertables and Chunking
+    file: chapters/01-hypertables-chunking.md
+    minutes: 13
+    level: core
+  - id: time-partitioning-sizing
+    title: Time Partitioning and Chunk Sizing
+    file: chapters/02-time-partitioning-chunk-sizing.md
+    minutes: 13
+    level: core
+  - id: compression-columnar
+    title: Compression, Segments, and Query Implications
+    file: chapters/03-compression-columnar.md
+    minutes: 14
+    level: core
+  - id: continuous-aggregates
+    title: Continuous Aggregates and Refresh Policies
+    file: chapters/04-continuous-aggregates-refresh.md
+    minutes: 14
+    level: core
+  - id: retention-tiering
+    title: Retention Policies and Tiering
+    file: chapters/05-retention-tiering.md
+    minutes: 12
+    level: core
+  - id: indexing-time-series
+    title: Indexing Strategy for Time-Series
+    file: chapters/06-indexing-time-series.md
+    minutes: 14
+    level: core
+  - id: real-time-gap-filling
+    title: Real-Time Aggregation and Gap Filling
+    file: chapters/07-real-time-gap-filling.md
+    minutes: 14
+    level: core
+  - id: ingestion-throughput
+    title: Ingestion Throughput and Upserts
+    file: chapters/08-ingestion-throughput.md
+    minutes: 13
+    level: core
+  - id: downsampling-rollups
+    title: Downsampling and Rollup Query Patterns
+    file: chapters/09-downsampling-rollups.md
+    minutes: 13
+    level: core
+  - id: operations
+    title: Operating TimescaleDB
+    file: chapters/10-operating-timescaledb.md
+    minutes: 15
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

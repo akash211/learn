@@ -1,0 +1,158 @@
+[
+  {
+    "id": "api-recent-001",
+    "topic": "error contracts",
+    "difficulty": "intermediate",
+    "question": "What does RFC 9457 add to HTTP API error responses, and which status value should clients trust?",
+    "answer": "RFC 9457 standardizes a problem-details object, commonly served as `application/problem+json`, so an API can add machine-readable context without redefining HTTP status semantics. Its members include `type`, `title`, `status`, `detail`, and `instance`; APIs may define extensions such as structured validation errors. The actual HTTP response status is authoritative for generic HTTP software. If the optional body `status` member is present, the generator must make it agree with the response status. Clients should branch on stable problem types or documented extension codes, not prose in `detail`. The format does not require exposing internals. Keep stack traces and sensitive values out of public errors, and make unknown extension members safe for clients to ignore. The standard’s purpose is common error structure, not a license to invent new HTTP meanings. Keep the API status line correct for caches, proxies, and generic clients.",
+    "tags": [
+      "error-contracts",
+      "http-api"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "api-recent-002",
+    "topic": "oauth security",
+    "difficulty": "advanced",
+    "question": "How should a new OAuth client choose a flow under current security guidance?",
+    "answer": "For a user-facing public client, use Authorization Code with PKCE and carefully validate redirect handling. A confidential web application can use the authorization-code flow with client authentication as appropriate. A service acting as itself may use Client Credentials when allowed by policy. RFC 9700 (2025) updates OAuth security best current practice and discourages legacy implicit and resource-owner-password flows. OAuth access tokens authorize resource access; OpenID Connect provides an identity layer when sign-in claims are needed. Do not assume the grant name alone secures the integration. Validate tokens at the resource server, restrict audience and scope, protect secrets, and review redirect and refresh-token handling. Flow selection depends on client type and threat model. Reassess refresh-token storage, redirect URI matching, and PKCE verifier handling whenever the client platform changes.",
+    "tags": [
+      "oauth-security",
+      "http-api"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "api-recent-003",
+    "topic": "token validation",
+    "difficulty": "advanced",
+    "question": "Why is decoding a JWT not enough to authenticate an API request?",
+    "answer": "JWT payloads are encoded, not necessarily encrypted. Anyone holding one can often read its claims, and base64url decoding says nothing about authenticity. The resource server must verify a signature using a trusted key and allowed algorithm, then check issuer, audience, expiry and any other required constraints. It must also apply authorization policy; a valid token can still lack permission for a particular order or tenant. Token format and validation rules come from JWT specifications and the issuer/resource-server agreement, not from OAuth alone. Do not fetch arbitrary verification keys from untrusted token headers. Test wrong issuers and audiences, expired tokens, key rotation, malformed signatures, and revoked or disabled principals. The issuer and audience checks bind a token to a trusted authority and intended resource server. Authorization still has to evaluate the requested object and action.",
+    "tags": [
+      "token-validation",
+      "http-api"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "api-recent-004",
+    "topic": "api compatibility",
+    "difficulty": "intermediate",
+    "question": "Why can an apparently additive API schema change still break clients?",
+    "answer": "Adding an optional response field is often compatible, but only if clients tolerate unknown properties. Adding an enum value can break generated code with exhaustive switches or strict decoders. A new default, changed ordering, or a new status code can also change behavior without removing a schema field. Compatibility must be assessed against real SDKs and consumers, not just a syntactic schema-diff rule. Keep error and pagination semantics stable, and use a deliberate deprecation path for fields that need replacement. A CI diff can identify likely risks, but integration tests with representative client versions catch assumptions the schema cannot express. Record actual client behavior before classifying a change as safe. Before shipping, compile and run the consumer SDKs that matter. Compatibility is an operational property of clients in use, not only a theoretical schema relation.",
+    "tags": [
+      "api-compatibility",
+      "http-api"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "api-recent-005",
+    "topic": "retries",
+    "difficulty": "intermediate",
+    "question": "A POST times out after submitting a payment. What should the client do?",
+    "answer": "The timeout does not prove the payment was not created; the server may have committed the charge and lost only the response. The client should not submit a new logical payment blindly. If the API defines an idempotency key, retry the exact operation with the same key and payload so the server can replay or reconcile the original outcome. The server must scope the key, atomically deduplicate concurrent requests, reject same-key/different-payload use, and document retention. Idempotency keys are application behavior rather than a universal guarantee of HTTP POST. If no deduplication or lookup mechanism exists, the client may need operator-assisted reconciliation. Test a dropped response after commit and ensure retries preserve the key. The key must be recorded atomically with operation processing, and concurrent duplicates must converge on one outcome. A new key represents a new logical action.",
+    "tags": [
+      "retries",
+      "http-api"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "api-recent-006",
+    "topic": "http caching",
+    "difficulty": "intermediate",
+    "question": "What happens when a stale cached GET is revalidated with If-None-Match?",
+    "answer": "The client sends the ETag it has in `If-None-Match`. If the selected representation still matches, the server can answer `304 Not Modified` without a body; the cache updates metadata and reuses the stored representation. If it changed, the server returns a full response with the new representation and validator. The ETag is opaque. A 304 is not a standalone copy of the resource, so a client that discarded the body cannot reconstruct it from the response. Use `Cache-Control` to state freshness and revalidation policy, and include `Vary` when request headers select variants. Verify behavior through intermediaries, not just application tests. An ETag should identify the selected representation consistently, including relevant negotiated variants. Caching policy determines whether the response is fresh or must be checked again.",
+    "tags": [
+      "http-caching",
+      "http-api"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "api-recent-007",
+    "topic": "conditional writes",
+    "difficulty": "advanced",
+    "question": "How can If-Match prevent lost updates in an API?",
+    "answer": "A client retrieves a representation with a strong ETag, then sends that tag in `If-Match` on a write. The server applies the change only if the current representation still matches; if not, it returns `412 Precondition Failed`. This is optimistic concurrency control and prevents a stale client from overwriting a newer change silently. The client can fetch the latest representation and reconcile. Weak validators are not suitable where strong comparison is required. A domain conflict unrelated to a failed HTTP precondition may instead use 409. Test two clients editing the same resource concurrently, including a lost response. Document whether clients must supply the precondition and how a missing If-Match is handled. This pattern requires a reliable strong validator and consistent precondition handling. It is especially valuable for editors and workflows where overwriting another user’s changes is unacceptable.",
+    "tags": [
+      "conditional-writes",
+      "http-api"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "api-recent-008",
+    "topic": "rate limiting",
+    "difficulty": "intermediate",
+    "question": "What should a client infer from 429 and Retry-After?",
+    "answer": "RFC 6585 defines 429 Too Many Requests for rate limiting. The response may include `Retry-After` indicating when the client should try again, expressed as a delay or date. The RFC does not define how the server identifies a user or counts requests; policy can be per resource, principal, or service. A client should honor the hint within its own deadline, use bounded backoff with jitter when appropriate, and avoid synchronized immediate retries. The status does not reveal a universal quota or rate-limit algorithm. Document which calls are safe to retry and whether a retry-after value is advisory. Keep SDK and gateway retries from multiplying attempts beyond service capacity. Rate limit policies and field conventions can differ by service. SDKs should cap retries and share a deadline budget instead of assuming every 429 has an identical quota model.",
+    "tags": [
+      "rate-limiting",
+      "http-api"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "api-recent-009",
+    "topic": "api contracts",
+    "difficulty": "intermediate",
+    "question": "What is the difference between an OpenAPI document and a runtime-enforced contract?",
+    "answer": "OpenAPI describes an HTTP API in a language-agnostic form, including paths, operations, schemas, and responses. It can drive docs, generated clients, and validators, but it does not enforce behavior by itself. A document can validate syntactically while the service returns undocumented errors or skips authorization. Runtime checks, integration tests, and compatibility checks are needed to prove conformance. Pin the OpenAPI version and make sure tooling understands the features used; schema support can differ among generators and gateways. Treat published examples as test fixtures and verify headers and status codes as well as body shape. A contract is useful when implementation and clients are continuously checked against it. CI should test generated clients and live responses, not just parse the YAML. Correct documentation is a necessary interface artifact, but not an enforcement mechanism.",
+    "tags": [
+      "api-contracts",
+      "http-api"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "api-recent-010",
+    "topic": "problem details",
+    "difficulty": "intermediate",
+    "question": "How should an API use RFC 9457 extensions for field validation errors?",
+    "answer": "RFC 9457 allows a problem type to define extension members beyond the common fields. A validation problem can use an `errors` array containing stable machine codes and field locations, such as JSON Pointers, while `detail` provides a human-readable explanation. Clients should not parse freeform text, and they should ignore extensions they do not recognize. Use a stable `type` URI for the error class and keep the HTTP status aligned with the status member if present. Avoid echoing sensitive input and keep extension types documented. Deterministic ordering and stable codes make it easier for clients to map errors to controls without depending on localization. Use stable problem types and structured extension fields so clients can recover without parsing translated prose. The public response should help correction, not expose implementation diagnostics.",
+    "tags": [
+      "problem-details",
+      "http-api"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "api-recent-011",
+    "topic": "service resilience",
+    "difficulty": "advanced",
+    "question": "How should an API budget timeouts across multiple downstream calls?",
+    "answer": "Set bounded connect and response timeouts for every downstream call, plus an overall deadline for the caller’s request. Include queue wait and retry delays in the budget; three independent long timeouts can exceed the client’s deadline. Propagate remaining time where safe and stop work when the caller can no longer benefit. A timeout does not cancel a remote side effect reliably, so writes still need idempotency or reconciliation. Track downstream latency and timeouts by dependency and route. Avoid universal timeout numbers: choose budgets from measured latency and service objectives. Test a hung dependency, a slow response body, and a request that times out after a downstream commit. Timeouts should be configured per dependency and operation. Measure queueing and retries as part of total latency, then tune from service objectives rather than arbitrary defaults.",
+    "tags": [
+      "service-resilience",
+      "http-api"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "api-recent-012",
+    "topic": "api architecture",
+    "difficulty": "intermediate",
+    "question": "When does a BFF provide value, and how does it differ from a gateway?",
+    "answer": "A backend-for-frontend is an application service shaped for a specific client, aggregating or adapting data to reduce client complexity and round trips. An API gateway is more often an infrastructure layer for routing, TLS termination, coarse controls, and shared telemetry. They solve different problems and can coexist. A BFF adds operational and failure boundaries, so it needs ownership, explicit downstream deadlines, and an authorization model. A gateway cannot replace domain authorization, and a BFF should not become an unowned duplicate of business rules. Use client-specific composition when it earns its extra hop. Define partial-response behavior and failure handling so the client can tell required data from optional enrichment. Keep product composition in the BFF and transport-wide controls in the gateway where that ownership is clear. Both layers still need telemetry and incident responsibility.",
+    "tags": [
+      "api-architecture",
+      "http-api"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  }
+]

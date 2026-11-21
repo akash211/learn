@@ -1,0 +1,143 @@
+slug: kubernetes
+title: Kubernetes
+category: cloud-infrastructure
+summary: "Declarative orchestration for containerized workloads: scheduling, service discovery, recovery, policy and the operational trade-offs of a shared cluster."
+level: core
+relations:
+  - to: docker
+    type: foundation
+    note: Kubernetes runs OCI images through a container runtime; image construction, signals, health endpoints and resource behavior remain essential at the orchestration layer.
+  - to: linux
+    type: foundation
+    note: Processes, namespaces, cgroups, filesystems, networking and node services are Linux mechanisms that explain container isolation and resource enforcement.
+  - to: terraform
+    type: complements
+    note: Terraform commonly provisions the cluster, network and identity boundaries, while Kubernetes APIs declare the workloads and in-cluster resources.
+  - to: cicd
+    type: uses
+    note: CI/CD builds and verifies immutable images and manifests; delivery systems apply desired state and monitor rollout health.
+intro:
+  what: |
+    Kubernetes is an extensible control system for deploying and operating containerized
+    applications across a pool of machines. Users submit API objects describing desired state:
+    for example, a Deployment requesting three replicas of an image, a Service selecting those
+    Pods, and resource or placement constraints. Controllers continuously compare that desired
+    state with observed state and take actions to reduce the difference. If a process exits, a
+    kubelet can restart its container; if a node disappears, a workload controller can create
+    replacement Pods elsewhere, subject to capacity and policy.
+
+    The API server is the front door to the cluster. The control plane validates and stores
+    objects, schedules new Pods to eligible nodes, and runs controllers that reconcile resources.
+    On each worker node, kubelet and a container runtime turn assigned Pod specifications into
+    running containers. Networking, storage, DNS, ingress, metrics and policy are supplied by
+    cluster components and add-ons; Kubernetes defines APIs and contracts, not one universal
+    implementation for every feature.
+
+    This module follows the operational path from control-plane architecture and workload
+    controllers through networking, configuration, resources, scheduling, storage, autoscaling,
+    observability and upgrades. Examples use real Kubernetes API objects and `kubectl`; exact
+    capabilities depend on Kubernetes version, enabled APIs and the installed implementation.
+  why: |
+    A fleet of containers is difficult to operate by hand. Machines fail, traffic changes, images
+    need replacing, and service endpoints move. Kubernetes provides a shared API and reconciliation
+    model so teams describe outcomes rather than scripting every restart and placement. That model
+    enables repeatable rollouts, self-healing, service discovery and policy across many nodes.
+
+    The abstraction is not a promise that failures disappear. A Deployment can replace a failed
+    Pod, but cannot make an unhealthy application correct, recover data without suitable storage,
+    or create cloud capacity when quotas or infrastructure prevent it. Desired state can also be
+    wrong: a bad rollout or policy is reconciled just as persistently as a good one. Effective use
+    requires understanding the controllers, their limits, and the signals that reveal what they
+    are doing.
+  problems:
+    - Reconcile declared workload state with actual Pods and nodes after failures or changes.
+    - Roll out and roll back application versions without hand-managing each container.
+    - Give changing Pods stable service identities, discovery and traffic policies.
+    - Schedule workloads against capacity, resource requests, placement rules and disruption constraints.
+    - Provide reusable interfaces for configuration, persistent volumes, autoscaling and admission policy.
+  where_used:
+    - Web services and APIs on managed or self-operated clusters.
+    - Batch jobs, scheduled jobs, workers and event-driven application components.
+    - Internal developer platforms that expose guarded workload templates to application teams.
+    - Edge, data and machine-learning workloads where container scheduling and shared APIs fit the operational model.
+    - CI/CD delivery targets, paired with registries, policy systems and infrastructure provisioning.
+  ecosystem: |
+    Kubernetes is the orchestration layer above container images and Linux primitives. The API
+    defines built-in objects and extension points, while controllers and providers implement
+    behavior: a CNI plugin supplies Pod networking, a CSI driver supplies storage, a cloud
+    controller may manage load balancers, and an ingress or Gateway implementation handles
+    external traffic. Managed offerings package and operate much of the control plane, but still
+    expose Kubernetes APIs and provider-specific integrations.
+
+    Docker knowledge transfers to OCI images, entrypoints, signals and cgroup limits; Linux
+    knowledge clarifies what kubelet and the runtime enforce. Terraform typically provisions
+    cluster infrastructure, while CI/CD builds images and delivers manifests or Helm/Kustomize
+    output. Kubernetes itself is not an image builder, a CI system, or a universal cloud API.
+    Choose add-ons by version compatibility, operational ownership, security posture and support
+    lifecycle rather than assuming every cluster has identical behavior.
+  alternatives:
+    - name: Nomad
+      note: A scheduler with a smaller platform surface and support for workloads beyond containers; its ecosystem and Kubernetes API compatibility differ.
+    - name: Amazon ECS
+      note: An AWS-native container orchestrator that can reduce Kubernetes control-plane complexity when AWS-specific integration is preferred.
+    - name: Docker Compose
+      note: Useful for local multi-container development; it is not a multi-node scheduler with Kubernetes' controller and API ecosystem.
+    - name: Virtual machines
+      note: A stronger guest-kernel boundary and a useful unit of deployment where isolation or legacy operating systems matter more than container density.
+related: [docker, linux, terraform, cicd]
+chapters:
+  - id: architecture-control-plane
+    title: Architecture and the Control Plane
+    file: chapters/01-architecture-control-plane.md
+    minutes: 14
+    level: core
+  - id: workload-controllers
+    title: Pods, Deployments, StatefulSets and DaemonSets
+    file: chapters/02-workload-controllers.md
+    minutes: 14
+    level: core
+  - id: services-ingress-dns
+    title: Services, Ingress and DNS
+    file: chapters/03-services-ingress-dns.md
+    minutes: 13
+    level: core
+  - id: configuration-secrets
+    title: Configuration, Secrets and Environment Injection
+    file: chapters/04-configuration-secrets.md
+    minutes: 13
+    level: core
+  - id: resources-qos-eviction
+    title: Resources, QoS and Eviction
+    file: chapters/05-resources-qos-eviction.md
+    minutes: 14
+    level: core
+  - id: scheduling-placement
+    title: Scheduling, Affinity, Taints and Topology
+    file: chapters/06-scheduling-placement.md
+    minutes: 14
+    level: advanced
+  - id: storage-stateful-data
+    title: Storage, Claims and Stateful Data
+    file: chapters/07-storage-stateful-data.md
+    minutes: 13
+    level: core
+  - id: autoscaling-disruption
+    title: Autoscaling and Disruption Budgets
+    file: chapters/08-autoscaling-disruption.md
+    minutes: 14
+    level: advanced
+  - id: observability-debugging
+    title: Observability and Debugging Workloads
+    file: chapters/09-observability-debugging.md
+    minutes: 14
+    level: core
+  - id: operations-security-cost
+    title: Operations, Security, Cost and Multi-Tenancy
+    file: chapters/10-operations-security-cost.md
+    minutes: 15
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

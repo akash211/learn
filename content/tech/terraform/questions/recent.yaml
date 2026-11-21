@@ -1,0 +1,267 @@
+- id: tf-recent-001
+  topic: ephemeral values
+  difficulty: advanced
+  question: How do ephemeral values change secret handling in newer Terraform workflows?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Ephemeral values, introduced in recent Terraform releases, are designed for values that must
+    exist during an operation but should not be persisted in state or saved plans. They can be
+    useful for short-lived credentials or tokens passed to supported contexts. This is distinct
+    from `sensitive = true`, which redacts presentation but does not generally prevent a value
+    from being recorded in state. Ephemeral semantics depend on Terraform version and where the
+    value is used; they do not make every provider argument automatically non-persistent.
+
+    Verify the CLI version, provider schema and resource argument support before designing around
+    ephemeral data. Prefer short-lived workload identity and runtime retrieval where possible.
+    Test plans and state carefully to confirm the secret is absent from persisted artifacts, and
+    ensure CI logs do not reveal it. Ephemeral handling reduces one persistence path; it does not
+    eliminate access-control, rotation, transport or audit requirements.
+  tags: [ephemeral, secrets, terraform-version]
+
+- id: tf-recent-002
+  topic: native terraform tests
+  difficulty: advanced
+  question: What should a team test with Terraform's native test framework?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Terraform's native test framework can exercise module behavior through test files, assertions,
+    and provider configurations or mocks where supported by the selected CLI and providers. Good
+    tests verify the public contract: valid inputs produce expected resource arguments and
+    outputs, invalid inputs fail with useful diagnostics, and important invariants hold. Tests
+    should target behavior callers rely on rather than every incidental internal attribute.
+
+    Determine whether each test performs a plan or a real apply; an apply test can create real
+    infrastructure and needs isolated credentials, cleanup and cost controls. Mock providers
+    improve speed and determinism but cannot prove actual API behavior. Pin compatible Terraform
+    and provider versions in CI, run tests against representative configurations, and ensure
+    fixtures do not use production backends. Combine native tests with plans, policy checks and
+    controlled integration tests. A passing test suite does not guarantee that a later plan is
+    safe or that out-of-band infrastructure has not drifted.
+  tags: [terraform-test, modules, ci]
+
+- id: tf-recent-003
+  topic: provider mocking
+  difficulty: intermediate
+  question: What are the benefits and limits of mocking providers in module tests?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Provider mocking allows a test to substitute predictable values without making real API calls.
+    It can make module tests fast, repeatable and safe for pull requests that should not create
+    cloud resources. Teams can verify that input combinations lead to expected arguments, outputs
+    or precondition failures. This is particularly useful for reusable modules with many
+    configuration variants and for CI environments that intentionally lack cloud credentials.
+
+    Mocks do not validate provider implementation details, cloud permissions, quotas, API
+    defaults, eventual consistency or service behavior. A mock can be wrong or too permissive,
+    so it should not be the only test. Use real plans with scoped credentials and occasional
+    isolated integration tests for API-level confidence. Keep mock values representative and
+    include negative cases. Be explicit about which provider instances are mocked, especially
+    when aliases exist. The strongest strategy layers fast mocked tests with actual plan review,
+    policy evaluation and post-deployment health checks.
+  tags: [mocking, testing, providers]
+
+- id: tf-recent-004
+  topic: declarative imports
+  difficulty: intermediate
+  question: Why use import blocks instead of an imperative terraform import command?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    An `import` block places the intended mapping from a remote ID to a Terraform address in
+    configuration. That makes adoption reviewable in version control and allows the normal plan
+    process to show the import and any follow-on changes. An imperative `terraform import`
+    command updates state directly and can be convenient for a one-off operation, but its
+    intent may be less visible in a pull request or automated workflow.
+
+    Import blocks do not create resources and do not guarantee that the HCL matches every remote
+    setting. The provider's ID format is resource-specific, and a plan may propose updates or
+    replacement after association. Confirm that no other state owns the object, write an accurate
+    resource declaration, and review the complete plan. Generated configuration can help but
+    needs cleanup. Remove or retire the import declaration according to the team's workflow once
+    the state is established, while preserving an auditable record. Import is a state ownership
+    change, not a substitute for designing the surrounding dependencies.
+  tags: [import, declarative, state]
+
+- id: tf-recent-005
+  topic: backend locking
+  difficulty: advanced
+  question: What should be considered when migrating an S3 backend to native lockfile support?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Recent Terraform releases support native S3 backend lockfiles through the `use_lockfile`
+    setting, allowing the backend to coordinate state writers using an S3 lock object. A
+    migration should confirm the Terraform CLI version used by every operator and pipeline,
+    configure the needed object permissions, and ensure all writers use the same backend and
+    locking mechanism. A mixed fleet that ignores locking may still race even if some runs
+    acquire a lock.
+
+    Coordinate a maintenance window, stop active applies, update backend configuration and
+    reinitialize deliberately. Validate IAM permissions for both state and lock objects, retain
+    encryption and versioning, and test concurrent-run behavior in a non-production state first.
+    Do not remove an older locking service or table until all clients and recovery procedures
+    have been verified. Locking protects concurrent Terraform writes; it does not protect against
+    console edits, state deletion or an incorrect plan. Confirm the exact backend documentation
+    for the selected CLI version rather than copying configuration across releases.
+  tags: [s3, backend, locking]
+
+- id: tf-recent-006
+  topic: policy and plan json
+  difficulty: advanced
+  question: How can policy checks use Terraform plan JSON safely in CI?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    A CI workflow can save a plan, render it with `terraform show -json`, and evaluate policy
+    rules against planned resource changes and actions. This lets a policy reject outcomes such
+    as public exposure, missing encryption or destructive changes to protected resources. The
+    check should evaluate the exact plan proposed for apply, not a separately generated plan, so
+    the reviewed change and enforced policy refer to the same artifact.
+
+    Plan JSON can contain sensitive values and resource metadata. Store it only in a restricted,
+    short-lived artifact location, avoid posting raw JSON in public logs, and limit who can
+    download it. Test policies using both approved and rejected fixtures, including exceptions
+    and unknown/computed values. Make policy failure actionable, and bind any exception to an
+    accountable approver. OPA, Sentinel and cloud-native policy tools have different integration
+    and language details. Plan policy only governs Terraform-mediated changes; cloud-side
+    controls are needed for console edits or other automation paths.
+  tags: [policy, opa, plan-json]
+
+- id: tf-recent-007
+  topic: ci identity
+  difficulty: advanced
+  question: Why is short-lived workload identity preferable to static cloud keys for Terraform CI?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Short-lived workload identity lets a CI job exchange a trusted job identity for temporary
+    cloud credentials, often through an OIDC federation flow. It avoids storing a long-lived
+    access key that can be copied, leaked from logs, or forgotten during rotation. Trust can be
+    restricted by repository, branch, workflow or environment, and the resulting role can be
+    scoped to the operations the job needs.
+
+    Federation still requires careful trust policy design: a broad subject condition may allow
+    untrusted branches or repositories to assume the role. Separate plan and apply authority
+    where practical, use explicit production approvals, and audit issued sessions. Never expose
+    production credentials to arbitrary pull-request code from forks. Ensure provider credential
+    chains are configured as expected and do not fall back silently to a developer profile.
+    Short-lived identity reduces credential persistence but does not reduce the impact of a
+    compromised authorized workflow; code review, protected branches, state controls and plan
+    approval remain necessary.
+  tags: [oidc, ci, credentials]
+
+- id: tf-recent-008
+  topic: terraform and opentofu
+  difficulty: advanced
+  question: What should be evaluated before moving a Terraform root to OpenTofu?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Treat a Terraform-to-OpenTofu move as a toolchain migration, not merely a binary rename.
+    Check the exact CLI versions, HCL features, provider plugins, module sources, backend
+    behavior, state compatibility and CI integrations. Similar command syntax and a shared
+    ecosystem do not prove that every new feature, license, state format or provider release is
+    interchangeable. Confirm the project's licensing and governance requirements as well as
+    operational support and security update processes.
+
+    Make a backup of state and test initialization, plan and non-destructive operations against
+    a representative copy or isolated environment first. Compare plan output and ensure there is
+    no unexpected recreation or state migration. Pin the selected binary and provider versions,
+    update developer tooling and documentation, then promote root by root with a rollback plan.
+    Avoid running different tools concurrently against the same state unless compatibility and
+    locking have been validated. The choice should account for long-term ecosystem needs, not
+    just immediate syntax compatibility.
+  tags: [opentofu, migration, compatibility]
+
+- id: tf-recent-009
+  topic: removing resources
+  difficulty: intermediate
+  question: How can a team remove a resource from Terraform configuration without deleting it remotely?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    The desired outcome must be explicit: deleting a resource from HCL normally tells Terraform
+    to destroy the managed object. To stop managing it while leaving it in place, use a `removed`
+    block with destruction disabled where supported by the Terraform version, or coordinate a
+    `terraform state rm` operation. A removal declaration makes the transition reviewable in
+    configuration; state removal is an imperative operation that should be recorded carefully.
+
+    Confirm the object is intentionally being handed to another owner or retired from Terraform,
+    and ensure no dependent resources rely on it. Back up state, prevent concurrent applies, and
+    run a plan to verify Terraform will forget the association rather than destroy the object.
+    Removing from state does not revoke permissions or transfer ownership automatically. If
+    another Terraform root will adopt the object, coordinate its import so there is no interval
+    where both roots manage it. Validate exact syntax and lifecycle semantics against the
+    project's supported CLI version before using newer constructs.
+  tags: [removed-block, state, lifecycle]
+
+- id: tf-recent-010
+  topic: provider upgrades
+  difficulty: intermediate
+  question: How should a team manage provider major-version upgrades in a large repository?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Treat a major provider upgrade as a planned compatibility change. Read the upgrade guide and
+    changelog, identify removed or behavior-changing schema fields, and inventory every root and
+    module that uses the provider. Update constraints and the lock file in a dedicated change,
+    pin the CLI used for testing, and run initialization, formatting, validation, tests and
+    plans for all affected roots. A successful init only proves that versions can be selected;
+    it does not prove that remote objects will remain unchanged.
+
+    Review plan diffs for replacements, default changes and normalization. Test representative
+    environments first, then promote with a rollback or recovery strategy. Avoid upgrading all
+    roots in one opaque change if teams need independent schedules; avoid leaving child module
+    constraints so narrow that no compatible root can upgrade. Commit lock-file changes and
+    preserve the provider version used for apply. Any saved plan must use compatible provider
+    selections. A regular reviewed update cadence is safer than freezing an old provider until
+    an urgent security or API issue forces a rushed migration.
+  tags: [provider, upgrade, dependency-management]
+
+- id: tf-recent-011
+  topic: plan review
+  difficulty: advanced
+  question: What makes a saved Terraform plan trustworthy as a CI approval artifact?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    A trustworthy saved plan is tied to the exact source revision, root directory, backend,
+    workspace, Terraform binary, provider lock selection and target environment that reviewers
+    evaluated. CI should produce it from a trusted checkout, store it in a restricted location,
+    summarize actions without exposing secrets, and ensure the apply job consumes that artifact
+    rather than silently recalculating another plan. Backend locks and CI concurrency controls
+    protect against competing writers.
+
+    Plans can become stale when state changes and may include sensitive values. Terraform can
+    reject an outdated saved plan, in which case generate and review a new plan rather than
+    bypassing the check. Verify who can approve and apply, protect production credentials, and
+    record the commit and artifact identity in logs. A plan is not a cryptographic guarantee of
+    service health or absence of external changes; it is a proposal based on a particular
+    snapshot. Use post-apply monitoring and limited artifact retention to complete the control.
+  tags: [saved-plan, ci, approval]
+
+- id: tf-recent-012
+  topic: choosing infrastructure as code
+  difficulty: intermediate
+  question: How should teams compare Terraform, OpenTofu, Pulumi and cloud CDKs?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Compare tools against operational requirements rather than syntax alone: provider coverage,
+    state and backend model, policy and review workflow, module ecosystem, language skills,
+    testing needs, governance, licensing and migration cost. Terraform offers HCL, a broad
+    provider ecosystem and an established plan/apply model. OpenTofu is a compatible fork whose
+    releases and compatibility should be assessed independently. Pulumi uses general-purpose
+    languages and can fit teams that value language abstractions and tests, but executable
+    programs and package dependencies need disciplined review.
+
+    Cloud CDKs can provide high-level constructs and integrate closely with one provider's
+    template system, while potentially coupling deployment and state workflows to that cloud.
+    Evaluate how reviewers understand diffs, how secrets and credentials are handled, and how
+    teams recover from partial applies. A small pilot should include a realistic state migration
+    or interoperability test, not just a hello-world deploy. Different tools can coexist when
+    ownership boundaries are clear; having two tools manage the same object is the larger risk.
+  tags: [terraform, opentofu, pulumi, cdk]

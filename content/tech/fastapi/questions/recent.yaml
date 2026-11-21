@@ -1,0 +1,122 @@
+- id: fapi-recent-001
+  topic: pydantic-v2
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: Which Pydantic v1 patterns commonly need migration when a FastAPI project adopts Pydantic v2?
+  answer: |
+    Pydantic v2 replaces several familiar v1 APIs. Model configuration generally uses `model_config = ConfigDict(...)` rather than an inner `class Config`; field validation moves to `@field_validator`, and whole-model validation to `@model_validator`. Serialization commonly uses `model_dump()` and `model_dump_json()` rather than v1's `.dict()` and `.json()`. Validators also have changed semantics and signatures, so a mechanical rename is not always sufficient. Review custom root validators, ORM mode (now expressed with `from_attributes=True`), custom types, aliases, and JSON Schema generation. FastAPI supports Pydantic v2 in current releases, but a project should pin a compatible set of FastAPI and Pydantic versions and run migration tests. Check actual request parsing and wire output, not only that the code imports successfully.
+    Review generated schemas and serialization output too; a migration that preserves Python execution can still alter the wire contract or error details.
+  tags: [pydantic-v2, migration, validators]
+
+- id: fapi-recent-002
+  topic: dependency-scopes
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: Why might a `yield` dependency need a request scope when its endpoint returns a streaming response?
+  answer: |
+    The endpoint function may finish before the response body has been fully consumed. A streaming generator can continue querying or reading from a resource after headers have been sent, so cleaning up a yielded dependency immediately after the function returns would close a session or file too early. A request-scoped cleanup keeps the resource alive through request/response processing; a narrower function scope can release it earlier when the endpoint is the last consumer. The choice depends on whether the stream uses that resource and on FastAPI's version-specific lifecycle behavior. Prefer managing a stream's own source inside the generator when that makes ownership clearer. Test normal completion, generator exceptions, and client disconnects, and ensure cleanup still runs. Holding a database transaction open for a long client download is usually a design problem, not a reason to keep it open indefinitely.
+  tags: [yield-dependencies, streaming, lifecycle]
+
+- id: fapi-recent-003
+  topic: oauth
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: Should a new first-party user login use OAuth2's password grant because FastAPI documents a password-flow example?
+  answer: |
+    No. Framework examples often demonstrate how OAuth security dependencies and forms are wired, not endorse every protocol flow for new production systems. Current OAuth security guidance deprecates the Resource Owner Password Credentials grant because it exposes user credentials to the client and does not fit modern delegated authentication. For browser or native user login, use an authorization-code flow with PKCE through a trusted identity provider. Machine-to-machine access can use an appropriate client-credentials flow. If an existing constrained first-party system must retain a password form, assess its threat model, TLS, password hashing, rate limits, token issuance, audience, expiry, refresh, and revocation carefully. `OAuth2PasswordBearer` alone only extracts a bearer token and generates schema metadata; it is not a token endpoint or JWT verifier.
+  tags: [oauth2, password-flow, authentication]
+
+- id: fapi-recent-004
+  topic: pydantic-models
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What is the security value of separate request and response DTOs?
+  answer: |
+    Separate request and response models make the writable and readable surfaces explicit. A database entity may have fields such as `is_admin`, password hashes, moderation flags, or internal timestamps that clients should neither set nor see. Reusing it as an input model risks mass assignment; returning it directly risks data leakage and couples the API to storage layout. A request DTO can require and constrain client fields, while service logic maps those values to the domain model. A response DTO acts as a field allowlist and documents the stable public representation. Add response-model tests that prove sensitive attributes do not appear and input tests that show unauthorized fields are rejected or ignored according to explicit policy. Pydantic validation does not enforce object permissions or database constraints, which remain separate concerns.
+  tags: [dto, mass-assignment, serialization]
+
+- id: fapi-recent-005
+  topic: async
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: Why is `await asyncio.to_thread(sync_call)` not a complete timeout or cancellation strategy?
+  answer: |
+    `asyncio.to_thread` moves a synchronous function to a worker thread so the event loop can continue while that thread blocks. If the awaiting coroutine is cancelled or times out, Python does not forcibly terminate the running synchronous function; it may continue consuming a thread and hold sockets or other resources. Therefore the underlying client must have its own connect/read timeout, and concurrent calls should be bounded so slow upstreams cannot exhaust the executor. If cancellation must stop the operation, the library needs a cooperative cancellation mechanism or the work may need a process/job boundary. Use `to_thread` for blocking I/O rather than CPU parallelism under the usual CPython GIL. Measure loop lag and pool saturation during failure tests; a per-request timeout alone does not prove resources were released.
+  tags: [to-thread, cancellation, timeouts]
+
+- id: fapi-recent-006
+  topic: lifespan
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: Where should an application-scoped HTTP client be created and closed?
+  answer: |
+    Create shared clients and pools in the application's lifespan context, then close them during shutdown. An `httpx.AsyncClient` maintains connection pooling, so creating one on every request can waste sockets and setup work. A module-global client is less explicit: tests may import the application without starting it, worker processes each have independent globals, and shutdown may not close it reliably. Lifespan makes ownership visible and supports startup failure handling. Store the client on `app.state` or inject it through a dependency that reads application state. Configure finite timeouts and consider connection limits. Each worker has its own pool, so aggregate capacity must be budgeted across workers and replicas. Tests that depend on lifespan should explicitly start it rather than assuming every ASGI test transport does so.
+  tags: [lifespan, httpx, resource-management]
+
+- id: fapi-recent-007
+  topic: openapi
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How can OpenAPI output be wrong even when a FastAPI endpoint works at runtime?
+  answer: |
+    OpenAPI is generated from declarations and metadata, not reverse-engineered from every runtime branch. A route that returns a manually constructed `Response` may bypass response-model validation and serialization; a custom exception handler may emit a body not represented in the schema; and undocumented status codes can be absent from the declared responses. Dynamic dictionaries and conditional return shapes can also be hard to express accurately. Clients generated from an inaccurate document may send or expect the wrong fields despite a route appearing to work in a manual test. Review `/openapi.json` in CI, add explicit response metadata and error schemas, and test the serialized HTTP contract. Treat schema diffs as compatibility changes. OpenAPI security declarations describe credential requirements but do not enforce authentication at runtime.
+  tags: [openapi, schema, contract-testing]
+
+- id: fapi-recent-008
+  topic: httpx-testing
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What should a test author know about HTTPX `ASGITransport` and app lifespan?
+  answer: |
+    `ASGITransport` lets an HTTPX client invoke an ASGI app in-process, avoiding a real listening socket. It is useful for async tests that need to await database fixtures or other async resources. The transport itself should not be assumed to run startup and shutdown lifespan events; use a lifespan manager or an explicit fixture when the app initializes clients, pools, or other resources there. Keep app instances and event-loop-bound resources scoped consistently to avoid cross-loop errors. The in-process transport tests routing and application behavior, not TLS termination, worker processes, load balancers, or reverse-proxy buffering. For synchronous route tests, Starlette's `TestClient` can be simpler, and using it as a context manager exercises lifespan. Maintain a compatible version set for FastAPI, Starlette, and HTTPX.
+  tags: [httpx, asgi-transport, lifespan]
+
+- id: fapi-recent-009
+  topic: sqlalchemy-async
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: Why is an `AsyncSession` unsafe to share among concurrent tasks?
+  answer: |
+    An `AsyncSession` represents mutable transaction and identity-map state, not a stateless connection handle. Concurrent coroutines using one session can interleave transaction state and pending operations in ways SQLAlchemy does not support. Give each concurrent task its own session or serialize the work through one unit of work. A request dependency can provide a session to sequential operations within that request, but a background task or `asyncio.gather` branch should not silently reuse it concurrently. Keep transaction ownership explicit and close sessions deterministically. For a task group that queries several independent resources, create separate sessions if each operation must run concurrently, while checking the additional pool demand. Do not put database sessions into application-global state; share the engine and factory, not mutable transaction objects.
+  tags: [sqlalchemy, asyncsession, concurrency]
+
+- id: fapi-recent-010
+  topic: security
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What JWT checks are required beyond verifying that a token has a valid signature?
+  answer: |
+    Signature validity proves only that a trusted key signed the bytes under the chosen algorithm; it does not prove the token is intended for this service or still valid. Validate the issuer against configured trust, the audience for this API, expiry and not-before times, and required subject, scopes, or client identity. Restrict accepted algorithms explicitly rather than allowing a token header to select one. Obtain keys from a trusted configured issuer or JWKS source, handle key rotation, and reject malformed or ambiguous claims. Use short-lived access tokens and a revocation or refresh strategy appropriate to the threat model. Never trust claims from a merely decoded token. Tests should include wrong issuer, wrong audience, expired, not-yet-valid, malformed signature, and insufficient-scope cases. A bearer extraction dependency does none of these checks by itself.
+  tags: [jwt, claims, verification]
+
+- id: fapi-recent-011
+  topic: streaming
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What additional design work does a production SSE endpoint require?
+  answer: |
+    SSE is a long-lived HTTP response, so design for open connection capacity, proxy idle timeouts, and cancellation when a client disconnects. Emit correctly framed `text/event-stream` messages, use heartbeats if intermediaries close idle connections, and bound each subscriber's queue so a slow client cannot cause unbounded memory growth. The browser may reconnect and send `Last-Event-ID`, but delivery is not durable unless the application retains events and implements replay from that identifier. Authentication also needs consideration because native browser `EventSource` has limited custom-header support. Configure reverse-proxy buffering and caching intentionally, and avoid holding a transaction for the entire stream. Test with the production proxy and observe active streams, disconnects, and time-to-first-byte. SSE supplies a transport format, not guaranteed message processing semantics.
+    Bound each client's queue and test reconnect replay through the real proxy path.
+  tags: [sse, reconnect, backpressure]
+
+- id: fapi-recent-012
+  topic: deployment
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How should worker counts and connection pools be planned together?
+  answer: |
+    Workers are separate processes, each with an independent application instance and pool. A per-worker database pool allowance multiplied by workers and replicas gives the service's potential connection demand, with overflow and other clients added. The database must have capacity for that total alongside migrations, monitoring, and other services. More workers can use CPU cores or isolate blocking work, but also multiply memory, startup cost, and pools; there is no universally correct worker count. Start from resource and database limits, then load-test the exact container command while observing request latency, worker saturation, pool checkout wait, and active connections. Keep finite timeouts so queued requests do not wait indefinitely. Do not quote benchmark numbers without workload-specific measurements.
+    Include overflow and deployment overlap, not just steady-state pool sizes, in that budget.
+  tags: [workers, pools, capacity]

@@ -1,0 +1,102 @@
+- id: kafka-scn-001
+  title: A consumer is losing progress after slow database writes
+  technologies: [kafka, postgresql, system-design]
+  difficulty: advanced
+  prompt: |
+    An orders consumer normally keeps up, but every few hours its group rebalances and the lag rises. Application logs show that one batch occasionally waits a long time for a PostgreSQL query. The code uses automatic offset commits, sends records to a worker pool, and has recently increased `max.poll.records` to improve throughput. There are no broker alerts and the team proposes increasing `session.timeout.ms`.
+  approach: |
+    Begin by separating consumer liveness from broker health. Inspect rebalance reasons, poll gaps, processing-time distribution, group protocol and effective `max.poll.interval.ms`; the long handler or work queue may prevent timely polls even if heartbeats are occurring. Increasing `session.timeout.ms` alone does not address a max-poll violation.
+
+    Trace offset semantics: automatic commits may advance beyond work still queued in the worker pool, creating loss after a crash. Replace with explicit completion tracking and commit only the highest contiguous completed offset per partition. Bound in-flight work, reduce or tune batch size from measured latency, and use pause/resume for backpressure. Make database writes idempotent using the order/event identity so crashes after commit but before offset commit safely repeat.
+
+    Reproduce slow database calls and process termination in staging. Monitor poll gaps, commit positions, per-partition lag, rebalance count, worker queue depth, database latency, and commit failures. Tune timeouts only after proving the processing loop fits the chosen contract.
+  red_flags:
+    - Raising `session.timeout.ms` without checking `max.poll.interval.ms` or poll-loop blocking.
+    - Committing offsets when work is enqueued rather than when it is durably complete.
+    - Increasing consumer count without checking partition count and downstream database capacity.
+    - Claiming Kafka transactions make PostgreSQL writes exactly once.
+- id: kafka-scn-002
+  title: Producers see write failures after a broker outage
+  technologies: [kafka, system-design]
+  difficulty: advanced
+  prompt: |
+    A three-replica topic has `min.insync.replicas=2`, and the producers use `acks=all` with idempotence enabled. After one broker and a second replica's disk fail, producers begin receiving insufficient-replica errors. The product team asks to lower the minimum ISR immediately because records must keep flowing. They also report that several clients timed out during the outage and want to know whether those events were written.
+  approach: |
+    State the durability-availability tradeoff before changing configuration. With only one replica in sync, the current policy refuses writes rather than acknowledging records below the chosen durability threshold. Lowering the minimum may restore availability but accepts weaker protection against another failure. Confirm the actual ISR, leader, broker and disk status, and the desired business loss tolerance with the owner.
+
+    Restore replica health and capacity first: investigate disk and fetcher errors, replace or repair failed storage, and allow followers to catch up. For producer timeouts, the outcome can be ambiguous: a broker may have appended a batch but its acknowledgment was lost. Idempotent retries reduce duplicate log entries within the producer's guarantees, but application-level reconciliation may still be required. Keep bounded retries and inspect producer errors and event IDs.
+
+    Communicate whether writes are paused or accepted under a temporary weaker policy, document rollback criteria, and monitor ISR shrink/expand, write errors, and consumer visibility. Test this failure model before the next incident.
+  red_flags:
+    - Lowering `min.insync.replicas` without obtaining an explicit durability decision.
+    - Claiming every timed-out send definitely failed or definitely succeeded.
+    - Restarting all brokers at once and increasing replica movement during recovery.
+    - Confusing producer acknowledgment with consumer processing completion.
+- id: kafka-scn-003
+  title: Plan a safe replay after a bad consumer release
+  technologies: [kafka, postgresql, system-design]
+  difficulty: advanced
+  prompt: |
+    A new consumer version wrote an incorrect status to a PostgreSQL projection for several hours. The input topic retains the full interval, but the group has already committed past it and the sink table is not partitioned by event date. The on-call engineer suggests resetting the production group to `earliest` and redeploying the old binary. Other consumers share the same topic but use different group IDs.
+  approach: |
+    First stop or isolate the faulty writer so it cannot continue corrupting the projection. Identify the affected topic partitions and offset/time range from deployment logs and event metadata, then preserve the group's current committed offsets and establish the exact replay boundary. Confirm retention still contains those records and identify all side effects of replay.
+
+    Since the projection is wrong, do not blindly replay into the same table. Build a corrected projection in a new table or version, replay only the affected range with a known consumer build, and use idempotent writes keyed by the event/entity identity. Validate counts, domain invariants, and representative records before switching readers. If the consumer has state or joins, restore from a compatible snapshot/checkpoint or rebuild from the required history.
+
+    Reset only the affected group and partitions if that is the chosen mechanism; other groups' offsets are independent. Coordinate replay throughput with the database and normal traffic. Document whether corrected events are emitted to downstream systems and how duplicate external effects are prevented.
+  red_flags:
+    - Resetting the group to `earliest` without recording offsets or limiting the range.
+    - Assuming a different consumer group is affected by this group's offset reset.
+    - Replaying directly into an incorrect projection without idempotency or reconciliation.
+    - Treating a successful consumer restart as proof that business state is repaired.
+- id: kafka-scn-004
+  title: Design a database-to-Kafka event path without losing changes
+  technologies: [kafka, postgresql]
+  difficulty: intermediate
+  prompt: |
+    A service commits order changes to PostgreSQL and then publishes an `OrderChanged` event to Kafka. A recent incident left the database updated but the event missing because the process crashed between operations. A proposed “fix” is to publish first and then update the database, with producer idempotence enabled. The consumer updates a search index and can tolerate an occasional duplicate if it has an event ID.
+  approach: |
+    Explain why changing the order of two independent writes does not close the dual-write gap: publishing first can emit an event for a transaction that rolls back, and idempotence only addresses producer retry duplication, not atomicity with PostgreSQL.
+
+    Use a transactional outbox. In one database transaction, write the order change and an outbox row containing a stable event ID, entity key, event type, schema version, and payload or reference. A relay or CDC connector publishes committed outbox rows. The relay may publish a row more than once if it fails after Kafka acceptance but before source progress is committed, so the search-index consumer must deduplicate or upsert by stable identity.
+
+    Define outbox cleanup only after confirmed progress and a replay window; monitor oldest unpublished row, connector state, database log retention, and Kafka publish failures. Test crash points around database commit, Kafka append, and relay offset. Clarify whether the event is a domain fact or a snapshot and version its schema. Avoid performing slow external operations inside the database transaction.
+  red_flags:
+    - Treating `enable.idempotence=true` as an atomic transaction across Kafka and PostgreSQL.
+    - Publishing before commit without considering rollback and ghost events.
+    - Deleting outbox rows immediately after an attempted send.
+    - Omitting consumer deduplication because the relay is assumed to run once.
+- id: kafka-scn-005
+  title: Choose retention for a replayable telemetry topic
+  technologies: [kafka, pyspark, delta-lake]
+  difficulty: intermediate
+  prompt: |
+    A telemetry topic feeds a real-time alerting consumer and a Spark job that rebuilds an analytical table after data-quality fixes. The Spark team wants a much longer retention period, while the Kafka operators are concerned about local disk growth. The data has variable daily volume, the topic uses three replicas, and the team has not measured how long a full rebuild takes or checked whether all consumers can replay old data.
+  approach: |
+    Define the recovery contract before selecting values: how far back a rebuild may need to go, tolerated recovery time, planned consumer downtime, and what history the source or a data-lake archive can reproduce. Measure per-partition bytes, compressed volume, retention behavior, and rebuild throughput with realistic workload. Include replication, indexes, segment overhead, failure-recovery headroom, and peak skew; do not assume average daily data captures the hottest partition.
+
+    Consider whether Kafka must retain all analytical history or whether a lakehouse archive can serve long backfills. Tiered storage may extend retention beyond local disks, but verify availability for the actual Kafka release/provider, remote replay latency, cleanup-policy limits, and failure behavior. Avoid setting a size cap that silently shortens the required time window for busy partitions.
+
+    Test resetting a staging consumer to old offsets, measuring lag and downstream load, then restoring the original position. Document what happens if offsets fall behind the log start and how recovery switches to an archive. Alert on disk growth, retention deletion, remote fetch errors, and rebuild duration.
+  red_flags:
+    - Choosing a retention period from disk intuition without replay or recovery requirements.
+    - Assuming a topic-wide byte setting creates one global storage cap.
+    - Claiming tiered storage makes old-data replay equivalent to local tail reads.
+    - Forgetting replication factor and broker recovery headroom in capacity estimates.
+- id: kafka-scn-006
+  title: Decide whether Kafka is the right platform for a work queue
+  technologies: [kafka, system-design]
+  difficulty: intermediate
+  prompt: |
+    A small service processes independent image-resize jobs. There is one producer, one worker deployment, and a requirement to retry a job a few times before moving it to a dead-letter location. The expected workload is modest, ordering between jobs does not matter, and there is no requirement to replay months of history or fan the same event out to several consumers. A team proposes Kafka because it is already used elsewhere in the company.
+  approach: |
+    Compare requirements to semantics. Kafka is technically capable of carrying these jobs, but its partitioning, broker/topic operations, consumer-offset management, retention, and replay controls may add overhead without a corresponding need. A managed queue with per-message acknowledgment, visibility timeout, retry count, and dead-letter support may map more directly to independent work items. A database-backed queue could also fit a small workload if locking and throughput requirements are modest.
+
+    Ask whether the workload will soon need multiple independent consumers, durable long-term replay, event history, high sustained throughput, or per-key ordering. If so, Kafka's existing platform and operational expertise may justify using it. If Kafka is chosen, define the key, partition count, job expiration, retry topic/DLQ policy, duplicate handling, and replay safeguards. Jobs should carry a stable ID and workers should be idempotent because retries can repeat work.
+
+    Make the decision from total operational cost and failure requirements, not from predicted scale alone. Record the assumptions and migration trigger so the team can revisit them if the workload changes.
+  red_flags:
+    - Choosing Kafka solely because it is already fashionable or present in the organization.
+    - Claiming a managed queue is always better without considering replay and fan-out needs.
+    - Ignoring duplicate job execution and side-effect idempotency.
+    - Building retry topics that can reorder jobs without checking whether order is truly irrelevant.

@@ -1,0 +1,122 @@
+- id: ans-recent-001
+  topic: reproducible execution environments
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: A playbook works on an engineer's laptop but fails in CI because a module is missing. How would you make controller dependencies reproducible?
+  answer: |
+    Treat the controller runtime as part of the application. Identify the `ansible-core` version, Python dependencies and collection providing the module, then declare them in project dependency files. Use a pinned or deliberately bounded collection version in `requirements.yml` and build the same execution environment for local tests, CI and deployment. Confirm the plugin is installed with `ansible-doc` or `ansible-galaxy collection list`, and use its FQCN in the task. A bare name may resolve differently depending on what happens to be installed. Add dependency installation and lint/syntax checks to CI, then review collection upgrade notes and rerun integration tests on upgrades. Do not fix the issue by installing an unpinned collection only on the CI worker; that makes the next run less reproducible.
+  tags: [collections, CI, reproducibility]
+
+- id: ans-recent-002
+  topic: ansible-lint
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: What belongs in an Ansible lint gate, and how do you keep it useful instead of noisy?
+  answer: |
+    A lint gate should catch meaningful problems early: YAML and playbook issues, missing task names, avoidable shell usage, risky patterns and missing FQCNs. Pin `ansible-lint` and related dependencies in the same project environment used by developers and CI. Begin with the default rules on the repository, review each finding, and fix real issues before suppressing anything. Where a rule is intentionally inapplicable, use the project's supported configuration or a narrow task-level tag with a short reason; broad exclusions can hide future defects. Run syntax checks and integration tests as separate gates because lint cannot prove host selection, application health or idempotency. Review lint configuration changes just like playbook changes, and avoid claiming a clean lint result means a deployment is safe.
+  tags: [lint, quality, CI]
+
+- id: ans-recent-003
+  topic: check mode and diffs
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: A reviewer asks for a dry-run proof that a playbook cannot make an unsafe change. What are the limits of `--check --diff`?
+  answer: |
+    `--check --diff` is a useful review preview for modules with meaningful check-mode and diff support, particularly file and state modules. It is not a transaction or universal safety proof. A module may lack check-mode support, provide only partial prediction, or have behavior dependent on results from earlier tasks that are skipped in check mode. Shell and command tasks generally cannot infer arbitrary side effects. Diff output may itself contain secret values, so protect logs and avoid exposing sensitive templates. Check module documentation and test against a disposable target; inspect selected hosts separately. A task marked `check_mode: false` still performs real work during check mode and should be an exceptional, documented choice. Strong review combines preview with tests, scope validation and rollout safeguards.
+  tags: [check-mode, diff, safety]
+
+- id: ans-recent-004
+  topic: collection upgrades
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: How would you assess the risk of upgrading a collection that supplies production modules and roles?
+  answer: |
+    First determine the current and proposed versions and all playbooks that depend on the collection. Review its changelog, deprecations, supported `ansible-core` range, Python requirements and any changed module parameters or return values. Update the declared dependency intentionally rather than installing the latest version implicitly. Run lint and syntax validation, then integration tests for representative roles and API or operating-system behavior. Verify idempotency and check-mode behavior for affected tasks, because these are module-specific contracts. Test the resulting execution environment used by deployment, not just a developer shell. For production, stage the upgrade in a canary and preserve a known-good environment version for rollback. A version pin reduces unexpected change but does not remove the need to test upgrades or track security advisories.
+  tags: [collections, dependencies, testing]
+
+- id: ans-recent-005
+  topic: dynamic inventory safety
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: A cloud dynamic inventory suddenly resolves more hosts than expected. What should you check before applying a play?
+  answer: |
+    Do not proceed until the target set is explained. Confirm the inventory plugin configuration, API identity, account or project, filters, tag rules, cache behavior and any source merges. Run `ansible-inventory -i ... --graph` and `--list` using the same credentials and revision as the intended job, then compare the resolved hosts with the expected environment boundary. Check whether a tag was removed, an account scope broadened, or cached data changed. Use `--list-hosts` with the actual play and limit, and fail closed on an empty or unexpectedly broad selection. Dynamic inventory is live input, not a static reviewed list. Preserve a canary or explicit production group and record the inventory result for high-impact runs rather than relying on a developer's earlier preview.
+  tags: [inventory, dynamic, safety]
+
+- id: ans-recent-006
+  topic: Vault in CI
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: How should a CI pipeline supply Ansible Vault credentials without exposing them to pull-request jobs?
+  answer: |
+    Keep encrypted data in the repository if that fits the threat model, but provide the vault password only to a protected deployment job through the CI credential store or another authorized secret mechanism. Do not commit a vault password file or print it as a command argument. Restrict production credentials to trusted branches, protected environments and approved operators; untrusted forks must not receive them. Use vault IDs when separate secret domains make selection clearer, but remember the ID label is not an access control. Suppress sensitive task output with `no_log` where appropriate, protect rendered files and logs, and test that failure messages do not reveal plaintext. If a secret is exposed, revoke or rotate it; deleting ciphertext from a later commit does not remove leaked credentials from history.
+  tags: [vault, CI, credentials]
+
+- id: ans-recent-007
+  topic: rolling deployment
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: Design a rolling application deployment that halts if the first few hosts fail health checks.
+  answer: |
+    Target a narrow application group, use `serial` to define a conservative first batch, and make the deployment steps explicit: drain a host if required, apply the version, restart or reload only on relevant change, verify an application-level health endpoint, then return it to service. Configure a failure threshold or fatal behavior that prevents later batches from proceeding when the canary batch is unhealthy. Ensure delegated load-balancer tasks have credentials and network access from their execution host. Test how handlers, `run_once` and registered health-check results behave with the chosen serial and strategy settings. A playbook cannot automatically reverse every partial deployment, so define retry, rollback or operator-handoff behavior. Canary success should be based on health evidence, not simply a zero exit status from the package or service task.
+  tags: [serial, deployments, health-checks]
+
+- id: ans-recent-008
+  topic: pipelining and SSH
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: Pipelining speeds up a play on some hosts but breaks sudo on others. What is the likely interaction?
+  answer: |
+    SSH pipelining can reduce round trips by sending module code over an established connection, but it depends on compatible remote execution and privilege-escalation setup. Some sudo policies require a TTY, which can conflict with pipelining. Check the exact connection plugin, SSH settings, sudoers policy and Ansible version for the affected hosts rather than enabling or disabling it globally without evidence. Test a representative module both with and without `become`, and make any policy adjustment through the security owner. Connection multiplexing and pipelining are performance options, not substitutes for host-key verification or least privilege. Compare task timings and connection behavior; if the bottleneck is package-manager locks or service startup, pipelining may not address it.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [pipelining, SSH, become]
+
+- id: ans-recent-009
+  topic: role testing
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: What should a Molecule test prove for a reusable role?
+  answer: |
+    A meaningful Molecule scenario should create or select a disposable test environment, converge the role with representative variables, verify resulting behavior, and clean up where the driver supports it. Verification should check the role's contract: correct service state, file ownership and mode, configuration validity, or an observable API result. Run convergence a second time and assert no unexpected changes to exercise idempotency. Test supported platforms and important overrides, not merely YAML parsing. Container drivers can be fast but may not accurately model systemd, kernel features, package behavior or privilege boundaries; use a VM or integration environment when those matter. Pin Molecule, driver and Ansible dependencies, and never provide production credentials to an isolated role test.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [molecule, roles, testing]
+
+- id: ans-recent-010
+  topic: Terraform and Ansible boundaries
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: Terraform creates a VM and Ansible then configures it. How do you prevent drift or conflicting ownership?
+  answer: |
+    Define the lifecycle boundary and assign one owner to each property. Terraform should generally own provider-managed resources such as instance size, subnet, disk attachment and cloud identity; Ansible should generally own guest configuration such as packages, files, users and service state. Avoid configuring the same property through provider metadata and ongoing playbook tasks unless the interaction is deliberate and documented. Pass outputs and connection details from provisioning to configuration in a controlled way, and separate credentials by job scope. Test how replacements, reboots and partial failures affect the handoff. Terraform planning and state are not substitutes for Ansible convergence, and Ansible inventory is not a substitute for Terraform resource state. The interface between them should be reproducible and auditable.
+    Test the behavior against the project's pinned `ansible-core` and collection versions, using a disposable host where possible; then record any platform assumptions in the role or runbook.
+  tags: [terraform, ownership, drift]
+
+- id: ans-recent-011
+  topic: choosing immutable infrastructure
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: When might an organization intentionally stop using Ansible for ongoing host configuration?
+  answer: |
+    If hosts are replaceable and the platform supports building, testing and rolling out immutable images, ongoing mutation may add more drift and operational complexity than value. A versioned image can make rollback and fleet consistency easier, while managed or serverless services can eliminate some host concerns entirely. Cloud-init may still handle minimal first boot. This does not erase configuration work: the image build pipeline, provenance, vulnerability updates, rollout health, observability and rollback become the main controls. Ansible remains useful for existing mutable fleets or operational tasks that are difficult to encode in image builds. Compare lifecycle and recovery requirements rather than adopting immutability as a slogan. A small team should choose the simplest approach it can test and operate reliably.
+  tags: [immutable, architecture, tools]
+
+- id: ans-recent-012
+  topic: handling partial failure
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: A play failed halfway through after updating some hosts. How should the playbook and operator handle safe retry?
+  answer: |
+    First identify which hosts and tasks changed; review per-host output, registered results and application health before blindly rerunning. A well-designed convergence play uses state-aware modules so retry moves hosts toward the same desired state, while non-idempotent actions are guarded or modeled as explicit one-time operations. Keep rollout scope narrow and use `serial` or failure thresholds to stop expansion when a batch fails. `block`/`rescue` can implement a real recovery path, but a successful rescue changes failure reporting and must not merely suppress the incident. For a partially activated release, decide whether to finish, roll back or hand off to an operator, and verify each host before returning traffic. Record the failed commit and inputs so retry uses the same reviewed configuration.
+  tags: [failures, recovery, idempotency]

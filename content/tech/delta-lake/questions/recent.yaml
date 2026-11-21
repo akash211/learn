@@ -1,0 +1,263 @@
+- id: delta-recent-001
+  topic: coordinated commits
+  difficulty: advanced
+  question: What problem do coordinated commits address, and are they the default commit path for every Delta table?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Coordinated commits introduce an explicit commit coordinator so table writers can publish and
+    order commits without relying solely on filesystem-specific atomic creation behavior. They are
+    intended to improve reliable commits across cloud storage and multiple engines, and the
+    architecture provides a foundation for broader transaction coordination. They do not imply
+    that every existing Delta table automatically uses a coordinator or that multi-table ACID is
+    universally available.
+
+    OSS Delta Lake 4.0 preview announcements described coordinated commits as preview, and release
+    scope can change by version and catalog/storage configuration. Databricks and OSS runtimes may
+    expose different implementations or maturity. A strong answer identifies the supported
+    coordinator, table setup, failure recovery and client compatibility for the exact release. Do
+    not claim that a preview capability is generally available just because an announcement
+    describes its intended architecture; confirm GA status in current documentation before
+    designing production dependencies.
+  tags: [coordinated-commits, preview, concurrency]
+
+- id: delta-recent-002
+  topic: Delta Lake 4.0
+  difficulty: intermediate
+  question: Which themes distinguished the Delta Lake 4.0 release, and what should a team verify before adopting them?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Delta Lake 4.0 was a major release built against Apache Spark 4.0 and highlighted broader
+    catalog integration, Delta Connect for Spark Connect clients, semi-structured `VARIANT`,
+    enhanced protocol/table-feature support, log improvements and the ability to drop selected
+    features with history preservation. Its announcement also discussed catalog-managed tables
+    as a preview capability. Release announcements describe direction and headline scope; they do
+    not mean every feature is GA, enabled in each runtime, or supported by every Delta client.
+
+    Adoption should begin with the actual release compatibility matrix: Spark/Delta versions,
+    catalog, storage, enabled protocol features and reader/writer support. Test migration, rollback,
+    checkpoint interpretation, streaming and non-Spark clients. Features such as catalog-managed
+    tables, type widening or variant-related capabilities may have preview or release-specific
+    boundaries. The right response is to separate stable core table operations from new capabilities
+    and make a per-feature production readiness decision.
+  tags: [delta-4, releases, compatibility]
+
+- id: delta-recent-003
+  topic: feature removal
+  difficulty: advanced
+  question: How did newer Delta feature-dropping support change protocol downgrade, and what are its limits?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Earlier feature removal workflows could require truncating table history to return to a lower
+    protocol, which sacrificed historical access. Newer Delta Lake releases introduced a safer
+    feature-dropping path: supported features can be disabled, data rewritten when needed, and
+    protected checkpoints used so clients that do not understand the dropped feature can begin at a
+    compatible point while history is retained. Delta Lake 4.0 documentation describes a
+    checkpoint-protection-based flow; older releases may have a legacy workflow.
+
+    This is not a generic downgrade button. Only an explicit set of features is droppable, and a
+    drop may require rewrites, checkpoint creation or maintenance restrictions. It does not imply
+    every protocol upgrade can be reversed, nor that old readers can interpret all pre-downgrade
+    history. Confirm exact support in the running Delta version, assess clients and retained files,
+    and test on a copy. Treat protocol changes as migrations with a recovery plan, not property
+    toggles.
+  tags: [protocol, checkpoint-protection, compatibility]
+
+- id: delta-recent-004
+  topic: liquid clustering
+  difficulty: advanced
+  question: How has liquid clustering matured in Delta Lake, and how is OSS support different from managed automation?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Liquid clustering appeared in OSS Delta 3.1 and evolved in subsequent releases, adding more
+    supported ways to define or change clustering and reorganize existing data. It aims to replace
+    rigid partition choices and recurring Z-order maintenance for tables whose access patterns
+    evolve. The OSS workflow centers on table clustering metadata and supported `OPTIMIZE` behavior;
+    existing files do not move merely because keys are changed.
+
+    Databricks adds managed capabilities around the format, including predictive optimization and
+    automatic clustering-key selection (`CLUSTER BY AUTO`) for eligible tables and runtimes. Those
+    are platform services, not a universal OSS Delta feature. Protocol requirements, GA status and
+    operation limits differ across versions. A good answer says to verify the precise Delta or
+    Databricks Runtime compatibility, avoids combining clustering with unsupported partition/Z-order
+    layouts, and measures actual file skipping after clustering rather than assuming that key
+    metadata alone improves queries.
+  tags: [liquid-clustering, databricks, oss]
+
+- id: delta-recent-005
+  topic: deletion vectors
+  difficulty: advanced
+  question: What are the compatibility and physical-deletion implications of using deletion vectors in recent Delta clients?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Deletion vectors let supported Delta operations mark row positions as logically removed without
+    immediately rewriting a whole Parquet file. OSS Delta expanded DML support across releases:
+    documentation lists scans from 2.3, delete from 2.4, update from 3.0 and merge from 3.1, with
+    default enablement varying by operation/version. Databricks Runtime has its own client matrix
+    and can use deletion vectors for additional managed optimizations. A reader must understand the
+    table feature, so enabling it can exclude older clients.
+
+    The vector is not physical erasure. Rewrites or a supported purge operation apply changes to
+    data files; `VACUUM` then removes obsolete files subject to retention. `OPTIMIZE` does not
+    necessarily guarantee every affected row is purged in every client. For privacy requirements,
+    verify the documented purge path and backups. For interoperability, check read and write
+    support independently by precise client version, and do not infer that every Delta-compatible
+    reader handles deletion vectors correctly.
+  tags: [deletion-vectors, compatibility, erasure]
+
+- id: delta-recent-006
+  topic: row tracking
+  difficulty: advanced
+  question: What does Delta row tracking provide, and why should enabling it be treated as a protocol migration?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Row tracking adds stable row identifiers and row commit-version metadata that can follow rows
+    across operations such as updates and merges. It can support incremental maintenance and
+    lineage use cases; it is distinct from a business primary key, since row IDs are table-managed
+    metadata and cloning or transformations can change the relationship to source identity.
+    Databricks documents row tracking for supported runtimes, while OSS support and available APIs
+    depend on Delta version and client.
+
+    Enabling it adds a table feature/protocol requirement and may assign metadata to existing rows,
+    which can take time and create table versions. Continuous writers may need to pause because a
+    metadata change can conflict with active transactions. Readers and writers must be compatible,
+    and feature availability in CDF or other interfaces may have limits. Confirm the behavior of
+    the actual runtime, define what row identity means for the application, and assess streaming,
+    cloning and external-client compatibility before rollout.
+  tags: [row-tracking, protocol, lineage]
+
+- id: delta-recent-007
+  topic: Delta Connect
+  difficulty: intermediate
+  question: What is Delta Connect, and how should a Spark Connect user assess its maturity?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Delta Connect extends the Spark Connect client-server model with Delta-specific operations, so
+    a client can request Delta functionality through the Spark Connect protocol instead of shipping
+    the full Spark/Delta implementation into its process. The split can simplify client deployment
+    and version management, while table work executes against a configured server. Delta Lake 4.0
+    release materials introduced this as an evolving capability; early preview scope was not
+    equivalent to full support for every Delta API.
+
+    Before adopting it, check the exact Delta Connect and Spark versions, supported commands,
+    authentication, server deployment model and behavior on reconnect/failure. A Spark Connect
+    client connection does not automatically grant a feature or make client/server versions
+    interchangeable. For an interview response, distinguish the architectural benefit—thin remote
+    client—from its implementation maturity, and avoid claiming that all `DeltaTable` APIs work
+    unless the current support matrix explicitly says so.
+  tags: [delta-connect, spark-connect, preview]
+
+- id: delta-recent-008
+  topic: variant and type widening
+  difficulty: advanced
+  question: How should teams evaluate newer Delta support for `VARIANT` and type widening?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    `VARIANT` targets semi-structured payloads whose fields may evolve, avoiding the need to store
+    every JSON document as an opaque string or force an immediate rigid struct. Type widening
+    addresses certain compatible changes such as a numeric type growing to a wider representation
+    without rewriting every value. These capabilities can simplify ingestion, but neither removes
+    semantic schema governance: teams still need to define stable fields, units, null behavior and
+    downstream expectations.
+
+    Support and maturity depend on Delta/Spark release and client. Delta 4.0 introduced variant
+    capabilities, while shredded-variant optimizations and type widening have had preview status in
+    documented releases. A reader without feature support may not understand the table protocol.
+    Check the current OSS and Databricks feature matrix, supported casts and evolution operations,
+    catalog/engine compatibility and GA status. Pilot on representative data, test older consumers,
+    and avoid turning preview behavior into a cross-platform contract until support is explicit.
+  tags: [variant, type-widening, schema-evolution]
+
+- id: delta-recent-009
+  topic: delta-rs
+  difficulty: intermediate
+  question: What is delta-rs useful for, and why is it not interchangeable with delta-spark?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    `delta-rs` is an independent Rust implementation of Delta Lake with Python bindings under the
+    `deltalake` package. It can access Delta tables from Rust and Python/Arrow ecosystems without
+    requiring Spark, and offers APIs for reading, writing, merging and table maintenance according
+    to its release and enabled features. It is useful for lightweight data applications and
+    integrations with Arrow, DataFusion and related tools.
+
+    It is not a Spark wrapper and does not share an identical API or operation matrix with
+    `delta-spark`. Protocol features, concurrency behavior, storage integrations and write
+    capabilities can differ by version and build. A table created by a newer Spark/Databricks
+    runtime may require features that a given delta-rs release cannot write. Before making it a
+    production writer, validate table protocol, schema, concurrency, catalog/storage setup and
+    recovery behavior with the exact package version. Treat cross-client writes as an explicit
+    compatibility contract.
+  tags: [delta-rs, delta-spark, interoperability]
+
+- id: delta-recent-010
+  topic: streaming and exactly once
+  difficulty: advanced
+  question: What assumptions underlie exactly-once claims for a Structured Streaming Delta sink?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Exactly-once behavior is scoped to a query and sink. Spark's Delta streaming integration can
+    make committed micro-batches idempotent across recovery when the query uses a durable,
+    unchanged checkpoint and supported Spark/Delta versions. A restarted query uses checkpointed
+    progress and sink transaction identity to avoid applying the same batch twice to the same table
+    lineage. This is not a claim that source delivery never duplicates or user code executes once.
+
+    If the checkpoint is deleted, moved incorrectly or reused for a different query, replay and
+    duplicate effects become possible. `foreachBatch` callbacks and external APIs can run again; a
+    second Delta table or Kafka offset is not part of the first table's atomic commit. Use
+    deterministic event/batch IDs and make side effects idempotent. Test failure after table commit
+    but before checkpoint progress is durable. Good answers state the guarantee boundary and the
+    assumptions, rather than using “exactly once” as an end-to-end property.
+  tags: [streaming, exactly-once, checkpoint]
+
+- id: delta-recent-011
+  topic: UniForm and interoperability
+  difficulty: advanced
+  question: Does Delta's interoperability with Iceberg mean a table can be freely written by both formats?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    No. Delta interoperability mechanisms such as UniForm can expose supported Delta tables to
+    Iceberg readers in particular configurations, reducing the need to copy data. The capability
+    and supported readers/features depend on release, protocol, catalog and runtime. The existence
+    of a read-compatible representation does not promise that independent Iceberg and Delta
+    writers can safely mutate the same table concurrently or that every format feature maps
+    one-to-one.
+
+    Evaluate the exact direction of access: which engine writes, which clients read, how metadata is
+    synchronized, and what happens for deletes, schema changes and protocol features. Choose one
+    canonical writer unless documentation explicitly supports the multi-writer design. Test the
+    table with production versions and verify snapshot freshness and recovery. This question
+    rewards distinguishing “interoperable reads” from “shared transactional ownership”; both matter,
+    but they are not the same guarantee.
+  tags: [uniform, iceberg, interoperability]
+
+- id: delta-recent-012
+  topic: preview and production readiness
+  difficulty: intermediate
+  question: How do you evaluate whether a recently announced Delta feature is safe for production?
+  period: '2024-2026'
+  type: representative
+  answer: |
+    Start with the release documentation for the exact Delta Lake or Databricks Runtime version,
+    not a blog headline. Identify whether the capability is preview, experimental or generally
+    available; which read/write operations are supported; minimum protocol versions; compatible
+    Spark, catalog and storage combinations; and known limitations. Preview features can change
+    interfaces, require flags or have limited behavior, and should not be treated as a stable
+    interoperability contract.
+
+    Then inventory all clients and test on a representative copy: enabling the feature, reading
+    and writing from the oldest supported client, restart/recovery, streaming, table maintenance,
+    backup, sharing and rollback. Measure correctness as well as performance. For features that
+    upgrade protocol, understand whether downgrade is supported and what history or data must be
+    rewritten. Document ownership and a fallback plan. A strong answer separates what the open
+    protocol provides from managed platform automation and names the evidence needed for rollout.
+  tags: [preview, production-readiness, protocol]

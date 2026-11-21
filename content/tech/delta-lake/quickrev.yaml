@@ -1,0 +1,106 @@
+concepts:
+  - title: Table state
+    detail: >-
+      `_delta_log` defines committed snapshots; Parquet holds the rows. Directory listing alone is not a Delta table read.
+  - title: Commit visibility
+    detail: >-
+      Data files become table data only when a valid log commit references them. Failed writes can leave unreferenced files.
+  - title: Snapshot isolation
+    detail: >-
+      Readers see one consistent committed version while writers prepare changes.
+  - title: Optimistic concurrency
+    detail: >-
+      Writers validate assumptions at commit time; overlap can conflict and needs fresh-state retry or resolution.
+  - title: Schema enforcement
+    detail: >-
+      Writes are checked against the logged schema by default; schema evolution should be intentional and scoped.
+  - title: Protocol compatibility
+    detail: >-
+      Enabled features can raise reader/writer requirements. Check every client before a protocol upgrade.
+  - title: Time travel
+    detail: >-
+      Version/timestamp reads need retained log metadata and the old data files to still exist.
+  - title: VACUUM
+    detail: >-
+      Deletes eligible obsolete files; retention affects rollback, long readers and historical reads.
+  - title: MERGE
+    detail: >-
+      Atomic upsert/delete at the target table boundary; it does not deduplicate or order source CDC for you.
+  - title: CDC ordering
+    detail: >-
+      Preserve source sequence and event identity; reject stale updates and make replay idempotent.
+  - title: SCD Type 1
+    detail: >-
+      Replace current values; no historical versions are retained.
+  - title: SCD Type 2
+    detail: >-
+      Close old validity intervals and insert new versions; enforce one current row and non-overlapping ranges.
+  - title: Partitioning
+    detail: >-
+      Use a few coarse, commonly filtered keys; high cardinality can create too many small directories/files.
+  - title: Compaction
+    detail: >-
+      Rewrites many small active files into fewer larger files. It is distinct from VACUUM.
+  - title: Data skipping
+    detail: >-
+      File statistics prune files only when value ranges and query predicates make exclusion possible.
+  - title: Streaming boundary
+    detail: >-
+      Delta sink commits can be idempotent with stable checkpoints; external effects and multiple tables need separate guarantees.
+
+traps:
+  - Reading mutable Delta data as `*.parquet` and assuming the current active-file snapshot.
+  - Treating a successful `MERGE` as protection from duplicate or out-of-order CDC events.
+  - Calling deletion vectors physical erasure; they are logical metadata until rewritten and vacuumed.
+  - Assuming a history entry proves the old data files remain available for restore.
+  - Confusing `VACUUM` with compaction or table optimization.
+  - Assuming all Delta clients support the same protocol features, SQL syntax and maintenance operations.
+
+advanced:
+  - OCC conflicts depend on transaction read/write sets, predicates, metadata and implementation—not merely whether two jobs start together.
+  - Row-level concurrency and predictive I/O are runtime/feature-dependent; never infer them from the open format alone.
+  - A checkpoint accelerates state reconstruction but does not replace the protocol's table semantics or justify manual log cleanup.
+  - CDF is incremental change access, not a substitute for source retention, durable checkpoints or downstream idempotence.
+  - Protocol downgrade is limited; feature removal may require rewrites/checkpoint protection, and some features cannot be dropped.
+  - Delta 4.0 release announcements included preview capabilities such as catalog-managed tables; verify current GA status and exact client support.
+
+comparisons:
+  - a: 'Delta Lake'
+    b: 'Parquet'
+    difference: 'Parquet is a columnar file format; Delta adds a transaction log, table snapshots, schema and protocol semantics.'
+  - a: '`VACUUM`'
+    b: '`OPTIMIZE`'
+    difference: 'VACUUM removes eligible obsolete files; OPTIMIZE rewrites active files for compaction or supported layout improvements.'
+  - a: 'Time-travel read'
+    b: 'RESTORE'
+    difference: 'Time travel reads an old snapshot without changing current state; restore commits a new version matching an older state.'
+  - a: 'Schema enforcement'
+    b: 'Schema evolution'
+    difference: 'Enforcement rejects incompatible writes by default; evolution deliberately changes the stored table contract.'
+  - a: 'Deletion vector'
+    b: 'Physical delete'
+    difference: 'A vector marks rows logically removed; rewrite/purge and retention-based file deletion are needed for physical removal.'
+  - a: 'Liquid clustering'
+    b: 'Hive partitioning'
+    difference: 'Clustering reorganizes data incrementally around changeable keys; partitioning fixes directory boundaries by column values.'
+  - a: 'OSS Delta Lake'
+    b: 'Databricks platform capabilities'
+    difference: 'The OSS protocol/library defines shared table behavior; catalog governance, Photon and predictive optimization are managed runtime/services.'
+
+commands:
+  - label: Read a Delta table with Spark
+    code: 'spark.read.format("delta").load(path)'
+  - label: Read an exact table version (Spark)
+    code: 'spark.read.format("delta").option("versionAsOf", 120).load(path)'
+  - label: Inspect commit history (Spark SQL)
+    code: 'DESCRIBE HISTORY table_name'
+  - label: Compact a table (where supported)
+    code: 'OPTIMIZE table_name'
+  - label: Z-order in Databricks SQL
+    code: 'OPTIMIZE table_name ZORDER BY (customer_id)'
+  - label: Enable scoped schema merge in Spark write
+    code: 'df.write.format("delta").option("mergeSchema", "true").mode("append").save(path)'
+  - label: Set a retention-aware vacuum window (Spark SQL)
+    code: 'VACUUM table_name RETAIN 168 HOURS'
+  - label: Start a streaming Delta sink
+    code: 'df.writeStream.format("delta").option("checkpointLocation", checkpoint_path).start(path)'

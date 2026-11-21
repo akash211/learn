@@ -1,0 +1,98 @@
+[
+  {
+    "id": "tsdb-scn-001",
+    "title": "Ingest latency rises after hypertable conversion",
+    "technologies": [
+      "timescaledb",
+      "postgresql"
+    ],
+    "difficulty": "advanced",
+    "prompt": "A telemetry service writes 20,000 rows/s. After conversion, p95 insert latency rises from 12 ms to 180 ms. The table has 14 indexes and a hash space dimension with 64 partitions. Queries usually filter by device and one-hour range. CPU is moderate, but WAL and relation counts climbed.",
+    "approach": "Compare query plans and write transactions with the prior table. Inspect chunk count and index sizes; estimate time chunks multiplied by 64. Identify unused indexes and benchmark removing candidates. Test whether the space dimension addresses measurable contention, including a smaller count or one-dimensional layout. Measure writes with WAL, replica lag, and real concurrency. Choose interval by actual chunk bytes and working set; do not optimize insert rate alone.",
+    "red_flags": [
+      "Adding partitions because the current count seems arbitrary.",
+      "Dropping every index without checking read paths.",
+      "Assuming the extension is the only possible cause."
+    ]
+  },
+  {
+    "id": "tsdb-scn-002",
+    "title": "Dashboard averages disagree with raw data",
+    "technologies": [
+      "timescaledb",
+      "postgresql"
+    ],
+    "difficulty": "advanced",
+    "prompt": "A daily device dashboard reports mean temperature 18.2, while raw data gives 20.7. The daily view averages 24 hourly averages. Sample counts vary due to outages and null readings are present.",
+    "approach": "Define the target statistic and null denominator. Compare hourly counts and sums with raw data; check whether count(*) includes null measurements. Store sum and count in the lower aggregate and compute daily sum divided by total non-null count. Validate boundaries and refresh coverage so both queries use the same rows.",
+    "red_flags": [
+      "Changing refresh frequency without correcting aggregation math.",
+      "Assuming every hour has equal sample count.",
+      "Treating missing values as zero without approval."
+    ]
+  },
+  {
+    "id": "tsdb-scn-003",
+    "title": "Retention ran before archive verification",
+    "technologies": [
+      "timescaledb",
+      "postgresql"
+    ],
+    "difficulty": "advanced",
+    "prompt": "A 90-day retention policy dropped chunks overnight. The object-storage export uploaded files but did not validate all objects. A customer requests data in the deleted range; last night’s pg_dump ran after deletion.",
+    "approach": "Pause further destructive retention using the installed version’s documented method. Determine chunk ranges, manifests, and whether archive objects can be read and decoded. A post-deletion dump cannot restore removed rows. Check physical backups and WAL for a point before deletion and estimate restore time. Add an archive-complete gate, readback validation, audit manifests, and candidate review.",
+    "red_flags": [
+      "Claiming the later pg_dump can recover the rows.",
+      "Re-running retention before investigating.",
+      "Treating upload success as proof of restoration."
+    ]
+  },
+  {
+    "id": "tsdb-scn-004",
+    "title": "Late events affect compressed history",
+    "technologies": [
+      "timescaledb",
+      "postgresql"
+    ],
+    "difficulty": "advanced",
+    "prompt": "A device sends corrections up to 21 days late. Compression converts chunks at 3 days; aggregate refresh covers only 7 days. Corrected source rows appear, but dashboard values remain stale.",
+    "approach": "Map event time, chunk state, update support, invalidation, and refresh offsets. The current windows do not cover the correction horizon. Decide whether to quarantine or accept corrections through a version-supported path. Extend mutable and refresh windows or create targeted repair. Test the late write, refresh, and compression sequence, and align retention after summaries are verified.",
+    "red_flags": [
+      "Increasing refresh cadence while its start offset stays too short.",
+      "Assuming compression changed source values.",
+      "Ignoring version-specific update limits."
+    ]
+  },
+  {
+    "id": "tsdb-scn-005",
+    "title": "BRIN query regression",
+    "technologies": [
+      "timescaledb",
+      "postgresql"
+    ],
+    "difficulty": "advanced",
+    "prompt": "A time-only query across 18 months uses BRIN on time but shows many lossy blocks and rechecks. Large backfills and late events mean historical chunks are not physically ordered by timestamp.",
+    "approach": "Separate chunk pruning from within-chunk index behavior. Inspect physical correlation and block ranges; out-of-order writes widen summaries. Compare BRIN settings and B-tree alternatives on representative chunks, including size, write cost, and buffers. Consider whether the broad query is faster as a scan. Preserve direct time predicates and do not assume smaller pages_per_range repairs poor correlation.",
+    "red_flags": [
+      "Claiming BRIN is always best for timestamped data.",
+      "Forcing index scans without comparing buffers.",
+      "Ignoring physical order and chunk pruning."
+    ]
+  },
+  {
+    "id": "tsdb-scn-006",
+    "title": "Upgrade and restore drill fails",
+    "technologies": [
+      "timescaledb",
+      "postgresql"
+    ],
+    "difficulty": "advanced",
+    "prompt": "A PostgreSQL major upgrade passes smoke tests, but the standby cannot load TimescaleDB after failover. A test restore reports a different extension catalog and package version. Continuous aggregate jobs are absent from dashboards.",
+    "approach": "Treat this as packaging and recovery failure. Verify PostgreSQL and extension versions, libraries, preload settings, and supported sequence on every host. Follow version-specific restore guidance rather than guessing catalog updates. Restore a clone with matching packages; validate extension state, jobs, hypertables, columnstore data, views, and policies. Rehearse failover before rollout.",
+    "red_flags": [
+      "Running arbitrary ALTER EXTENSION commands in production.",
+      "Assuming smoke tests prove restore readiness.",
+      "Promoting a standby missing extension binaries."
+    ]
+  }
+]

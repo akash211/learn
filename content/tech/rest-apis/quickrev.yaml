@@ -1,0 +1,155 @@
+{
+  "concepts": [
+    {
+      "title": "HTTP method semantics",
+      "detail": "Methods carry standardized intent. GET is safe; PUT and DELETE are idempotent; POST is not inherently idempotent."
+    },
+    {
+      "title": "Status code classes",
+      "detail": "Status codes are protocol behavior, not decorative labels. Keep body status fields aligned with the actual response."
+    },
+    {
+      "title": "Safe versus idempotent",
+      "detail": "Safe means no requested state change; idempotent means repeated identical requests have the same intended effect."
+    },
+    {
+      "title": "Resource identity",
+      "detail": "URIs identify public resources and collections; they should not expose database layout or serve as authorization."
+    },
+    {
+      "title": "PUT and PATCH",
+      "detail": "PUT replaces the target state; PATCH applies a defined partial-change format whose idempotency depends on its semantics."
+    },
+    {
+      "title": "201, 202, 204",
+      "detail": "201 created a resource, 202 accepted unfinished work, 204 succeeded without response content."
+    },
+    {
+      "title": "Cursor stability",
+      "detail": "Cursor pagination requires deterministic ordering, including a unique tie-breaker, and a matching continuation predicate."
+    },
+    {
+      "title": "Offset trade-offs",
+      "detail": "Offsets are simple and support page jumps but can be slow and drift under concurrent inserts or deletes."
+    },
+    {
+      "title": "ETag validation",
+      "detail": "ETag is an opaque representation validator; If-None-Match can revalidate GET without retransferring an unchanged body."
+    },
+    {
+      "title": "If-Match writes",
+      "detail": "If-Match can prevent stale writes; a failed condition normally yields 412 Precondition Failed."
+    },
+    {
+      "title": "Cache directives",
+      "detail": "no-store prohibits storage; no-cache allows storage but requires validation before reuse."
+    },
+    {
+      "title": "Vary",
+      "detail": "Vary identifies request headers that select representation variants and therefore belong in a cache key."
+    },
+    {
+      "title": "OAuth purpose",
+      "detail": "OAuth 2.0 delegates authorization. OpenID Connect adds standardized identity claims and sign-in semantics."
+    },
+    {
+      "title": "Scopes and objects",
+      "detail": "Scopes constrain broad capabilities; resource servers still authorize each object, tenant, action, and state."
+    },
+    {
+      "title": "Problem details",
+      "detail": "RFC 9457 uses application/problem+json; stable type and extensions complement, but do not replace, HTTP status."
+    },
+    {
+      "title": "OpenAPI contract",
+      "detail": "OpenAPI describes an HTTP interface and enables tooling; runtime enforcement and compatibility tests remain necessary."
+    }
+  ],
+  "traps": [
+    "GET endpoints must not perform user-requested destructive actions; crawlers and prefetchers can invoke safe methods automatically.",
+    "A valid JWT signature proves token integrity, not permission for a requested object or tenant.",
+    "`no-cache` does not mean “do not store”; use `no-store` when storage is prohibited by policy.",
+    "A client timeout does not prove a write failed; retrying a non-idempotent POST can duplicate effects.",
+    "An idempotent request may have a different response on repetition; idempotence concerns intended effect.",
+    "An OpenAPI schema does not enforce authorization or prove the deployed route matches its description."
+  ],
+  "advanced": [
+    "Idempotency-key deduplication must be atomic with operation handling, scoped to the principal, and explicit about retention and payload mismatch.",
+    "A cursor should bind to sort and filter semantics; cursor opacity does not provide authorization or snapshot consistency.",
+    "RFC 9111 governs caching; shared caches and Authorization require explicit care, and private user data must not cross cache audiences.",
+    "JWT validation includes trusted issuer, intended audience, expiry, signature, and an allowed algorithm policy; decoding is not verification.",
+    "Propagate an end-to-end deadline; retries, queue wait, and downstream calls must fit within the remaining budget.",
+    "Circuit breakers complement timeouts and bulkheads; they do not replace admission control, bounded concurrency, or safe retry rules."
+  ],
+  "comparisons": [
+    {
+      "a": "GET",
+      "b": "POST",
+      "difference": "GET is safe and idempotent retrieval; POST delegates resource-specific processing and is not inherently idempotent."
+    },
+    {
+      "a": "PUT",
+      "b": "PATCH",
+      "difference": "PUT replaces desired target state; PATCH applies a defined partial modification."
+    },
+    {
+      "a": "409 Conflict",
+      "b": "412 Precondition Failed",
+      "difference": "409 is a domain/current-state conflict; 412 means an HTTP precondition such as If-Match evaluated false."
+    },
+    {
+      "a": "Offset paging",
+      "b": "Cursor paging",
+      "difference": "Offset supports page jumps but can drift and cost more at depth; cursor follows stable ordering but is less suited to random access."
+    },
+    {
+      "a": "no-cache",
+      "b": "no-store",
+      "difference": "no-cache allows storage but requires validation before reuse; no-store instructs caches not to store."
+    },
+    {
+      "a": "OAuth 2.0",
+      "b": "OpenID Connect",
+      "difference": "OAuth delegates access authorization; OpenID Connect adds standardized authentication and identity claims."
+    },
+    {
+      "a": "API gateway",
+      "b": "BFF",
+      "difference": "Gateway centralizes transport/infrastructure controls; BFF composes or adapts application behavior for a client experience."
+    }
+  ],
+  "commands": [
+    {
+      "label": "Inspect response headers and status",
+      "code": "curl -i https://api.example.test/v1/orders"
+    },
+    {
+      "label": "Send JSON with explicit media type",
+      "code": "curl -i -H \"Content-Type: application/json\" -d '{\"status\":\"pending\"}' https://api.example.test/v1/orders"
+    },
+    {
+      "label": "Request a specific representation",
+      "code": "curl -i -H \"Accept: application/json\" https://api.example.test/v1/orders/o_123"
+    },
+    {
+      "label": "Revalidate a cached representation",
+      "code": "curl -i -H 'If-None-Match: \"r8\"' https://api.example.test/v1/catalog/items/42"
+    },
+    {
+      "label": "Protect an update with a validator",
+      "code": "curl -i -X PUT -H 'If-Match: \"r8\"' -H \"Content-Type: application/json\" -d '{\"name\":\"New name\"}' https://api.example.test/v1/items/i_1"
+    },
+    {
+      "label": "Inspect a problem-details response",
+      "code": "curl -i -H \"Accept: application/problem+json\" https://api.example.test/v1/invalid"
+    },
+    {
+      "label": "Pass a bearer token in the header",
+      "code": "curl -i -H \"Authorization: Bearer $ACCESS_TOKEN\" https://api.example.test/v1/profile"
+    },
+    {
+      "label": "Retry with the same idempotency key",
+      "code": "curl -i -H \"Idempotency-Key: op-unique-123\" -H \"Content-Type: application/json\" -d '{\"amount\":25}' https://api.example.test/v1/payments"
+    }
+  ]
+}

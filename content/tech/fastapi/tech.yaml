@@ -1,0 +1,117 @@
+slug: fastapi
+title: FastAPI
+category: python-ecosystem
+summary: A type-driven Python framework for building validated HTTP APIs on ASGI, with dependency injection and generated OpenAPI.
+level: core
+relations:
+  - to: python
+    type: foundation
+    note: FastAPI relies on Python type hints, async semantics, callables, and exception behavior.
+  - to: rest-apis
+    type: uses
+    note: FastAPI is a framework for implementing HTTP APIs and their resource representations.
+  - to: pydanticai
+    type: complements
+    note: PydanticAI can power typed AI workflows behind FastAPI endpoints; the API framework and agent layer solve different problems.
+  - to: pytest
+    type: uses
+    note: Pytest fixtures and FastAPI dependency overrides support isolated endpoint and integration tests.
+intro:
+  what: |
+    FastAPI is a Python web framework for HTTP APIs. It uses Starlette for ASGI request handling
+    and Pydantic for parsing, validating, and serialising data. Python annotations describe
+    parameters and response shapes; FastAPI interprets those declarations to bind requests,
+    resolve dependencies, validate input, produce OpenAPI, and document the API interactively.
+
+    It is not magic around type hints: annotations alone do not enforce runtime types. FastAPI
+    turns them into a request-processing contract, while Pydantic performs runtime validation at
+    declared boundaries. The ASGI application still runs in an event loop, so blocking work,
+    resource lifetimes, and deployment topology remain the application's responsibility.
+  why: |
+    Hand-written HTTP handlers often repeat parsing, validation, documentation, and error-shaping
+    logic. FastAPI centralises these concerns in declarative models and dependencies while retaining
+    direct access to Starlette's routing, middleware, responses, and ASGI ecosystem. The result is
+    a concise path from an API contract to an executable service, without hiding the underlying
+    Python or HTTP semantics.
+  problems:
+    - Parse and validate JSON, path, query, header, cookie, and form inputs against explicit schemas.
+    - Share authentication, database sessions, and other request-scoped resources through dependencies.
+    - Generate OpenAPI and interactive API documentation from the application contract.
+    - Build asynchronous services that cooperate with async database and HTTP clients.
+    - Test HTTP behavior without requiring a live network listener.
+  where_used:
+    - JSON APIs and internal services built by Python teams.
+    - Async web services that call databases, queues, and upstream HTTP APIs.
+    - Model-serving and data products that need typed request and response contracts.
+    - Small services and prototypes that benefit from generated API docs and test clients.
+  ecosystem: |
+    FastAPI is the application layer above ASGI. Uvicorn commonly serves it; Starlette supplies
+    the web primitives; Pydantic supplies validation and serialisation; SQLAlchemy, async drivers,
+    and HTTPX provide I/O integrations. Pytest is a common test runner. These components are
+    independently versioned, so compatibility and lifecycle behavior should be checked rather than
+    assumed. FastAPI's dependency system composes application concerns, but it is not a general
+    resource container or a replacement for explicit transaction design.
+  alternatives:
+    - name: Django REST Framework
+      note: A strong fit when a Django application, ORM, admin, and batteries-included conventions are central.
+    - name: Flask
+      note: A small WSGI-oriented framework with a large extension ecosystem and fewer built-in API contracts.
+    - name: Starlette
+      note: The lower-level ASGI toolkit beneath FastAPI when direct control matters more than integrated validation and docs.
+related: [python, rest-apis, pydanticai, pytest]
+chapters:
+  - id: asgi-starlette
+    title: ASGI, Starlette, and Where FastAPI Sits
+    file: chapters/01-asgi-starlette.md
+    minutes: 12
+    level: core
+  - id: path-operations-dependencies
+    title: Path Operations and Dependency Injection
+    file: chapters/02-path-operations-dependencies.md
+    minutes: 13
+    level: core
+  - id: pydantic-models
+    title: Pydantic Models, Validation, and Serialisation
+    file: chapters/03-pydantic-models.md
+    minutes: 13
+    level: core
+  - id: async-sync-event-loop
+    title: Async, Sync, and the Event Loop
+    file: chapters/04-async-sync-event-loop.md
+    minutes: 12
+    level: core
+  - id: errors-responses
+    title: Errors, Exception Handlers, and Response Models
+    file: chapters/05-errors-responses.md
+    minutes: 12
+    level: core
+  - id: security-auth
+    title: Security and Authentication Dependencies
+    file: chapters/06-security-auth.md
+    minutes: 14
+    level: core
+  - id: database-access
+    title: Database Access Patterns
+    file: chapters/07-database-access.md
+    minutes: 14
+    level: core
+  - id: background-streaming-sse
+    title: Background Tasks, Streaming, and SSE
+    file: chapters/08-background-streaming-sse.md
+    minutes: 12
+    level: core
+  - id: testing
+    title: Testing FastAPI Applications
+    file: chapters/09-testing.md
+    minutes: 13
+    level: core
+  - id: deployment
+    title: Deployment, Workers, Timeouts, and OpenAPI
+    file: chapters/10-deployment.md
+    minutes: 14
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

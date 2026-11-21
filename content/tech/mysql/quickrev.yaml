@@ -1,0 +1,86 @@
+concepts:
+  - title: InnoDB buffer pool
+    detail: Caches table and index pages; size for the active working set without starving the OS or connections.
+  - title: Redo log
+    detail: Write-ahead recovery records replay durable page changes after a crash; distinct from binlogs.
+  - title: Undo log
+    detail: Supports rollback and reconstruction of older MVCC versions; long read views delay purge.
+  - title: Doublewrite
+    detail: Protected page copies help recover torn writes before redo replay; normally leave it enabled.
+  - title: Clustered index
+    detail: InnoDB stores full rows in primary-key B+tree leaves; secondary records carry primary-key values.
+  - title: Leftmost prefix
+    detail: Composite index (a,b,c) is ordered by a then b then c; it does not directly seek by c alone.
+  - title: Covering index
+    detail: Contains all requested columns and may avoid row lookups, but increases storage and write work.
+  - title: Cardinality estimate
+    detail: Index statistics estimate distinct values and selectivity; stale or sampled values can mislead plans.
+  - title: Index Merge
+    detail: Optimizer combines range scans from several indexes; compare with a suitable composite key.
+  - title: EXPLAIN ANALYZE
+    detail: MySQL 8.0.18+ executes the statement and reports actual iterator rows and timing; use carefully.
+  - title: Read view
+    detail: InnoDB snapshot determines visible row versions; long transactions can retain needed undo.
+  - title: Next-key lock
+    detail: Record plus preceding gap lock; range locking at REPEATABLE READ can block inserts of absent keys.
+  - title: Binlog formats
+    detail: STATEMENT logs SQL, ROW logs changed rows, MIXED selects; row format is predictable but may be larger.
+  - title: GTID
+    detail: Transaction identity sets ease replication positioning but do not solve conflicting writes or split-brain.
+  - title: Partition uniqueness
+    detail: Unique keys on a partitioned table must include partition columns; design global identifiers explicitly.
+  - title: PITR chain
+    detail: Restore a consistent base backup, then replay a complete binary-log sequence to the recovery point.
+traps:
+  - Assuming a read replica is a backup; accidental deletes and corruption can replicate.
+  - Treating Seconds_Behind_Source = 0 as proof that a particular commit is visible.
+  - Assuming a secondary-index match returns every row column without a clustered lookup.
+  - Running EXPLAIN ANALYZE without realizing that it executes the statement.
+  - Assuming online DDL is always lock-free, instant, and free of resource costs.
+  - Assuming JSON paths are automatically indexed or behave exactly like PostgreSQL jsonb.
+advanced:
+  - An asynchronous promotion can lose acknowledged transactions; failover requires an RPO and source fencing.
+  - Redo capacity smooths bursts but cannot fix sustained page-flush throughput below the write rate.
+  - Next-key lock scope depends on the index and scanned range, not only the apparent predicate.
+  - GTID simplifies positioning but does not provide consensus or prevent split brain by itself.
+  - mysqldump --single-transaction does not guarantee consistent nontransactional tables or uncontrolled DDL.
+  - gh-ost and pt-online-schema-change have different binlog, trigger, foreign-key, and topology requirements.
+comparisons:
+  - a: Redo log
+    b: Binary log
+    difference: Redo recovers InnoDB page state; binlog records transactions for replication and PITR.
+  - a: Clustered index
+    b: Secondary index
+    difference: Clustered leaves hold full rows; secondary leaves hold keys plus primary-key values.
+  - a: Consistent read
+    b: Locking read
+    difference: Snapshot reads generally avoid row locks; FOR UPDATE or FOR SHARE acquires current locks.
+  - a: Partitioning
+    b: Sharding
+    difference: Partitions share one server; shards distribute data across servers and require routing logic.
+  - a: Logical dump
+    b: Physical backup
+    difference: SQL is portable but large restores can be slow; physical backup requires compatible prepare and restore.
+  - a: Asynchronous replication
+    b: Semi-synchronous replication
+    difference: Async need not wait for replica; semi-sync can wait for receipt, not necessarily apply or quorum.
+  - a: VIRTUAL generated column
+    b: STORED generated column
+    difference: Virtual computes on read; stored consumes row space and is maintained on writes.
+commands:
+  - label: Inspect replica health
+    code: 'SHOW REPLICA STATUS\\G'
+  - label: Inspect InnoDB status and deadlocks
+    code: 'SHOW ENGINE INNODB STATUS\\G'
+  - label: Explain a query without execution
+    code: 'EXPLAIN FORMAT=TREE SELECT ...'
+  - label: Measure actual execution; statement runs
+    code: 'EXPLAIN ANALYZE SELECT ...'
+  - label: Refresh table statistics
+    code: 'ANALYZE TABLE orders;'
+  - label: Inspect index keys
+    code: 'SHOW INDEX FROM orders;'
+  - label: Dump InnoDB database snapshot
+    code: 'mysqldump --single-transaction --routines --events --databases appdb > appdb.sql'
+  - label: Inspect binlog before PITR
+    code: 'mysqlbinlog --start-position=... --stop-position=... binlog.000123'

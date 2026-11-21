@@ -1,0 +1,266 @@
+[
+  {
+    "id": "duck-basic-001",
+    "topic": "architecture",
+    "difficulty": "beginner",
+    "question": "What does in-process mean in DuckDB?",
+    "answer": "The engine runs inside the process that calls it: a Python program, CLI, or embedded application loads DuckDB and executes SQL locally. There is normally no separate server process and no client/server network hop. `duckdb.connect(':memory:')` creates a temporary database; connecting to a filename opens or creates persistent database state. This reduces deployment friction, but the host application also owns the engine’s CPU, memory, file access, and lifecycle. It is an embedded analytical engine, not a network database that several independent services can treat as a shared server. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "architecture",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-002",
+    "topic": "architecture",
+    "difficulty": "beginner",
+    "question": "How is DuckDB different from SQLite?",
+    "answer": "Both are embedded databases, but they are designed around different workloads. SQLite is a general-purpose transactional row store used in applications for frequent small reads and writes. DuckDB is columnar and vectorised for analytical queries that scan many rows, project a few columns, join, and aggregate. For those OLAP workloads it can query files directly and write Parquet. This is not a claim that one is universally faster. Choose by access pattern, concurrency model, required ecosystem, and data format. SQLite is usually a better app-state store; DuckDB is usually a better local analytics engine. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "architecture",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-003",
+    "topic": "architecture",
+    "difficulty": "beginner",
+    "question": "What does vectorized execution mean?",
+    "answer": "Instead of invoking an operator separately for each row, DuckDB processes batches of values in vectors. Operators can scan a column, apply a predicate across a batch, and pass qualifying values to the next operator. Batching reduces per-row dispatch overhead and works naturally with columnar data and cache-friendly loops. SQL expressions execute within the engine rather than requiring a Python callback for every value. Vectorization does not mean the whole query fits in memory or that every operator is equally parallel. Sorts, joins, and high-cardinality aggregates need state; returning results to Python can also become expensive. The plan and profile show where work occurs. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "architecture",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-004",
+    "topic": "files",
+    "difficulty": "beginner",
+    "question": "How do I query a Parquet file without importing it?",
+    "answer": "Use the `read_parquet` table function in `FROM`, for example `SELECT region, sum(amount) FROM read_parquet('sales/*.parquet') GROUP BY region`. DuckDB scans the file directly; it does not first need a permanent table. Selecting only needed columns and filtering on useful fields can let the reader avoid unnecessary I/O. Direct reading is convenient for exploration and immutable inputs. A persistent result can be created with `CREATE TABLE AS SELECT`, or exported as Parquet using `COPY (SELECT ...) TO ... (FORMAT parquet)`. File discovery, schema compatibility, and input snapshot consistency remain your responsibility. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "files",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-005",
+    "topic": "files",
+    "difficulty": "beginner",
+    "question": "How does DuckDB optimize Parquet scans?",
+    "answer": "A Parquet scan can use column projection to avoid decoding unselected columns and can push filters toward the scan. Parquet row-group statistics may let the reader skip groups that cannot satisfy a predicate. Hive-style directory partition values can also prune directories when the reader recognizes them and the query filters those columns. These optimizations depend on file metadata, expression shape, and layout. A cast or function around a filter field can inhibit pushdown; many tiny files add overhead. Use `EXPLAIN` or profiling to confirm what is actually scanned rather than assuming a path layout is effective. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "files",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-006",
+    "topic": "files",
+    "difficulty": "beginner",
+    "question": "When should I specify CSV types instead of relying on auto-detection?",
+    "answer": "Use explicit types when input values are ambiguous or carry business meaning: leading-zero identifiers, money with defined precision, dates with a known format, or strings that might be mistaken for NULL markers. DuckDB’s CSV inference is useful for exploration, but the inferred schema can depend on sample values and file contents. A production reader should set headers, delimiter, date format, null representation, and important column types according to the source contract. Validate malformed rows and compare counts. Converting stable inputs to Parquet can make repeated analytical reads faster and schema behavior more predictable. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "files",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-007",
+    "topic": "files",
+    "difficulty": "beginner",
+    "question": "How can DuckDB query files on S3 or HTTP?",
+    "answer": "The `httpfs` extension enables HTTP(S) and S3-compatible file access. Install and load it where needed (`INSTALL httpfs; LOAD httpfs;`), then use supported paths such as an HTTPS URL or an S3 URL in a reader like `read_parquet`. S3 access requires provider-appropriate credentials, region, and endpoint configuration. Use DuckDB secrets or an approved credential provider instead of hard-coding keys into notebooks and SQL. Remote queries depend on object metadata, network latency, range-request support, and file count. Restrict external access for untrusted SQL and consider staging data locally when repeated remote scans dominate cost. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "files",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-008",
+    "topic": "optimizer",
+    "difficulty": "beginner",
+    "question": "What is the difference between EXPLAIN and EXPLAIN ANALYZE?",
+    "answer": "`EXPLAIN` displays the planned physical operators without running the query. It helps inspect scans, selected columns, filters, joins, estimates, and sorts. `EXPLAIN ANALYZE` executes the query and reports actual cardinalities and timings, so it is useful for finding where the runtime is spent and whether estimates were inaccurate. An estimated plan is not a benchmark, and an analyzed run should use representative data. Parallel operator times may not add up to wall-clock duration. First confirm the query returns correct results; then use profiling to separate scan, CPU, spill, remote I/O, and result-conversion costs. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "optimizer",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-009",
+    "topic": "optimizer",
+    "difficulty": "intermediate",
+    "question": "What is filter pushdown and why does it matter?",
+    "answer": "Filter pushdown applies a predicate as close to the data source as possible, often during a file scan. For Parquet, a selective predicate can help avoid decoding rows or row groups that cannot match. It also reduces data flowing into joins and aggregates. Column projection works similarly by reading only fields the query needs. Pushdown is not guaranteed for every expression or source. A transformation on a column, unsupported predicate, or type mismatch can move evaluation above the scan. Inspect the physical plan and measure bytes or rows read. Keep predicates simple and typed consistently with the file schema when practical. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "optimizer",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-010",
+    "topic": "optimizer",
+    "difficulty": "intermediate",
+    "question": "Why can estimated cardinalities be wrong?",
+    "answer": "The optimizer estimates row counts and selectivity to choose join order and physical operators. Estimates can be weak when columns are correlated, source data changed, expressions obscure distributions, or external file statistics are limited. If an intermediate join produces vastly more rows than estimated, later operators may spend far more memory and CPU than planned. Compare estimated and actual cardinalities with `EXPLAIN ANALYZE`. Also verify semantics: duplicate keys or a missing join predicate can legitimately multiply rows. Do not treat all estimate errors as stale statistics or try to “fix” them by changing thread count; first identify which relation and condition caused the divergence. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "optimizer",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-011",
+    "topic": "sql",
+    "difficulty": "intermediate",
+    "question": "What SQL join types should I know in DuckDB?",
+    "answer": "DuckDB supports common relational joins such as inner, left, right, full outer, cross, semi, and anti joins. An inner join keeps matching pairs; a left join preserves every left row and fills unmatched right columns with NULL. Semi joins filter the left side to rows that have a match, while anti joins select rows without a match. Join type controls row preservation, not key uniqueness. If each side has repeated values for a key, matches multiply. Check the grain and uniqueness of dimension keys before aggregation. Ordinary equality does not match NULL keys, so handle unknown keys explicitly rather than assuming NULL equals NULL. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "sql",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-012",
+    "topic": "sql",
+    "difficulty": "intermediate",
+    "question": "How do window functions differ from GROUP BY?",
+    "answer": "`GROUP BY` collapses each group to one output row. A window function computes a value across related rows while preserving the input rows, using `OVER` with optional `PARTITION BY`, `ORDER BY`, and frame clauses. `row_number`, `lag`, and running `sum` are common examples. Window ordering does not guarantee final output ordering; use an outer `ORDER BY` for that. Specify deterministic tie-breakers when ranking equal timestamps. Frame clauses also matter: `ROWS` counts physical rows, while `RANGE` groups ordering values and peers. Test ties and boundaries with a small fixture. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "sql",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-013",
+    "topic": "sql",
+    "difficulty": "intermediate",
+    "question": "What is QUALIFY useful for?",
+    "answer": "`QUALIFY` filters rows using a window-function result, keeping ranking logic concise. For example, `QUALIFY row_number() OVER (PARTITION BY customer_id ORDER BY updated_at DESC) = 1` selects one latest row per customer. It avoids an extra visible subquery layer when the filtering condition is naturally about a window. It does not remove the need for a deterministic ordering: add a stable tie-breaker if timestamps can match. A subquery or CTE with a rank column is a portable alternative for SQL engines that lack `QUALIFY`. Check DuckDB and target-engine support when code must run across dialects. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "sql",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-014",
+    "topic": "external-databases",
+    "difficulty": "intermediate",
+    "question": "What does the PostgreSQL extension do?",
+    "answer": "DuckDB’s `postgres` extension can attach a PostgreSQL database so its tables are queryable using DuckDB SQL. Depending on query shape and extension version, some filtering or projection may be pushed to the source, while other work occurs locally. A `READ_ONLY` attachment is preferable for extraction-only jobs. This is not equivalent to copying the source into a local DuckDB table or to every operation running in PostgreSQL. Inspect the plan and measure network transfer. Use least-privilege credentials and avoid passwords embedded in connection strings. For repeated analysis, materializing a consistent local snapshot may be faster and more reproducible. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "external-databases",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-015",
+    "topic": "external-databases",
+    "difficulty": "intermediate",
+    "question": "What are Iceberg and Delta extensions for?",
+    "answer": "Iceberg and Delta are table formats that manage metadata and snapshots over data files, commonly Parquet. Their DuckDB extensions can read supported tables by resolving metadata, rather than treating every object under a directory as a current row. Exact catalog, authentication, and feature support depends on the extension and version. A reader extension is not automatically a full writer, merge engine, or table-maintenance implementation. Test snapshot selection, schema evolution, deletes, and partition pruning on the intended release. Avoid bypassing the log and scanning raw files if obsolete or deleted files could then appear in results. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "external-databases",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-016",
+    "topic": "types",
+    "difficulty": "intermediate",
+    "question": "How should I choose DECIMAL versus DOUBLE?",
+    "answer": "Use `DECIMAL(p,s)` when exact base-10 arithmetic and known precision/scale matter, such as currency. `DOUBLE` stores approximate binary floating-point values and is usually suitable for scientific or statistical measurements where small rounding error is acceptable. An implicit cast can change precision, so define conversions at ingestion. Test maximum and minimum values, scale, rounding, and overflow. Do not assume a value that prints as `10.00` is exact if it was computed in floating point. When exporting to another engine or pandas, verify the resulting type and values; representation and decimal support can differ across clients. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "types",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-017",
+    "topic": "types",
+    "difficulty": "intermediate",
+    "question": "How does DuckDB represent JSON?",
+    "answer": "DuckDB offers a `JSON` logical type and JSON functions to validate and extract values from JSON text. Functions such as `json_extract` return JSON, while `json_extract_string` returns a string form of a selected scalar. The extracted text can then be cast to a numeric, date, or other typed value. Missing keys, JSON null, SQL NULL, empty strings, and malformed JSON are different cases. Test each. Frequently used fields are often better promoted into typed relational columns or a `STRUCT`, while a raw payload may be retained for audit. Choose strict or permissive conversion according to the data-quality contract. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "types",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-018",
+    "topic": "types",
+    "difficulty": "intermediate",
+    "question": "What is the difference between LIST, STRUCT, and JSON?",
+    "answer": "`LIST` is a typed sequence of values, `STRUCT` is a typed record with named fields, and `JSON` represents JSON content that can be inspected with JSON functions. The nested SQL types make fields and elements available to relational expressions; JSON remains flexible and can contain differing shapes. Use nested types when schema is known and operations should be type-checked. Keep JSON where input variation or raw preservation is important, then transform to a stable shape for repeated analytics. `UNNEST` on a list changes row cardinality, so retain the parent key and check that later aggregates still operate at the intended grain. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "types",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-019",
+    "topic": "persistence",
+    "difficulty": "intermediate",
+    "question": "Does a DuckDB in-memory database persist between program runs?",
+    "answer": "No. `:memory:` creates transient database state for that engine instance. When the process or database instance is closed, its tables disappear. To preserve catalog and table data across runs, connect to a file-backed database such as `analytics.duckdb`, or export results to a durable format such as Parquet. Tests should distinguish ephemeral fixtures from persistence behavior. A file-backed database still needs backup, lifecycle, and concurrency planning. Exporting a query to Parquet creates portable files but is not the same as a DuckDB-managed table with database transaction semantics. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "persistence",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-020",
+    "topic": "persistence",
+    "difficulty": "advanced",
+    "question": "Can multiple processes write the same DuckDB database file?",
+    "answer": "DuckDB’s native database is designed around a single process owning read-write access, not as a server database for unrelated processes to write concurrently. Multiple threads and connections within a process can use the engine’s concurrency controls, while separate processes may use supported read-only access patterns. Conflicting writes in one process can also produce transaction conflicts. For independent writers or many network clients, choose PostgreSQL or a managed database. Do not infer safe multi-process writes from successful local tests, especially on shared or network filesystems where locking semantics vary. Make the read-write owner explicit and test restart, lock, and conflict behavior on the actual deployment storage. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "persistence",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-021",
+    "topic": "persistence",
+    "difficulty": "advanced",
+    "question": "What does spilling to disk mean?",
+    "answer": "When supported operators need more memory than the configured budget, DuckDB can write intermediate state to a temporary directory and read it back later. Settings such as `temp_directory` and `max_temp_directory_size` control where spill data lives and its cap. This can let some queries handle data larger than RAM. Spilling adds I/O and can make a query much slower; it is not unlimited memory. Some state shapes or combinations may still fail. Keep enough disk space, monitor usage, reduce unnecessary rows and columns before blocking operators, and test the largest group, join, sort, or window expected in production. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "persistence",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-022",
+    "topic": "performance",
+    "difficulty": "advanced",
+    "question": "What do threads and memory_limit settings control?",
+    "answer": "`threads` controls DuckDB worker parallelism; `memory_limit` caps engine-managed memory use. They are useful when DuckDB shares a host with other applications or concurrent queries. Setting both to maximum does not guarantee speed: thread contention can hurt, and host-side Python or Arrow allocations may not be covered by DuckDB’s memory accounting. Measure the actual query with profiling, then change one setting at a time. Leave headroom for the operating system, embedding process, and temporary files. Defaults and effective limits can vary with host resources and version; inspect `duckdb_settings()` and verify the configuration in the deployed process. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "performance",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-023",
+    "topic": "pipeline",
+    "difficulty": "advanced",
+    "question": "When is DuckDB preferable to Spark?",
+    "answer": "DuckDB is attractive for single-host analytics, local ETL, exploratory SQL, and tests where a dataset fits the machine’s practical CPU, memory, and disk budget. It has no cluster to start and can query local files directly. Spark is designed to distribute work across a cluster and handle workloads beyond one host’s capacity. Choose based on scale, failure recovery, concurrency, and ecosystem needs, not only query speed on a sample. A DuckDB query may be useful for local Spark SQL tests but does not emulate Spark’s distributed execution, partitioning, or dialect completely. Reassess as data and service-level requirements grow. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "pipeline",
+      "duckdb"
+    ]
+  },
+  {
+    "id": "duck-basic-024",
+    "topic": "pipeline",
+    "difficulty": "advanced",
+    "question": "How can DuckDB help test Spark SQL logic?",
+    "answer": "DuckDB can run SQL-shaped transformations over small fixture files in a fast local test, checking filters, joins, aggregates, and quality rules without starting a Spark cluster. It is especially useful when the logic uses portable relational SQL and the expected outputs are easy to assert. It is not a full Spark emulator. Dialects, casts, timestamps, nested values, UDFs, NULL semantics, and distributed behavior can differ. Keep integration tests in the production engine for features that matter, and compare output semantics rather than assuming identical plans or performance. Treat the result as a contract: include a tiny edge-case fixture, assert expected values and types, and record the DuckDB version when behavior is version-sensitive. This makes a correct explanation actionable instead of relying on a happy-path demonstration.",
+    "tags": [
+      "pipeline",
+      "duckdb"
+    ]
+  }
+]

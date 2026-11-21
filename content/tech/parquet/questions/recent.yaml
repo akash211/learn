@@ -1,0 +1,119 @@
+- id: parquet-recent-001
+  topic: "codec rollout"
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: "What should you verify before changing a production Parquet codec?"
+  answer: |
+    Check support in every consumer for the exact codec and variant, including older deployments and managed services. A writer accepting an option does not prove readers can decode it. LZ4 variants deserve attention; Zstd level affects writer CPU and output. Test representative files through actual Spark, DuckDB, warehouse and external-table versions. Validate schema, nested values and counts, then measure CPU, bytes and latency. Include historical files if codec generations will coexist. Do not confuse internal GZIP pages with whole-file gzip wrapping. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["codec-rollout", parquet]
+
+- id: parquet-recent-002
+  topic: "pruning diagnosis"
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: "Filter pushdown is enabled but scan bytes barely change. How would you diagnose it?"
+  answer: |
+    Check that the predicate reaches the scan and only necessary columns are projected. Inspect statistics and compare row-group ranges with actual data distribution: randomly mixed values can make every group span the domain. Check unsupported expressions, casts that block partition pruning, missing or truncated statistics, and whether page indexes or bloom filters are both written and read. Measure files, bytes and groups scanned. If justified by query patterns, cluster or sort by a frequent filter key. An explain-plan label alone does not prove data was skipped; validate runtime metrics and correctness after a layout change. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["pruning-diagnosis", parquet]
+
+- id: parquet-recent-003
+  topic: "schema drift"
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: "How would you safely evolve a Parquet dataset with multiple writers and readers?"
+  answer: |
+    Treat a change as a contract migration. Identify writers/readers and inspect physical and logical schemas. Adding an optional field differs from renaming or changing timestamp precision. Document null behavior for old rows; use stable field IDs or table-format features where supported, but test readers matching by name. Build compatibility fixtures with old/new files, nulls, nested values, decimals and timestamps, and read them through each engine. Plan backfill or versioned fields for incompatible changes. Raw Parquet has per-file schemas, not a global registry; coordinate rollout instead of assuming schema merge handles every evolution. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["schema-drift", parquet]
+
+- id: parquet-recent-004
+  topic: "nested compatibility"
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: "Why can nested lists behave differently across Parquet readers?"
+  answer: |
+    Nested values use schema elements and repetition/definition levels; standard lists have a nested group convention, and legacy encodings exist. Libraries have made compatibility choices about wrappers and element names. Null list, empty list and list with null elements can also be collapsed incorrectly. Inspect physical schema, not only language types. Write fixtures for absent parent, null list, empty list, null element and repeated values, then round-trip them through the actual writer and consumers. Verify nested projection too. Prefer mature library writers to hand-authored trees, and document versions when older-reader compatibility matters. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["nested-compatibility", parquet]
+
+- id: parquet-recent-005
+  topic: "small-file remediation"
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: "An object-store table has millions of tiny Parquet files. What is a safe remediation plan?"
+  answer: |
+    Measure counts and size distributions by partition, planning time, requests and write cadence. Find whether the cause is granular partition columns, too many writer tasks, appends, skew or micro-batches. Stop reproducing the cause. Compact incrementally into reader-appropriate sizes and verify schema, counts and partition values. For Delta, Iceberg or Hudi, use supported rewrites so metadata publishes a consistent snapshot. For raw Parquet, write a new immutable path, validate it, then switch a manifest or catalogue pointer rather than deleting files while readers may list them. Monitor planning time after rollout. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["small-file-remediation", parquet]
+
+- id: parquet-recent-006
+  topic: "row-group sizing"
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: "What factors matter when choosing row-group size?"
+  answer: |
+    Row-group size affects independent work, decode/buffer memory, metadata overhead and statistics granularity. Larger groups can reduce metadata and support sequential scans but limit parallelism or raise memory pressure. Smaller groups improve granularity but add metadata and may make reads less efficient. Balance depends on engine, storage, row width, codec, concurrency and data. Test real predicates and inspect group counts, chunk sizes, memory, parallelism and groups skipped. File and row-group sizes differ: one file may hold several groups. A default in Spark, Arrow or DuckDB is not necessarily portable. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["row-group-sizing", parquet]
+
+- id: parquet-recent-007
+  topic: "Delta path"
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: "A Delta table stores Parquet. Why is reading its directory with a generic Parquet glob risky?"
+  answer: |
+    Delta's transaction log identifies files belonging to a committed snapshot. The directory can also hold obsolete files retained for time travel; protocol features such as deletion vectors may affect logical rows. A generic Parquet glob reads physical objects without applying those semantics, potentially including removed data or duplicates from earlier versions. Use a Delta-aware reader and check protocol compatibility. Direct file reads may help debugging but are not authoritative table reads. Parquet is the physical layer; Delta supplies snapshot and transaction metadata. Respect the protocol rather than inferring current contents from a listing. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["delta-path", parquet]
+
+- id: parquet-recent-008
+  topic: "remote bottleneck"
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: "How do you distinguish a network-bound scan from Parquet planning overhead?"
+  answer: |
+    Measure time before tasks, file/footer counts, coordinator memory, task duration, remote bytes, request/retry metrics, CPU and worker utilization. Long pre-task delay with tiny objects suggests discovery or metadata cost; low throughput with workers waiting on requests or saturated network suggests remote I/O. CPU-heavy decode and skew differ. Compare a representative subset and, if supported, a warm metadata cache while accounting for freshness. Improve partition pruning, manifests or compaction for discovery; region placement, concurrency or prefetch may help remote throughput. More workers do not cure coordinator serialization or throttling. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["remote-bottleneck", parquet]
+
+- id: parquet-recent-009
+  topic: "pandas writer"
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: "What risks arise when pandas writes Parquet for a distributed pipeline?"
+  answer: |
+    pandas is single-process, so data must fit memory and conversion can need extra buffers. One local file is not distributed parallelism. Partitioned output and small incremental batches can create tiny files. Index handling may add unexpected fields; nullable dtypes, categoricals, timezones and decimals need deliberate logical mappings. For larger data, use PyArrow dataset APIs and streaming batches or a distributed writer. Specify compression and partitioning, inspect schema, row groups, stats and sizes, then test downstream engines. Two `.parquet` files need not have identical logical schemas. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["pandas-writer", parquet]
+
+- id: parquet-recent-010
+  topic: "bloom filters"
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: "When are Parquet bloom filters useful, and what limits their benefit?"
+  answer: |
+    Bloom filters can help skip a chunk when a selective equality predicate asks for a value definitely absent. A positive can be a false positive and still requires checking. They suit some equality workloads more than broad ranges. The writer must emit them and the reader must support and consult them; support is uneven. Verify metadata and scan counters. Bloom filters do not fix tiny files, replace min/max statistics, guarantee point-lookup latency or provide a transaction service. Consider them only after confirming query patterns and testing write overhead against savings in the intended engine. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["bloom-filters", parquet]
+
+- id: parquet-recent-011
+  topic: "codec comparison"
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: "How should a team compare Snappy and Zstd without misleading claims?"
+  answer: |
+    Hold data, schema, row-group layout, writer version and workload constant. Test the exact Zstd level used in production. Measure output bytes and write CPU, then scan with actual engines and track remote bytes, CPU, latency and concurrency. Smaller files may help network-bound scans but add encoding/decoding work; CPU-bound workloads differ. Use realistic cardinality, nested columns and null rates, not only repetitive synthetic values. Check downstream support. Report results only for tested data/configuration, and include historical files if a gradual rollout leaves mixed codecs. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["codec-comparison", parquet]
+
+- id: parquet-recent-012
+  topic: "schema merge"
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: "What tradeoff can schema merging create across many Parquet files?"
+  answer: |
+    Merging per-file schemas can expose optional fields added in new files, but may require metadata inspection across many objects and increase planning cost. Engines differ in conflict, nested structure, name and nullability resolution; merging is not a universal safe coercion. Use an authoritative catalogue or table schema when supported. Otherwise define evolution and test old/new mixtures. Do not substitute costly merging for governance. A deliberate backfill can clarify historical null behavior. Measure planning and inspect resolved field types rather than assuming the intended schema was selected. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["schema-merge", parquet]

@@ -1,0 +1,115 @@
+slug: kafka
+title: Apache Kafka
+category: data-engineering
+summary: "A distributed event-streaming platform built around replicated, partitioned logs for durable ingestion, replay, and independent consumers."
+level: core
+relations:
+  - to: pyspark
+    type: complements
+    note: "Kafka transports and retains events while Spark processes streams or batches from them; the systems solve adjacent ingestion and compute problems."
+  - to: delta-lake
+    type: complements
+    note: "Kafka carries continuous event streams and Delta Lake stores analytics-ready tables; ingestion pipelines commonly bridge the two while preserving their distinct retention and query models."
+  - to: system-design
+    type: complements
+    note: "Kafka's partitions, replication, ordering, replay, and failure semantics are concrete distributed-systems design tradeoffs."
+  - to: airflow
+    type: complements
+    note: "Kafka handles continuous event transport and replay, while Airflow orchestrates scheduled workflows such as backfills, CDC maintenance, and batch processing over Kafka data."
+intro:
+  what: |
+    Apache Kafka is a distributed event-streaming platform. Producers append records to named topics; each topic is split into ordered partitions replicated across brokers. Consumers read independently, maintain their own positions, and can replay retained history. Kafka is therefore not just a message queue: the data remains available according to a retention policy, and many consumer groups can build separate views from the same stream.
+
+    The central design boundary is a partition. Ordering is guaranteed within a partition, offsets identify positions in its log, and a traditional consumer group assigns each partition to at most one active member. Keys influence partition choice, so they encode both ordering and load-distribution decisions. Replication, acknowledgment settings, and retention define what survives failures and how long an offline consumer can recover.
+
+    This module teaches the operational contract, not just the APIs: producer reliability, consumer offset commits, rebalances, transactions, compaction, schema evolution, Kafka Connect and CDC, stream processing, KRaft operations, and replay patterns. It distinguishes Kafka's exactly-once capabilities within Kafka from the harder problem of coordinating external databases and services.
+  why: |
+    Systems often need to accept events faster than downstream applications can process them, distribute the same facts to multiple teams, and recover after a consumer outage without asking the source to recreate its data. A durable log decouples producers from consumers: publishers append once, and independent applications read at their own pace.
+
+    Kafka provides this decoupling through partitioned logs, replication, consumer offsets, and a distributed client protocol. Those primitives create their own design obligations: choose keys and partition counts, retain enough data for recovery, handle at-least-once effects, evolve schemas safely, and operate replicas and consumer groups. Knowing the mechanics makes it possible to use Kafka where replay and scale justify the platform—and to recognize when a simpler queue or database is enough.
+  problems:
+    - Decoupling event producers from consumers that scale, deploy, or recover independently.
+    - Retaining ordered per-key histories for replay and downstream state reconstruction.
+    - Distributing one event stream to multiple applications without coupling their progress.
+    - Absorbing bursts while consumers process at a different rate, within a planned retention window.
+    - Replicating event data across brokers and recovering from broker or consumer failures.
+    - Integrating databases and services through CDC, connectors, and stream-processing applications.
+  where_used:
+    - Event-driven service integration, domain events, and asynchronous workflows.
+    - Database change-data capture with Debezium and Kafka Connect.
+    - Centralized telemetry, clickstream, audit, and application-event ingestion.
+    - Streaming transformations with Kafka Streams, ksqlDB, Flink, or Spark Structured Streaming.
+    - Feeding lakehouses, warehouses, search indexes, caches, and operational projections.
+    - Replaying retained events to rebuild a consumer-owned view or investigate a data incident.
+  ecosystem: |
+    Kafka sits between event-producing systems and independent consumers. It provides the replicated log and client protocol; Kafka Connect and connector ecosystems move data between external systems; Schema Registry products govern serialized contracts; Kafka Streams and ksqlDB process streams close to Kafka. Debezium commonly captures database changes through Connect. Spark, Flink, and lakehouse systems can consume Kafka when processing or analytical storage belongs in a separate runtime.
+
+    Managed Kafka services reduce broker and control-plane administration, but do not remove decisions about keys, partitions, consumer offsets, schemas, ACLs, retention, or replay. ZooKeeper-based deployments are historical: Kafka 4.0 runs in KRaft mode and removes ZooKeeper, so upgrades must follow the supported version path. Kafka 4-era work includes the newer consumer group protocol (KIP-848), production-ready tiered-storage support (KIP-405, subject to implementation/version limits), and KRaft quorum improvements; feature maturity and managed-service availability still vary. Share groups (KIP-932) extend cooperative work distribution in releases where supported, but are not a universal replacement for consumer groups.
+
+    Kafka complements Airflow: Kafka moves a continuous stream, while Airflow schedules and observes finite workflows such as batch backfills or periodic maintenance. It complements PySpark and Delta Lake as ingestion and event-history infrastructure rather than replacing compute engines or analytical tables. When the workload is a small single-consumer work queue, a managed queue or database outbox may be simpler to operate.
+  alternatives:
+    - name: Managed cloud queue
+      note: "Often simpler for independent work items with per-message acknowledgment and visibility timeouts; Kafka is stronger when many consumers need retained history and replay."
+    - name: RabbitMQ
+      note: "A mature broker for routing and task-queue patterns; it does not provide Kafka's partitioned, offset-addressable log model."
+    - name: Apache Pulsar
+      note: "A distributed messaging and streaming platform with different storage/serving architecture and operational tradeoffs."
+    - name: Database outbox with polling
+      note: "A good fit for modest volumes and a small number of consumers when introducing a broker is not justified."
+  related: [pyspark, delta-lake, system-design, airflow]
+chapters:
+  - id: log-partitions-offsets-segments
+    title: The Log, Partitions, Offsets and Segments
+    file: chapters/01-log-partitions-offsets-segments.md
+    minutes: 12
+    level: core
+  - id: producers
+    title: "Producers: Acknowledgments, Idempotence, Batching and Keys"
+    file: chapters/02-producers.md
+    minutes: 13
+    level: core
+  - id: consumers-groups-rebalancing
+    title: Consumers, Consumer Groups and Rebalancing
+    file: chapters/03-consumers-groups-rebalancing.md
+    minutes: 13
+    level: core
+  - id: delivery-semantics-transactions
+    title: Delivery Semantics and Exactly-Once Processing
+    file: chapters/04-delivery-semantics-transactions.md
+    minutes: 12
+    level: advanced
+  - id: retention-compaction-tiered-storage
+    title: Retention, Compaction and Tiered Storage
+    file: chapters/05-retention-compaction-tiered-storage.md
+    minutes: 12
+    level: advanced
+  - id: schema-management
+    title: "Schema Management: Avro, Protobuf and Registry"
+    file: chapters/06-schema-management.md
+    minutes: 12
+    level: core
+  - id: kafka-connect-cdc-debezium
+    title: Kafka Connect and CDC with Debezium
+    file: chapters/07-kafka-connect-cdc-debezium.md
+    minutes: 13
+    level: core
+  - id: streams-ksqldb-external-processing
+    title: Kafka Streams and ksqlDB vs External Processing
+    file: chapters/08-streams-ksqldb-external-processing.md
+    minutes: 13
+    level: advanced
+  - id: operations-capacity
+    title: "Operating Kafka: ISR, Under-Replicated Partitions and Capacity"
+    file: chapters/09-operations-capacity.md
+    minutes: 14
+    level: advanced
+  - id: patterns-replay-overkill
+    title: Design Patterns, Replay and When Kafka Is Overkill
+    file: chapters/10-patterns-replay-overkill.md
+    minutes: 13
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

@@ -1,0 +1,90 @@
+concepts:
+  - title: Terraform is declarative
+    detail: "Configuration describes desired objects; Terraform builds and executes a dependency graph, not a top-to-bottom script."
+  - title: Resource addresses are identities
+    detail: "An address such as `module.net.aws_vpc.this` is tracked in state; address changes can require `moved` blocks or state migration."
+  - title: References create graph edges
+    detail: "Reading another resource's attribute conveys both a value and an implicit dependency; use `depends_on` only when no value edge can express it."
+  - title: Data sources read, resources manage
+    detail: "A data source does not ordinarily make Terraform owner of an existing object; avoid managing one object from multiple states."
+  - title: State maps configuration to remote objects
+    detail: "State is essential ownership data, can contain secrets, and should be remote, locked, access-controlled, encrypted and recoverable."
+  - title: A backend is part of the safety design
+    detail: "Backend migration, locking, encryption, identity and restore procedures matter as much as selecting a storage service."
+  - title: Workspaces isolate state, not authority
+    detail: "A CLI workspace does not create separate credentials, accounts or approvals; use separate roots and keys for real environment boundaries."
+  - title: Variables form the module contract
+    detail: "Prefer precise types, descriptions and useful validation; a dangerous default can turn a typo into a production change."
+  - title: Locals derive internal values
+    detail: "Locals name expressions and common tags but should not conceal critical environment choices in clever transformations."
+  - title: Outputs are public interfaces
+    detail: "Expose stable, minimal values; a sensitive output is redacted in CLI presentation but may still be present in state."
+  - title: Modules compose, not transact
+    detail: "Child modules participate in the root graph and state; communicate through explicit inputs and outputs."
+  - title: Lock providers, review upgrades
+    detail: "Commit `.terraform.lock.hcl`; run `terraform init -upgrade` deliberately and inspect plans after provider changes."
+  - title: A plan is a proposed change
+    detail: "Review creates, updates, replacements and destroys; apply the exact saved plan that was approved."
+  - title: Apply is not atomic
+    detail: "A failed apply can leave successful remote changes and updated state; inspect both before retrying."
+  - title: Stable for_each keys preserve identity
+    detail: "Keys are state addresses and must be plan-time known, stable and non-secret; a rename can look like destroy plus create."
+  - title: Tests have different evidence
+    detail: "Validate checks configuration, mocks check declared behavior, real plans resolve provider changes, and integration tests exercise APIs."
+
+traps:
+  - "Assuming HCL file order determines create order; graph references and explicit dependencies do."
+  - "Believing `sensitive = true` encrypts state or keeps a value out of saved plan files."
+  - "Treating a workspace named `prod` as an access-control or credential boundary."
+  - "Using `count` with reorderable lists and assuming numeric indexes retain business identity."
+  - "Forcing a backend unlock before verifying no Terraform writer is still active."
+  - "Running `terraform state rm` and expecting the remote object to be deleted."
+
+advanced:
+  - "`terraform init -migrate-state` copies state to new backend settings; `-reconfigure` accepts settings without migrating the old snapshot."
+  - "A `moved` block updates a Terraform address association; it does not rename or alter the remote object by itself."
+  - "Plan JSON and saved plans can contain sensitive values; restrict artifact readers and retention just like state access."
+  - "`terraform plan -refresh-only` can update state from observed values but does not edit configuration to match the remote system."
+  - "Ephemeral values and write-only arguments reduce persistence only where supported by the exact CLI and provider; verify end-to-end behavior."
+  - "State restore rolls Terraform's view back, not cloud APIs; reconcile restored snapshots against current remote infrastructure before applying."
+
+comparisons:
+  - a: resource
+    b: data source
+    difference: "A resource manages lifecycle through the provider; a data source reads an object whose lifecycle is generally owned elsewhere."
+  - a: count
+    b: for_each
+    difference: "Numeric index identity suits interchangeable instances; stable map keys or set members better identify named objects."
+  - a: CLI workspace
+    b: separate environment root
+    difference: "Workspaces separate state for one configuration; separate roots can make provider identity, backend and approval boundaries explicit."
+  - a: sensitive marking
+    b: ephemeral value
+    difference: "Sensitive redacts display but can persist in state; ephemeral semantics aim to avoid persistence where the use is supported."
+  - a: plan
+    b: apply
+    difference: "Plan proposes and explains actions; apply executes a chosen plan and may partially change infrastructure before failure."
+  - a: terraform validate
+    b: terraform plan
+    difference: "Validate checks configuration consistency; plan evaluates provider-facing differences and may access remote objects."
+  - a: Terraform
+    b: Pulumi
+    difference: "Terraform uses HCL and a constrained declarative model; Pulumi uses general-purpose languages and their abstractions and runtimes."
+
+commands:
+  - label: Format all Terraform files
+    code: terraform fmt -recursive
+  - label: Initialize without configuring a backend
+    code: terraform init -backend=false
+  - label: Validate initialized configuration
+    code: terraform validate
+  - label: Create a reviewable saved plan
+    code: terraform plan -input=false -out=tfplan
+  - label: Inspect a saved plan
+    code: terraform show tfplan
+  - label: Render plan JSON for policy checks
+    code: terraform show -json tfplan
+  - label: List state addresses
+    code: terraform state list
+  - label: Upgrade selected providers deliberately
+    code: terraform init -upgrade

@@ -1,0 +1,155 @@
+{
+  "concepts": [
+    {
+      "title": "In-process engine",
+      "detail": "DuckDB runs inside the calling application or CLI; there is no required server daemon. The host process owns its CPU, memory, file access, and lifecycle."
+    },
+    {
+      "title": "OLAP focus",
+      "detail": "Columnar storage and vectorized execution suit scans, filters, joins, and aggregations over many rows; they do not make DuckDB a distributed cluster or an OLTP service."
+    },
+    {
+      "title": "Vectorized operators",
+      "detail": "Operators process batches of values rather than invoking work once per row, reducing dispatch overhead and fitting columnar analytical work."
+    },
+    {
+      "title": "File scans",
+      "detail": "`read_parquet`, `read_csv`, and JSON readers query files directly. A file scan is external data, not a managed transactional table."
+    },
+    {
+      "title": "Parquet pruning",
+      "detail": "Column projection and filter pushdown can avoid decoding unused data; row-group statistics and Hive partitions help only when the source layout and predicate support pruning."
+    },
+    {
+      "title": "CSV inference",
+      "detail": "Convenient for exploration, unsafe as a schema contract. Specify types, delimiters, date formats, and null tokens for production inputs."
+    },
+    {
+      "title": "EXPLAIN",
+      "detail": "`EXPLAIN` shows the physical plan without execution; `EXPLAIN ANALYZE` runs and reports actual cardinalities and timings."
+    },
+    {
+      "title": "Join multiplicity",
+      "detail": "Duplicate keys on both sides multiply matching rows. Check key uniqueness and intended grain before trusting post-join aggregates."
+    },
+    {
+      "title": "Window semantics",
+      "detail": "Windows preserve rows; GROUP BY collapses them. Define partition, ordering, tie-breakers, and ROWS/RANGE frame explicitly."
+    },
+    {
+      "title": "JSON distinction",
+      "detail": "JSON null, a missing key, SQL NULL, and an empty string are distinct. `json_extract` returns JSON; `json_extract_string` returns text."
+    },
+    {
+      "title": "Nested types",
+      "detail": "LIST holds repeated typed values; STRUCT has named typed fields. `UNNEST` changes cardinality and can alter aggregate grain."
+    },
+    {
+      "title": "Persistence",
+      "detail": "`:memory:` is transient. A file-backed `.duckdb` database persists catalog and tables; Parquet is a portable external file format."
+    },
+    {
+      "title": "Concurrency boundary",
+      "detail": "DuckDB supports concurrency within its intended process model. A native file is not a multi-process write service; use PostgreSQL for independent writers."
+    },
+    {
+      "title": "Spilling",
+      "detail": "Supported operators can spill intermediates to `temp_directory`, but spill consumes disk and does not make every operation unlimited."
+    },
+    {
+      "title": "Extension lifecycle",
+      "detail": "Extensions are version/platform-specific executable code. Pin and test `httpfs`, `postgres`, Iceberg, or Delta integrations in the deployed environment."
+    },
+    {
+      "title": "Embedded data security",
+      "detail": "SQL file readers and extensions inherit process access. Restrict untrusted queries, paths, credentials, and external access."
+    }
+  ],
+  "traps": [
+    "Assuming in-process means single-threaded or that it means a shared server. It can parallelize within a host but does not provide distributed execution.",
+    "Assuming a Parquet glob is an immutable snapshot. New or replaced files can change the query input across retries.",
+    "Assuming every query spills safely when memory is exceeded. Spill support has operator and state limitations and consumes disk.",
+    "Fetching millions of rows with `fetchall()` and blaming the SQL engine for host-process memory growth.",
+    "Assuming a read-capable PostgreSQL or Iceberg extension supports every write, transaction, or maintenance operation.",
+    "Assuming DuckDB is a drop-in SQLite replacement or a faithful Spark/warehouse emulator; workload and SQL semantics differ."
+  ],
+  "advanced": [
+    "`memory_limit` covers DuckDB-managed memory, not necessarily all Python, Arrow, extension, or host allocations; budget process RSS too.",
+    "Filter and projection pushdown should be confirmed with plans/profiles; casts, functions, schema mismatches, and source capabilities can block it.",
+    "Use a manifest or snapshot for reproducible file inputs; a wildcard path does not define a stable batch boundary.",
+    "Within-process optimistic concurrency can fail on write conflicts; retry only idempotent transactions and keep external side effects safe.",
+    "`EXPLAIN ANALYZE` cardinality gaps expose estimation error, but first rule out accidental many-to-many joins and missing predicates.",
+    "Pin DuckDB and extensions together; extension installation, binary compatibility, feature surface, and network access are deployment concerns."
+  ],
+  "comparisons": [
+    {
+      "a": "DuckDB",
+      "b": "SQLite",
+      "difference": "Embedded OLAP scans and columnar execution vs general-purpose transactional row storage and application state."
+    },
+    {
+      "a": "DuckDB",
+      "b": "PostgreSQL",
+      "difference": "In-process single-host analytics vs networked shared service with independent concurrent clients and writers."
+    },
+    {
+      "a": "DuckDB",
+      "b": "Spark",
+      "difference": "Single-machine SQL engine with low startup overhead vs distributed cluster execution and scale-out."
+    },
+    {
+      "a": "DuckDB table",
+      "b": "Parquet file",
+      "difference": "Managed persistent database table/catalog vs portable external columnar file with filesystem-managed lifecycle."
+    },
+    {
+      "a": "EXPLAIN",
+      "b": "EXPLAIN ANALYZE",
+      "difference": "Planned operators without execution vs execution plus observed cardinalities and timing."
+    },
+    {
+      "a": "UNION",
+      "b": "UNION ALL",
+      "difference": "Deduplicates output rows vs concatenates and retains duplicates."
+    },
+    {
+      "a": "GROUP BY",
+      "b": "Window function",
+      "difference": "Collapses each group to output rows vs computes across related rows while retaining input row count."
+    }
+  ],
+  "commands": [
+    {
+      "label": "Open an in-memory Python connection",
+      "code": "con = duckdb.connect(':memory:')"
+    },
+    {
+      "label": "Inspect DuckDB version",
+      "code": "SELECT version();"
+    },
+    {
+      "label": "Query a Parquet glob",
+      "code": "SELECT * FROM read_parquet('data/*.parquet') LIMIT 10;"
+    },
+    {
+      "label": "Explain a physical plan",
+      "code": "EXPLAIN SELECT region, sum(amount) FROM sales GROUP BY region;"
+    },
+    {
+      "label": "Profile actual execution",
+      "code": "EXPLAIN ANALYZE SELECT count(*) FROM read_parquet('data/*.parquet');"
+    },
+    {
+      "label": "Limit engine memory and threads",
+      "code": "SET memory_limit = '8GB'; SET threads = 4;"
+    },
+    {
+      "label": "Choose a spill directory",
+      "code": "SET temp_directory = '/fast-disk/duckdb-tmp';"
+    },
+    {
+      "label": "Write a query result as Parquet",
+      "code": "COPY (SELECT * FROM sales) TO 'out.parquet' (FORMAT parquet, COMPRESSION zstd);"
+    }
+  ]
+}

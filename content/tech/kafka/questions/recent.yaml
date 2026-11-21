@@ -1,0 +1,132 @@
+- id: kafka-recent-001
+  topic: releases and KRaft
+  difficulty: advanced
+  question: What is the practical migration significance of Kafka 4.0 removing ZooKeeper?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Kafka 4.0 is the first major release that operates entirely without ZooKeeper; KRaft is the metadata mode. This is not a simple configuration toggle for an existing ZooKeeper cluster. Teams must use a supported migration path, validate their starting Kafka version and cluster state, migrate metadata as required, and then upgrade through compatible releases. Kafka 3.9 was the final major 3.x release and served as a bridge for users moving from ZooKeeper before 4.0.
+
+    Operationally, KRaft introduces a controller quorum with its own placement, health, and recovery requirements. Existing data partitions still have their separate leaders and replicas. Teams should test controller failure, metadata operations, rolling upgrades, and broker recovery in staging, and ensure automation no longer expects ZooKeeper endpoints or tools. A version upgrade checklist must include clients, connectors, broker configs, storage layout, and vendor-specific support. The change simplifies the architecture long term but makes an unplanned in-place upgrade unsafe.
+  tags: [Kafka-4, ZooKeeper, migration]
+- id: kafka-recent-002
+  topic: KRaft
+  difficulty: advanced
+  question: Why do Kafka operators care about dynamic KRaft controller quorums?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A KRaft controller quorum replicates the metadata log using Raft. In an earlier static configuration, membership was specified across the cluster, so changing controller hosts or membership was operationally awkward and could require coordinated configuration changes. KIP-853 introduced dynamic controller quorum membership, allowing supported clusters to add or remove controller nodes through administrative tooling or APIs.
+
+    Dynamic membership improves lifecycle operations, but it is not permission to change quorum membership casually. Operators must confirm the cluster's initial quorum mode, Kafka release, and any conversion limitations before applying a procedure. Losing quorum can block metadata changes even if some existing data-plane traffic still works. Plan controller placement across failure domains, observe metadata replication and quorum health, and rehearse maintenance steps. A strong answer distinguishes controller quorum membership from partition replica assignments: the first manages cluster metadata; the second copies topic data among brokers.
+  tags: [KRaft, KIP-853, quorum]
+- id: kafka-recent-003
+  topic: consumer protocol
+  difficulty: advanced
+  question: What does KIP-848 change about the consumer-group rebalance protocol?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    KIP-848 introduces a newer consumer group protocol with a redesigned group coordinator and incremental assignment reconciliation. Rather than relying on the classic all-members synchronization barrier for every change, the coordinator can drive assignment updates incrementally, which aims to reduce disruption during membership changes and improve scalability. It also shifts more assignment work toward the broker-side coordinator.
+
+    Adoption is version- and client-dependent. Brokers and clients must support the new protocol, the application must configure the appropriate `group.protocol`, and tooling or assignors may have limitations in a particular release. Do not assume a broker upgrade silently moves all clients from the classic protocol. Test mixed-version deployment, group descriptions, rolling restarts, subscription changes, and rebalance observability. The protocol does not remove application duties: work must still be bounded between polls, external effects must tolerate retries, and offsets must reflect completed processing. Its value is reduced coordination disruption, not automatic exactly-once behavior.
+  tags: [KIP-848, rebalancing, consumer-groups]
+- id: kafka-recent-004
+  topic: tiered storage
+  difficulty: advanced
+  question: What operational problem does KIP-405 tiered storage address, and what does it not solve?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    KIP-405 defines a tiered-storage architecture in which recent log segments remain on broker-local storage while completed segments can be copied to remote storage such as object storage. This can decouple long retention from local broker disk and reduce the amount of older data that must be moved during broker recovery. Tail consumers can often read recent data locally, while older replay fetches use the remote tier.
+
+    Tiering does not make storage free, make old-data replay as fast as local reads, or replace a data lake and its query model. Availability depends on the Kafka version and remote storage implementation, including managed-service choices and documented limitations. Operators need to monitor upload, fetch, deletion, remote metadata, credentials, and object-store throttling. Test offset resets into remote data and failure behavior when the remote service is degraded. Confirm cleanup-policy and compaction compatibility for the exact release rather than assuming every topic mode can be tiered.
+  tags: [KIP-405, tiered-storage, retention]
+- id: kafka-recent-005
+  topic: KIP highlights
+  difficulty: advanced
+  question: How should a team evaluate whether tiered storage is ready for its production workload?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    First identify the supported Kafka release, provider, and actual remote-storage implementation. KIP-405 defines Kafka's framework, but features and constraints can differ by implementation. Verify which cleanup policies are supported, whether compaction can be combined with remote storage, how retention is expressed across tiers, and how a topic is enabled or migrated. Read the release documentation and managed-service support matrix rather than treating a KIP's acceptance as a blanket guarantee.
+
+    Then test the operational path: segment upload and deletion, remote read after local eviction, broker restart, remote service outage, credential rotation, and consumer replay across the local/remote boundary. Measure recovery time and remote fetch latency using realistic payloads and throttling. Define ownership for remote objects, encryption, deletion requests, and cost alerts. Tiered storage can extend the retention window without proportional local disk, but a replay requirement still needs an acceptable recovery objective and fallback plan.
+  tags: [KIP-405, operations, replay]
+- id: kafka-recent-006
+  topic: KIP highlights
+  difficulty: intermediate
+  question: What is the purpose of KIP-996 Pre-Vote in KRaft?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Raft leadership elections can be disruptive if nodes repeatedly start elections when they are not in a position to win, especially around transient connectivity problems or partitions. KIP-996 adds a Pre-Vote mechanism to KRaft: a node checks whether it is eligible to become leader before initiating a full election. The goal is to reduce unnecessary election churn and its impact on metadata quorum stability.
+
+    Pre-Vote is an improvement to controller quorum behavior, not a substitute for sound topology or network design. Operators still need a quorum distributed across appropriate failure domains, predictable time synchronization and networking, and clear monitoring of controller state. KIP implementation and defaults should be checked against the target Kafka release; do not infer behavior on older clusters. When investigating frequent leader elections, correlate controller logs, network events, and broker load rather than assuming Pre-Vote itself resolves the underlying failure.
+  tags: [KIP-996, KRaft, elections]
+- id: kafka-recent-007
+  topic: KIP highlights
+  difficulty: advanced
+  question: What are Kafka share groups in KIP-932, and how do they differ from consumer groups?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    KIP-932 proposes share groups for cooperative consumption where multiple consumers can work on records from the same partitions, with individual record acknowledgment and delivery-attempt tracking. This is closer to some work-queue patterns than the traditional consumer group model, where each partition is assigned exclusively to one active member. Share groups can support more consumers than partitions for independent work items and provide record-level retry behavior.
+
+    They should not be treated as a universal queue replacement or as a drop-in migration. In Kafka 4.0, share groups were described as early access; check maturity, supported clients, limitations, and operational tools in the exact release before production adoption. Traditional groups remain better suited to ordered partition processing and replay with familiar offset management. Share-group delivery and locking semantics also introduce their own retry, poison-record, and processing-time questions. Choose based on whether records are independent work items or ordered per-key histories.
+  tags: [KIP-932, share-groups, queues]
+- id: kafka-recent-008
+  topic: managed services
+  difficulty: intermediate
+  question: What Kafka responsibilities remain with a team using a managed Kafka service?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A managed service can take over broker provisioning, patching, controller operations, storage replacement, and some monitoring or scaling. The exact division of responsibility varies by provider, service tier, and networking model. It reduces infrastructure work but does not remove the application contract: teams still choose keys, partition counts, replication and acknowledgment objectives, retention, schemas, consumer offsets, and replay behavior.
+
+    Teams also own client compatibility, credentials and ACLs, producer/consumer backpressure, connector configuration, and downstream idempotency. Managed services may expose Kafka APIs but differ in supported versions, quotas, tiered storage, transactions, KRaft migration, networking, and observability. Validate those differences before choosing a service or depending on a feature. A service-level availability promise is not a guarantee that an application processes records on time or that an expired consumer offset can be recovered. Maintain an incident runbook that clearly separates provider-owned infrastructure failures from customer-owned topic and client configuration.
+  tags: [managed-kafka, operations, service-ownership]
+- id: kafka-recent-009
+  topic: managed services
+  difficulty: advanced
+  question: How would you compare self-managed Kafka with a managed Kafka offering?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Compare total operational responsibility rather than sticker price. Self-managed Kafka offers control over broker versions, topology, storage, network placement, plugins, and upgrade timing, but the organization must operate KRaft controllers, brokers, disks, replication, security, monitoring, capacity, and disaster recovery. It also needs trained operators available during incidents and maintenance.
+
+    A managed offering transfers much of that work to the provider and may improve time to provision, but introduces service limits, provider-specific APIs and tooling, network and data-transfer costs, and feature availability that can lag or differ from upstream. Evaluate failure domains, quotas, support escalation, retention choices, tiered-storage behavior, transaction support, connector options, and exit/migration paths. Then test a real workload and failure scenario. The right choice depends on scale, compliance, staffing, latency, and control needs; neither “cloud is simpler” nor “self-hosting is cheaper” is enough without a workload and staffing model.
+  tags: [managed-services, self-managed, tradeoffs]
+- id: kafka-recent-010
+  topic: upgrades
+  difficulty: advanced
+  question: What should be included in a Kafka 3.x to 4.x upgrade plan?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Start with the exact source release, target release, client and connector versions, broker configurations, and supported upgrade path. Kafka 4.0 removes ZooKeeper, so a ZooKeeper-based cluster must complete the documented migration process before upgrading; it is not a direct mode switch. Kafka 3.9 was the final major 3.x bridge release. Review removed or changed configs and APIs, KRaft controller requirements, storage formats, security, and managed-service constraints.
+
+    Inventory producers, consumers, Connect plugins, stream processors, schema serializers, admin tools, and automation. Validate protocol compatibility and test rolling upgrades in a production-like cluster with realistic topic count and data volume. Exercise rollback boundaries, controller and broker failures, ISR behavior, consumer rebalances, transaction recovery, and connector task movement. Ensure metrics and runbooks reflect the new control plane. A successful binary start is not enough: verify data replication, client behavior, metadata operations, lag recovery, and upgrade completion against explicit checks.
+  tags: [upgrade, Kafka-4, KRaft]
+- id: kafka-recent-011
+  topic: Kafka Streams
+  difficulty: intermediate
+  question: What should a Kafka Streams user consider when upgrading a topology or processing guarantee?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A Kafka Streams application depends on more than its JAR: topology shape, application ID, state-store format, internal repartition/changelog topics, client version, and processing guarantee all influence recovery. A topology change can require new internal topics or state restoration; changing the application ID creates an independent application and may reread input from its configured start position. Plan upgrades with the exact Streams and broker compatibility documentation.
+
+    For exactly-once processing, verify the configured processing guarantee and producer/consumer compatibility, then test failure during a transaction and restoration of state. This still covers Kafka input, state, and output rather than arbitrary external calls made by a processor. Monitor standby tasks, restoration time, rebalance behavior, and internal topic health. A rolling deployment that mixes incompatible topology versions may cause disruption, so use the documented upgrade strategy and test rollback. Avoid changing key serialization casually because it can alter partitioning and state-store identity.
+  tags: [Kafka-Streams, upgrades, state-stores]
+- id: kafka-recent-012
+  topic: operations
+  difficulty: advanced
+  question: How do you distinguish a consumer lag incident from a broker replication incident?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Consumer lag is a gap between the partition's available end position and a group's current or committed position. Broker replication health is about whether follower replicas are caught up with the leader and the partition's ISR. Both can occur together, but they point to different mechanisms. A consumer can lag while every replica is healthy because its handler or downstream database is slow; a broker can be under-replicated while consumers appear current for the moment.
+
+    Compare group lag and processing rate with under-replicated/offline partition metrics, ISR changes, leader elections, broker disk and network pressure, and request latency. Break metrics down by partition to detect hot keys or a single slow replica. Correlate incidents with deployments and reassignments. Do not scale consumers when the bottleneck is broker storage, and do not restart brokers when a downstream sink is throttling. The recovery plan differs: consumer scaling or code/backpressure changes for lag, versus restoring replica health and capacity for replication risk.
+  tags: [consumer-lag, replication, diagnosis]

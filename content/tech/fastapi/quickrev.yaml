@@ -1,0 +1,90 @@
+concepts:
+  - title: ASGI boundary
+    detail: "ASGI separates the web server from the Python app; Uvicorn speaks HTTP and invokes FastAPI with scope, receive, and send."
+  - title: Starlette layer
+    detail: "FastAPI builds on Starlette routing, requests, responses, middleware, and lifespan behavior."
+  - title: Parameter binding
+    detail: "Path names bind path values; scalar parameters are generally query values; Pydantic models generally describe bodies."
+  - title: Annotated metadata
+    detail: "`Annotated[int, Path(...)]` keeps the Python type while attaching FastAPI validation and source metadata."
+  - title: Dependency graph
+    detail: "`Depends` recursively resolves callable dependencies; results are request-cached by default unless caching is disabled."
+  - title: Yield dependency
+    detail: "A yielded dependency owns setup and cleanup; select a lifetime that remains valid through any streaming consumer."
+  - title: Pydantic v2 boundary
+    detail: "FastAPI invokes Pydantic for runtime request validation and response serialization; annotations alone do not validate arbitrary objects."
+  - title: Nullable versus optional
+    detail: "`x: T | None` allows null but is required without a default; `x: T | None = None` may be omitted."
+  - title: Response model
+    detail: "A response model defines and filters the public output shape in the normal return path; direct Response objects bypass it."
+  - title: Event loop
+    detail: "A coroutine runs until it actually suspends; a synchronous socket, sleep, or CPU loop inside `async def` blocks that loop."
+  - title: Sync endpoints
+    detail: "FastAPI/Starlette execute ordinary `def` endpoints in a thread pool, which is finite and not free CPU parallelism."
+  - title: JWT validation
+    detail: "Verify signature and configured algorithm, issuer, audience, temporal claims, and required scopes; decoding is not verification."
+  - title: Authentication and authorization
+    detail: "A principal's valid identity does not grant access to every tenant or object; enforce ownership and scope on each operation."
+  - title: Session lifecycle
+    detail: "Share an engine and factory, not a mutable SQLAlchemy Session; each request or unit of work owns a session."
+  - title: Pool multiplication
+    detail: "Each worker process and replica has its own pool, so connection limits multiply across the deployment."
+  - title: Test lifespan
+    detail: "TestClient context or an explicit async lifespan manager starts resources; ASGITransport alone should not be assumed to do so."
+
+traps:
+  - "Assuming `async def` makes blocking synchronous libraries non-blocking."
+  - "Assuming `OAuth2PasswordBearer` validates tokens or creates a token endpoint."
+  - "Sharing one AsyncSession across concurrent tasks or requests."
+  - "Treating BackgroundTasks as durable, retryable job processing."
+  - "Expecting response_model filtering when returning a prebuilt Response."
+  - "Assuming a correctly authenticated user is authorized for every object ID."
+
+advanced:
+  - "A cancelled `asyncio.to_thread` await does not forcibly stop the synchronous function; enforce timeouts inside the client."
+  - "Streaming begins before the generator finishes, so a late failure cannot replace the already-sent status and headers."
+  - "A long-lived stream can outlive the endpoint function; resource dependency scope must match the consumer lifetime."
+  - "Pydantic v2 distinguishes omitted and explicit-null values; `model_fields_set` can support PATCH semantics."
+  - "JWT signature validity does not establish intended audience, trusted issuer, expiry, or authorization."
+  - "Connection pool capacity is per process; include workers, replicas, overflow, and rollout overlap in budgets."
+
+comparisons:
+  - a: ASGI
+    b: Uvicorn
+    difference: "ASGI is the application/server interface; Uvicorn is one server implementation that listens and invokes an ASGI app."
+  - a: FastAPI dependency
+    b: middleware
+    difference: "Dependencies are route-aware and can provide values/security metadata; middleware wraps application-wide request/response flow."
+  - a: async def endpoint
+    b: def endpoint
+    difference: "Async runs on the event loop and must await nonblocking I/O; sync endpoints are dispatched to a finite worker thread pool."
+  - a: 401
+    b: 403
+    difference: "401 means acceptable authentication is absent/invalid; 403 means an authenticated principal lacks permission (policy may use 404 for privacy)."
+  - a: flush
+    b: commit
+    difference: "Flush sends pending SQL within the transaction; commit ends it and makes changes durable under database semantics."
+  - a: BackgroundTasks
+    b: durable queue
+    difference: "In-process work is best-effort and shares app resources; a broker/worker system can provide persistence, retries, and independent scaling."
+  - a: TestClient
+    b: production HTTP test
+    difference: "TestClient exercises ASGI application behavior in process; deployment tests cover sockets, TLS, proxies, workers, and network timeouts."
+
+commands:
+  - label: Run FastAPI with Uvicorn for local development
+    code: uvicorn myapp.main:app --reload
+  - label: Run an app on all container interfaces
+    code: uvicorn myapp.main:app --host 0.0.0.0 --port 8000
+  - label: Run tests quietly
+    code: pytest -q
+  - label: Run tests with coverage
+    code: pytest --cov=myapp --cov-report=term-missing
+  - label: Inspect generated OpenAPI JSON
+    code: curl -s http://127.0.0.1:8000/openapi.json
+  - label: Install a project dependency set from lockfile
+    code: python -m pip install -r requirements.txt
+  - label: Check the installed FastAPI and Pydantic versions
+    code: python -c "import fastapi, pydantic; print(fastapi.__version__, pydantic.__version__)"
+  - label: Run migrations as a controlled deployment step
+    code: alembic upgrade head

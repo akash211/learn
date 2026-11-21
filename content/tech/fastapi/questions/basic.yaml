@@ -1,0 +1,204 @@
+- id: fapi-basic-001
+  topic: architecture
+  difficulty: beginner
+  question: What is ASGI, and where does FastAPI fit in an HTTP request?
+  answer: |
+    ASGI is an asynchronous interface between a Python web server and an application. A server such as Uvicorn owns sockets, parses HTTP, and calls an ASGI application with a scope plus receive and send channels. FastAPI is that application layer: it matches routes, resolves dependencies, validates inputs, calls the endpoint, and formats responses. FastAPI builds on Starlette, which provides many lower-level web primitives, and uses Pydantic for data validation and serialization. ASGI is not itself a server, and FastAPI does not open a listening port. This separation matters during debugging: connection problems often involve the server or network, while route and schema behavior is application logic. Async support also does not make blocking calls non-blocking; the application must yield during I/O.
+  tags: [asgi, starlette, uvicorn]
+
+- id: fapi-basic-002
+  topic: request handling
+  difficulty: beginner
+  question: How does FastAPI decide whether a function parameter comes from the path, query string, or body?
+  answer: |
+    A parameter whose name appears in the path template is taken from that path segment. Scalar parameters not declared in the path are generally interpreted as query parameters. A Pydantic model parameter is generally treated as a request body. FastAPI parses the incoming string or JSON value and validates it against the annotation before the function runs. When inference is unclear, use `Path`, `Query`, `Body`, `Header`, or `Cookie` metadata to state the source and constraints explicitly. For example, `item_id: Annotated[int, Path(ge=1)]` binds a positive integer path segment, while `limit: Annotated[int, Query(le=100)] = 20` binds a bounded query value. Invalid values result in a validation response rather than arbitrary conversion code in the endpoint.
+    Explicit metadata is especially helpful for primitive bodies and headers, where relying on inference can make the published contract surprising. Keep coercion expectations visible in examples and tests.
+  tags: [parameters, validation, request]
+
+- id: fapi-basic-003
+  topic: dependency injection
+  difficulty: beginner
+  question: What does `Depends` do in FastAPI?
+  answer: |
+    `Depends` tells FastAPI to call a dependency and provide its result as an endpoint argument. The dependency can itself declare request parameters or other dependencies, so FastAPI resolves a graph rather than requiring every route to repeat authentication, pagination, or resource setup. By default, a dependency result is cached within a request, so the same dependency used along one graph is usually evaluated once. A dependency can raise `HTTPException` to stop processing, or yield a resource and clean it up after dependent work finishes. Keep dependencies focused and make resource lifetime explicit: a request database session is not a process-wide singleton. Dependencies are particularly useful for testability because tests can replace them using `app.dependency_overrides`. They do not automatically provide transactions or authorization policy; those must be implemented.
+  tags: [depends, injection, scopes]
+
+- id: fapi-basic-004
+  topic: pydantic
+  difficulty: beginner
+  question: What role does a Pydantic model play in a FastAPI endpoint?
+  answer: |
+    A Pydantic model defines a structured data boundary. For a request body, FastAPI asks Pydantic to parse and validate input before invoking the endpoint. For a response model, FastAPI validates and serializes returned data according to a declared public shape. Field constraints such as minimum length or numeric bounds can be represented in the generated JSON Schema and OpenAPI document. Pydantic v2 uses `BaseModel`, `Field`, and validator APIs that differ from v1, so old `Config` and validator examples may need migration. Models should represent API contracts, not simply expose database tables. Separate input and output models prevent clients from writing internal fields and reduce accidental leakage of private data. Validation does not replace database constraints, authorization, or business rules requiring external state.
+  tags: [pydantic-v2, schema, validation]
+
+- id: fapi-basic-005
+  topic: async
+  difficulty: beginner
+  question: When should an endpoint use `async def` versus `def`?
+  answer: |
+    Use `async def` when the endpoint calls async-aware libraries and awaits I/O, allowing the event loop to serve other requests while the operation waits. Use a normal `def` when the implementation uses synchronous blocking libraries; Starlette runs synchronous endpoints in a worker thread so they do not directly block the event-loop thread. Do not call `requests.get`, a synchronous database session, or `time.sleep` inside `async def`: that call blocks the loop and delays other requests assigned to it. Conversely, declaring a function synchronous does not make an async library automatically work; a coroutine must be awaited. Threads mainly help isolate blocking I/O, not CPU-bound Python work under the usual CPython GIL. Finite library timeouts and concurrency limits remain important in both styles.
+  tags: [asyncio, sync, event-loop]
+
+- id: fapi-basic-006
+  topic: validation
+  difficulty: beginner
+  question: What response should a client expect for invalid request data?
+  answer: |
+    FastAPI normally returns a 422 response for request validation failures, including values that do not match declared parameter types or Pydantic model constraints. The response includes structured details describing the input location and error type. Malformed JSON is also rejected before the endpoint runs, although its precise error details differ from a valid JSON object with an invalid field. Clients should rely on the documented status and stable error structure rather than exact text wording, which can vary by versions. A response-model validation failure is different: the server produced invalid output, so it indicates an application defect and should not be treated as a client error. If the application customizes validation responses, document that contract and avoid echoing secrets or sensitive submitted values into public errors or logs.
+  tags: [422, errors, request-validation]
+
+- id: fapi-basic-007
+  topic: responses
+  difficulty: beginner
+  question: Why specify a `response_model` if the endpoint already returns a dictionary?
+  answer: |
+    A `response_model` declares the public representation, validates normal return values, contributes to OpenAPI, and can filter out fields not meant for clients. An internal object may contain password hashes, moderation state, or implementation metadata; an explicit output DTO helps keep those fields private. It also makes the API contract visible rather than allowing whichever keys happen to be in a dictionary to define behavior. The normal filtering path does not apply in the same way when the endpoint returns a prebuilt `Response`, such as `JSONResponse` or `StreamingResponse`; the application then owns encoding and output safety. Use separate input and output models where client-writable fields differ from returned fields, and test the actual JSON body to verify both included and excluded properties.
+  tags: [response-model, serialization, security]
+
+- id: fapi-basic-008
+  topic: errors
+  difficulty: beginner
+  question: When should an endpoint raise `HTTPException`?
+  answer: |
+    Raise `HTTPException` when a known condition should immediately end request processing with an intentional HTTP status and detail. A missing resource can be 404; invalid authentication is typically 401 with a `WWW-Authenticate` challenge; an authenticated principal lacking permission is usually 403. Because it is an exception, it can be raised from a dependency and stops the route from continuing. It should not be used to hide arbitrary programming errors or map every database failure to a client response. Domain services can raise domain-specific exceptions, which the HTTP boundary translates with registered handlers. Keep public details useful but safe: never return stack traces, SQL statements, or credentials. Add required protocol headers and document common error responses when client tooling depends on them.
+  tags: [http-exception, errors, status-codes]
+
+- id: fapi-basic-009
+  topic: security
+  difficulty: beginner
+  question: Does `OAuth2PasswordBearer` validate a JWT or create a token endpoint?
+  answer: |
+    No. `OAuth2PasswordBearer` extracts a bearer value from the Authorization header and describes an OAuth2 bearer security scheme in the OpenAPI document. Its configured `tokenUrl` is metadata; FastAPI does not implement that endpoint, authenticate a user, sign a token, or validate JWT claims. The application must call a vetted identity or token-validation component that checks cryptographic signature, trusted issuer, intended audience, expiry, and required scopes or subject. Never trust a token simply because it can be base64-decoded. For new interactive login systems, OAuth2 password grant examples in older tutorials should not be treated as current best practice; use a suitable authorization-code flow with PKCE or an identity provider. Return appropriate 401 responses and do not log bearer credentials.
+    A verifier should also handle key rotation through a trusted issuer configuration and reject claims for a different service. Token expiration and audience checks are essential even when signature verification succeeds.
+  tags: [oauth2, jwt, authentication]
+
+- id: fapi-basic-010
+  topic: security
+  difficulty: beginner
+  question: What is the difference between 401 and 403?
+  answer: |
+    HTTP 401 means the request lacks acceptable authentication credentials: the token may be missing, invalid, or expired. The response should generally include an appropriate `WWW-Authenticate` challenge so clients know how to authenticate. HTTP 403 means the server understood the authenticated principal but refuses the requested action, for example because the user lacks a required scope or does not own the resource. This distinction helps clients respond correctly and avoids confusing a login problem with a permission problem. It does not mean every resource existence check should reveal whether an object exists; some systems intentionally return 404 to avoid disclosing protected resources. Whatever policy is chosen, enforce it consistently in server-side dependencies or service logic, including tenant and object-level authorization, rather than relying on the frontend.
+  tags: [401, 403, authorization]
+
+- id: fapi-basic-011
+  topic: database
+  difficulty: beginner
+  question: Why should a database session be request-scoped instead of a global singleton?
+  answer: |
+    A SQLAlchemy session carries mutable transaction and identity-map state, so sharing one instance across concurrent requests or tasks can mix operations and is not thread-safe. A request-scoped dependency creates a session, yields it to the route or service, and closes it reliably afterward. The application can share an engine and connection pool, but each unit of work should obtain its own session. With async SQLAlchemy, use an async-capable driver and `AsyncSession`; do not call synchronous database operations directly on the event loop. Transaction policy should be explicit: a session dependency can own closure while service logic controls commit and rollback. Each worker process has its own pool, so pool capacity must be budgeted across all workers and replicas.
+    A yielding dependency should close its session even when endpoint code raises, and cleanup must not occur before a streaming response finishes using the resource.
+  tags: [sqlalchemy, session, lifecycle]
+
+- id: fapi-basic-012
+  topic: transactions
+  difficulty: intermediate
+  question: What is the difference between SQLAlchemy `flush()` and `commit()`?
+  answer: |
+    `flush()` sends pending inserts, updates, or deletes to the database inside the current transaction. It can make generated primary keys available and surface some constraint failures, but it does not make changes durable to other transactions. `commit()` ends the current transaction successfully and makes its changes durable according to database guarantees. If a failure occurs inside a transaction context, rollback should occur before reusing the session. A service can use `async with session.begin():` to commit on successful exit and roll back on exceptions. Keep the transaction short and do not hold it during a remote API call or a long stream. Retry only a whole transaction when the operation is safe to repeat; blindly retrying a non-idempotent write can create duplicate effects.
+  tags: [transactions, flush, commit]
+
+- id: fapi-basic-013
+  topic: background-tasks
+  difficulty: beginner
+  question: What guarantees do FastAPI `BackgroundTasks` provide?
+  answer: |
+    `BackgroundTasks` run work in the web application's process after the response is sent. They are convenient for small best-effort actions, such as a lightweight notification, but they are not a durable queue. A crash or deployment termination can lose pending work, and the mechanism does not itself provide retries, scheduling, deduplication, or independent worker scaling. A task can also consume the same process, thread, and connection capacity as request handling. Use a broker-backed job system when completion is a business promise or work is lengthy, CPU-heavy, or needs retries. Return a job identifier if clients need to track progress. Do not pass a request-scoped database session into a task that outlives the request; pass identifiers and let a worker open its own unit of work.
+  tags: [background-tasks, durability, jobs]
+
+- id: fapi-basic-014
+  topic: streaming
+  difficulty: intermediate
+  question: What is a `StreamingResponse`, and what limitations should you consider?
+  answer: |
+    `StreamingResponse` sends chunks from an iterator or async iterator as they are produced instead of assembling one complete body in memory. It is useful for large exports, event streams, or incremental output. Once status and headers have been sent and bytes have begun flowing, a later generator failure cannot be converted into a different HTTP status or clean JSON error. The generator should close upstream resources on completion, failure, or client disconnect, and should use bounded buffering to apply backpressure. Avoid holding a database transaction for the whole duration of a slow download. Streaming also changes resource cleanup timing: a dependency needed by the generator must remain alive through response consumption. Test through the real proxy for buffering and disconnect behavior, since an in-process client is not the full deployment path.
+  tags: [streaming, responses, resources]
+
+- id: fapi-basic-015
+  topic: testing
+  difficulty: beginner
+  question: What is the purpose of FastAPI's `TestClient`?
+  answer: |
+    `TestClient` provides a synchronous HTTP-style interface to an ASGI application without opening a real network listener. It exercises routing, parameter parsing, validation, dependencies, and response serialization, making it useful for route-level tests. In tests that depend on application startup and shutdown resources, use it as a context manager so lifespan is run. For async test functions, HTTPX's `AsyncClient` with `ASGITransport` is another option, but the transport alone does not necessarily manage lifespan. TestClient does not prove proxy, TLS, multi-worker, or production socket behavior. Keep Starlette and HTTPX versions compatible, assert stable public status and JSON fields, and use separate integration tests when the real database, migrations, or deployment path is the subject of the test.
+    Use fixtures to create isolated app state and clear overrides; otherwise one test's fake principal or database may affect another test unexpectedly.
+  tags: [testclient, pytest, asgi]
+
+- id: fapi-basic-016
+  topic: testing
+  difficulty: beginner
+  question: How can tests replace a FastAPI dependency?
+  answer: |
+    Assign a replacement callable in `app.dependency_overrides`, using the original dependency function as the key. A route that depends on that function will receive the replacement's result, allowing tests to inject a fake current user, deterministic external service, or isolated database session. Clear the override in fixture teardown, including when a test fails, or later tests may silently use the fake. An app factory or per-test app avoids state leaks when tests run in parallel. Overrides test route behavior with a controlled boundary; they do not prove the original authentication, database, or integration code works. Keep separate tests for those components and choose override transaction semantics that match what the route expects.
+    Prefer an app factory when parallel tests need independent override dictionaries. Keep override setup and teardown in a fixture's `try/finally` or yield cleanup path.
+  tags: [dependency-overrides, fixtures, isolation]
+
+- id: fapi-basic-017
+  topic: openapi
+  difficulty: beginner
+  question: How does FastAPI create its OpenAPI document?
+  answer: |
+    FastAPI derives OpenAPI from registered routes, parameter declarations, Pydantic models, response metadata, and security dependencies. It exposes a JSON schema endpoint and commonly serves Swagger UI and ReDoc pages that read that schema. The declarations are the source of the generated contract, so undocumented custom responses or direct `Response` bodies may need explicit response metadata. Review the generated document when client code generation or external integration depends on it. Documentation URLs can be disabled or protected, but hiding docs does not secure the API itself. An OpenAPI security declaration is descriptive unless runtime dependencies enforce the corresponding credential and policy. Schema changes should be treated as API changes and considered for backward compatibility.
+    Schema snapshots or targeted assertions can catch accidental breaking changes during review. Generated docs should be checked against real responses, not treated as proof of runtime enforcement.
+  tags: [openapi, docs, schema]
+
+- id: fapi-basic-018
+  topic: deployment
+  difficulty: beginner
+  question: What does Uvicorn do for a FastAPI application?
+  answer: |
+    Uvicorn is an ASGI server. It listens on a configured socket, handles HTTP protocol communication, and invokes the FastAPI ASGI application for requests. FastAPI defines routes and application behavior but does not itself bind the network port. A typical command points Uvicorn at an importable app object, such as `uvicorn myapp.main:app`. Development reload watches source files and restarts the process; it is not a production process manager. In production, process supervision, worker count, container replicas, graceful shutdown, and health checks are deployment concerns. Each worker process has separate memory and its own connection pools, so increasing workers changes both capacity and resource usage.
+    A reverse proxy may terminate TLS and forward traffic, but forwarded client and scheme headers should only be trusted from configured proxy addresses.
+  tags: [uvicorn, asgi, deployment]
+
+- id: fapi-basic-019
+  topic: dependency-injection
+  difficulty: intermediate
+  question: When should you use middleware instead of a dependency?
+  answer: |
+    Middleware wraps requests and responses at the application level, making it appropriate for transport-wide behavior such as request IDs, CORS, timing, or trusted-host checks. A dependency is route-aware and can receive parsed inputs, contribute security metadata to OpenAPI, and provide a value to an endpoint. Use a dependency for current-user authentication, authorization, pagination, or request-scoped resources when only selected routes need it. Router-level dependencies can apply a policy to a group of endpoints. Middleware is not a replacement for object-level authorization, and dependencies should not secretly implement universal protocol concerns. Choose the narrowest mechanism that expresses the requirement, and understand middleware order because outer layers see requests first and responses last.
+    Global concerns belong at the outer application boundary; endpoint-specific values and policies are easier to reason about when declared as dependencies.
+  tags: [middleware, dependencies, architecture]
+
+- id: fapi-basic-020
+  topic: pydantic
+  difficulty: intermediate
+  question: In Pydantic v2, what is the difference between a nullable field and an optional field?
+  answer: |
+    A field annotated `value: str | None` accepts either a string or null, but it is still required in the input because it has no default. `value: str | None = None` is nullable and may be omitted because the field has a default. This distinction matters for update operations: omission can mean “leave the existing value unchanged,” while explicit null can mean “clear it.” An application can inspect `model_fields_set` to determine whether a field was supplied. Do not assume that `Optional[T]` alone makes a field non-required in Pydantic v2. For PATCH contracts, model the intended semantics explicitly and test absent, null, and concrete values separately.
+    This matters particularly for partial updates because omission and explicit clearing are different client intentions. Validate all three cases in endpoint tests.
+  tags: [pydantic-v2, nullable, patch]
+
+- id: fapi-basic-021
+  topic: errors
+  difficulty: intermediate
+  question: What happens if a returned object does not match its response model?
+  answer: |
+    FastAPI validates normal endpoint return data against the configured response model before sending it. If the server's data violates the declared output contract, that is a server-side defect, not invalid request input. The failure should be logged and investigated rather than returned as a 422 telling the client to change its request. A response model also filters extra fields, which helps prevent internal attributes from leaking. It does not provide the same filtering for a direct `Response` object whose body was manually constructed. Add tests for required output fields and for secrets that must not appear. When a mismatch occurs, inspect DTO conversion, ORM loading, and serialization rather than broad-catching the exception and returning an apparently successful response.
+    Keep the response DTO independent from ORM migrations so internal schema changes do not silently become public API changes.
+  tags: [response-validation, errors, contracts]
+
+- id: fapi-basic-022
+  topic: security
+  difficulty: intermediate
+  question: How should an API key be handled in a FastAPI application?
+  answer: |
+    Prefer transmitting an API key in a header over a query string because URLs are often retained in logs, browser history, and analytics. FastAPI's API key security helpers extract and document a key but do not validate, rotate, or secure it automatically. Verify it against server-side records, associate it with an owner and limited permissions, support revocation, and avoid storing raw long-lived keys when a hash suffices. Require HTTPS, redact keys from logs and traces, and apply rate limits appropriate to the credential. A key should not grant more access than its use requires. Test absent, invalid, revoked, and insufficient-permission cases. Do not confuse a syntactically present header with an authenticated identity or an authorization decision.
+    A key should be revocable independently, and rotation should allow an overlap window for clients to adopt a replacement without sharing the old secret indefinitely.
+  tags: [api-key, secrets, security]
+
+- id: fapi-basic-023
+  topic: dependency-injection
+  difficulty: intermediate
+  question: What does a `yield` dependency do, and why does cleanup timing matter?
+  answer: |
+    A dependency implemented as a generator runs code before `yield`, provides the yielded value to dependents, and then runs its cleanup section when its lifecycle ends. This is a natural pattern for opening and closing a request-scoped database session or temporary resource. Async resources use an async generator and `async with` around the resource. Cleanup timing matters for streaming responses: the generator may still need the session after the endpoint function has returned, so a function-scoped cleanup could be too early. FastAPI versions provide dependency scope controls for yielded dependencies; verify their exact behavior in the installed release. Test both successful requests and exceptions or disconnects to ensure resources are released without closing them before the response finishes.
+    The dependency should use context managers so cleanup also runs when validation fails or the endpoint raises. Resource ownership must remain explicit.
+  tags: [yield, lifecycle, resources]
+
+- id: fapi-basic-024
+  topic: deployment
+  difficulty: intermediate
+  question: Why must database pool sizes account for worker and replica counts?
+  answer: |
+    Each Uvicorn worker is an operating-system process with its own application instance, engine, and connection pool. Separate container replicas also have independent pools. If each process can open several database connections, the total possible connection count is approximately the per-process capacity multiplied by the number of processes across all replicas, plus overflow and other clients. Setting a pool size in isolation can therefore overwhelm the database after scaling out. Budget connections against database limits, migration jobs, monitoring, and other services. Worker count also multiplies memory and application-scoped resources. Observe pool checkout waits and active connections under load, and configure finite timeouts. Horizontal scaling changes shared downstream demand; it is not free capacity.
+    Include rolling deployment overlap in the budget because old and new replica sets can run simultaneously while the platform replaces containers.
+  tags: [workers, connection-pools, scaling]

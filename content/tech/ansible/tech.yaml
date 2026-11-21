@@ -1,0 +1,130 @@
+slug: ansible
+title: Ansible
+category: cloud-infrastructure
+summary: Agentless configuration management and orchestration for making server state repeatable, reviewable and consistent.
+level: core
+relations:
+  - to: linux
+    type: foundation
+    note: Ansible manages Linux users, packages, files and services through the operating-system interfaces covered here.
+  - to: terraform
+    type: complements
+    note: Terraform provisions infrastructure; Ansible configures operating systems and coordinates application rollout after hosts exist.
+  - to: cicd
+    type: uses
+    note: CI pipelines lint, test and run Ansible playbooks as controlled deployment steps.
+intro:
+  what: |
+    Ansible is an automation engine for configuring systems and coordinating operational tasks. A
+    controller runs the `ansible` or `ansible-playbook` command and connects to managed nodes, usually
+    over SSH, to invoke modules. There is no persistent agent to install on ordinary Linux hosts. The
+    desired work is described in YAML inventories, playbooks, roles and variable files, while modules
+    make changes through native interfaces such as package managers, service managers and filesystem
+    APIs. Most built-in modules are designed to be idempotent: applying the same desired state again
+    should leave an already-correct host unchanged.
+
+    This module moves from inventory and connection setup through playbooks, modules, variables,
+    control flow, roles, templates, secrets, execution performance and testing. It focuses on the
+    practical contract of a reliable automation run: identify the intended hosts, state the desired
+    state, apply it with bounded privileges, inspect changes, and recover safely when something fails.
+  why: |
+    Hand-run procedures drift. One server misses a package update, another has an undocumented config
+    edit, and a third is rebuilt from someone's notes rather than a repeatable definition. Ansible
+    turns these procedures into versioned artifacts that can be reviewed, run against a canary, and
+    applied consistently to a fleet. Its low setup cost and ability to operate over familiar SSH make
+    it useful for small estates as well as larger operations teams.
+
+    Automation also increases the reach of mistakes. A broad inventory pattern, an incorrect variable,
+    or a destructive task can affect many hosts quickly. Competent Ansible practice is therefore not
+    just YAML syntax: it includes inventory boundaries, privilege control, secret handling, idempotency,
+    check-mode limitations, testing, and deliberate rollout strategy.
+  problems:
+    - Apply consistent operating-system configuration across hosts without installing a persistent agent.
+    - Replace fragile shell runbooks with repeatable tasks and state-aware modules.
+    - Coordinate service changes, deployments, maintenance and rolling updates.
+    - Keep host configuration reviewable in version control and testable before broad rollout.
+    - Share standard automation through roles and collections.
+  where_used:
+    - Bootstrap and maintain Linux servers over SSH, including users, packages, files and services.
+    - Configure Windows hosts over WinRM or PSRP where those transports and prerequisites are set up.
+    - Deploy applications and perform bounded operational workflows across host groups.
+    - Run infrastructure configuration from CI after provisioning or before release promotion.
+    - Manage network devices and cloud resources through the relevant collections and APIs.
+  ecosystem: |
+    Ansible sits after or alongside infrastructure provisioning. Terraform is generally the stronger
+    tool for declaring cloud resources, dependencies and lifecycle plans; Ansible is generally the
+    stronger tool for configuring operating systems, deploying files and coordinating imperative
+    operational steps. A CI system can run both with separate credentials and approval gates. Linux
+    administration supplies the actual package, service, permission and networking semantics that
+    Ansible automates. Ansible itself is not a substitute for understanding those semantics.
+
+    The project is distributed as `ansible-core` plus separately versioned collections. Core provides
+    the execution engine and a small set of built-in plugins and modules; collections package many
+    additional modules, plugins and roles under namespaces. Pinning versions in a project and using
+    fully qualified collection names helps keep playbooks reproducible across controller environments.
+  alternatives:
+    - name: Terraform
+      note: Prefer it for provisioning and lifecycle management of cloud infrastructure; it is complementary to host configuration.
+    - name: Puppet, Chef or Salt
+      note: Alternative configuration-management systems with different agent, server and language models; fit depends on estate and operating practice.
+    - name: Cloud-init or image baking
+      note: Useful for first-boot setup or immutable-image workflows; ongoing convergence may be intentionally avoided.
+    - name: No configuration-management tool
+      note: A small, immutable fleet built entirely from reviewed images and managed services may be safer and simpler without ongoing host mutation.
+  related: [linux, terraform, cicd, bash]
+chapters:
+  - id: inventory-patterns-connections
+    title: Inventory, Host Patterns and Connection Options
+    file: chapters/01-inventory-patterns-connections.md
+    minutes: 13
+    level: core
+  - id: playbooks-tasks-handlers
+    title: Playbooks, Tasks, Handlers and Idempotency
+    file: chapters/02-playbooks-tasks-handlers.md
+    minutes: 13
+    level: core
+  - id: modules-collections-fqcn
+    title: Modules, Collections and Fully Qualified Names
+    file: chapters/03-modules-collections-fqcn.md
+    minutes: 12
+    level: core
+  - id: variables-facts-precedence-templating
+    title: Variables, Facts, Precedence and Templating
+    file: chapters/04-variables-facts-precedence-templating.md
+    minutes: 14
+    level: core
+  - id: loops-conditionals-errors
+    title: Loops, Conditionals and Error Handling
+    file: chapters/05-loops-conditionals-errors.md
+    minutes: 12
+    level: core
+  - id: roles-structure
+    title: Roles and Role Structure
+    file: chapters/06-roles-structure.md
+    minutes: 12
+    level: core
+  - id: templates-file-management
+    title: Jinja2 Templates and File Management
+    file: chapters/07-templates-file-management.md
+    minutes: 13
+    level: core
+  - id: vault-secrets-least-privilege
+    title: Vault, Secrets and Least Privilege
+    file: chapters/08-vault-secrets-least-privilege.md
+    minutes: 13
+    level: advanced
+  - id: performance-execution
+    title: 'Performance: Forks, Pipelining, Serial and Delegation'
+    file: chapters/09-performance-execution.md
+    minutes: 13
+    level: advanced
+  - id: testing-ci-tool-choice
+    title: Testing, CI and Choosing the Right Tool
+    file: chapters/10-testing-ci-tool-choice.md
+    minutes: 14
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

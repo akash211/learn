@@ -1,0 +1,158 @@
+[
+  {
+    "id": "tsdb-recent-001",
+    "topic": "columnstore migration",
+    "difficulty": "intermediate",
+    "question": "How should a team migrate from legacy compression settings to newer columnstore APIs?",
+    "period": "2024-2026",
+    "type": "representative",
+    "answer": "Treat this as a versioned migration, not a search-and-replace. Identify installed PostgreSQL and extension versions, review the supported path, and test on a restored clone. Older releases commonly use `timescaledb.compress`, `compress_orderby`, `compress_segmentby`, and `add_compression_policy`; newer releases may expose Hypercore or columnstore APIs. Names and supported operations vary. Inventory chunks and policies, test conversion and query results on a representative chunk, and confirm job status. A catalog update does not prove historical chunks migrated. A safe rehearsal should include policy and job behavior as well as query results. For example, verify that a representative historical chunk is actually converted, that its data remains queryable, and that jobs do not leave chunks in an unexpected state. Check the installed extension version before using a command from a newer documentation page. Measure storage and ingestion impact, and plan how to handle chunks that are already compressed under legacy settings. Keep the original clone and a tested recovery route until conversion succeeds.",
+    "tags": [
+      "timescaledb",
+      "columnstore-migration"
+    ]
+  },
+  {
+    "id": "tsdb-recent-002",
+    "topic": "real-time aggregates",
+    "difficulty": "intermediate",
+    "question": "What should you verify when an upgrade changes continuous aggregate real-time behavior?",
+    "period": "2024-2026",
+    "type": "representative",
+    "answer": "Verify the view configuration and semantics instead of relying on remembered defaults. Real-time aggregation can combine materialized history with raw rows newer than the watermark, but defaults changed across releases. Inspect the version-specific setting, query both historical and newest intervals, and compare with raw source data. Check the plan and latency: the raw tail improves freshness but adds work. Confirm refresh offsets and job status so a missing boundary is not mistaken for an upgrade bug. Add a regression test before and after the upgrade. A useful regression fixture includes late-arriving data in a recent bucket and a bucket whose refresh boundary has just moved. Compare the continuous aggregate with a direct query over raw rows and confirm the watermark does not create a gap or double count. For example, a dashboard may need new events visible immediately while older buckets remain materialized. Inspect the plan and measure the extra raw-tail work under concurrent dashboard requests.",
+    "tags": [
+      "timescaledb",
+      "real-time-aggregates"
+    ]
+  },
+  {
+    "id": "tsdb-recent-003",
+    "topic": "PostgreSQL compatibility",
+    "difficulty": "advanced",
+    "question": "How do you evaluate TimescaleDB compatibility when upgrading PostgreSQL major versions?",
+    "period": "2024-2026",
+    "type": "representative",
+    "answer": "Use the compatibility matrix for the exact TimescaleDB and PostgreSQL versions, then review release notes and supported sequences. Extension binaries must be compatible on primary, standby, and restore hosts. PostgreSQL major upgrades and `ALTER EXTENSION ... UPDATE` are separate procedures and may have required ordering. Test the sequence on a recent clone, including migration method, jobs, compressed chunks, continuous aggregates, replication, failover, and restore. Managed platforms can constrain packages and timing. Do not infer support because the server starts. A rehearsal should restore or clone the production topology and execute the documented sequence end to end, not merely test a single server. Verify extension libraries on every replica and restore host, plus background jobs, compressed chunk reads, continuous aggregate refresh, and failover. For example, a primary may start successfully while a standby lacks the matching extension package and cannot follow or promote correctly. Record the PostgreSQL and extension versions at each step, and test a point-in-time restore after the change.",
+    "tags": [
+      "timescaledb",
+      "PostgreSQL-compatibility"
+    ]
+  },
+  {
+    "id": "tsdb-recent-004",
+    "topic": "skip scan",
+    "difficulty": "advanced",
+    "question": "Can PostgreSQL skip scan make an index on tenant_id, time efficient for time-only filters?",
+    "period": "2024-2026",
+    "type": "representative",
+    "answer": "Possibly on some newer PostgreSQL versions and distributions, but it is not a general substitute for an index beginning with time. Usefulness depends on distinct values of the leading key, statistics, selectivity, and planner costs. A high-cardinality tenant key can make repeated probing expensive. TimescaleDB compatibility also matters. Run `EXPLAIN (ANALYZE, BUFFERS)` with representative parameters and compare a time-leading index. Chunk pruning can reduce relations but does not guarantee efficient access inside each surviving chunk. Use EXPLAIN ANALYZE with representative tenant counts and time ranges, and inspect actual loops and buffer reads for the skip-scan path. A low number of distinct tenants might make repeated probes reasonable, while a large number can make the same plan expensive. Compare against an index led by time and include the write and storage cost of maintaining it. Timescale chunk pruning can eliminate irrelevant chunks but still leave each chunk with an inefficient index access pattern.",
+    "tags": [
+      "timescaledb",
+      "skip-scan"
+    ]
+  },
+  {
+    "id": "tsdb-recent-005",
+    "topic": "columnstore regression",
+    "difficulty": "advanced",
+    "question": "A historical query slows after adding a segment key. What should be investigated?",
+    "period": "2024-2026",
+    "type": "representative",
+    "answer": "Check whether the segment key matches selective filters and whether it creates many tiny groups. High cardinality can increase metadata and reduce compression. Compare compressed size and plans with the previous layout, testing queries with and without the segment predicate. Check time ordering, selected columns, chunk pruning, and whether the query is a point lookup rather than an analytical scan. Columnar storage helps when it can skip groups or avoid unused columns; it is not universally faster. Reproduce on the exact extension version. A high-cardinality segment such as a nearly unique request identifier can split data into many tiny groups and undermine compression or skip efficiency. A lower-cardinality attribute that frequently appears in filters may be useful. For example, compare device-type queries with session-specific point lookups and broad time scans on the same sample chunks. Record compressed size, query latency, and I/O, and inspect whether the segment predicate actually prunes groups.",
+    "tags": [
+      "timescaledb",
+      "columnstore-regression"
+    ]
+  },
+  {
+    "id": "tsdb-recent-006",
+    "topic": "late arrival",
+    "difficulty": "intermediate",
+    "question": "How should refresh and compression policies account for late-arriving events?",
+    "period": "2024-2026",
+    "type": "representative",
+    "answer": "Measure event lateness and set a mutable window covering normal corrections. Continuous aggregate `start_offset` must reach late data; `end_offset` should allow buckets to settle. Compression should wait until writes are sufficiently rare. For older corrections, define quarantine or a controlled, version-supported update and refresh path. Monitor job failures and freshness, and test the ordering of refresh, compression, and retention. No single offset works for every arrival distribution. Use observed lateness percentiles and the business correction window to choose refresh offsets, then ensure compression occurs only after data is expected to settle. For example, if corrections can arrive 24 hours late, a two-hour refresh window will leave aggregate values stale unless a deliberate backfill process exists. Monitor job failures, refresh lag, and correction age, and test what happens when a late update targets a compressed chunk. Document the supported repair procedure for old data and its cost.",
+    "tags": [
+      "timescaledb",
+      "late-arrival"
+    ]
+  },
+  {
+    "id": "tsdb-recent-007",
+    "topic": "archive gate",
+    "difficulty": "intermediate",
+    "question": "How can retention avoid removing data before its archive is usable?",
+    "period": "2024-2026",
+    "type": "representative",
+    "answer": "Make verified archive completion a prerequisite to destructive retention. Export bounded ranges, validate counts or checksums, and read objects back. Keep a manifest with schema version, range, timezone conventions, and export time. Mark a range complete only after validation. Retention runs asynchronously and chunk boundaries are coarse, so monitor actual candidates and job outcomes. Retries must be idempotent. An upload success response alone does not prove that an archive can be restored or interpreted. A concrete archive gate is to export one bounded range, record its schema and time zone conventions in a manifest, verify counts or checksums, then read the object back before marking it complete. Only completed ranges should be eligible for retention. Because retention removes whole chunks asynchronously, alert on failed exports and review the actual chunks selected by the policy. Make retries safe and ensure the archive can be restored after schema changes. An upload response confirms transport, not content integrity or future interpretability.",
+    "tags": [
+      "timescaledb",
+      "archive-gate"
+    ]
+  },
+  {
+    "id": "tsdb-recent-008",
+    "topic": "COPY retries",
+    "difficulty": "intermediate",
+    "question": "What is a robust high-volume ingestion path when events can be retried?",
+    "period": "2024-2026",
+    "type": "representative",
+    "answer": "Batch rows through `COPY` or multi-row inserts, keeping transactions and client buffers bounded. Define stable event identity and a unique constraint satisfying hypertable partition requirements. A retry after a lost acknowledgement can then deduplicate or apply a defined correction via `ON CONFLICT`. For complex validation, COPY into staging and quarantine invalid rows. Commit broker offsets only after database durability. Monitor queue depth, latency, conflicts, WAL, and replica lag; apply backpressure rather than allowing unbounded buffers. Stable event IDs make retries idempotent after an ambiguous commit, while bounded batches prevent a slow database from exhausting client memory. For example, replaying a broker batch after losing its acknowledgment should not create duplicate measurements or move offsets ahead of durable data. COPY into staging is useful when rows require validation or quarantine before merge. Monitor WAL, conflicts, queue depth, and replica lag; apply backpressure when these rise. Verify hypertable unique constraints include the required partition dimensions.",
+    "tags": [
+      "timescaledb",
+      "COPY-retries"
+    ]
+  },
+  {
+    "id": "tsdb-recent-009",
+    "topic": "retention precision",
+    "difficulty": "intermediate",
+    "question": "A product requires retaining every row for exactly 90 days. Is chunk retention sufficient?",
+    "period": "2024-2026",
+    "type": "representative",
+    "answer": "Not necessarily. Policies usually remove whole chunks, with eligibility and job cadence constrained by chunk boundaries. A chunk overlapping the 90-day boundary can remain longer. Choose an interval compatible with acceptable over-retention and verify installed semantics. If deletion must occur at per-row precision, chunk drops alone are insufficient; row deletes or smaller boundaries may be required, with WAL and vacuum costs. Clarify whether the requirement is a minimum period, maximum period, or exact expiry, and inspect candidates before policy activation. First translate “exactly 90 days” into an explicit maximum age and acceptable delay, then calculate how chunk length and retention-job cadence affect the oldest surviving rows. For example, weekly chunks may retain data almost a week beyond a row's 90-day mark. Shorter chunks reduce that granularity but increase chunk-management overhead. If the rule requires precise row-level expiry, per-row deletion can create substantial WAL and vacuum work; consider whether the requirement is actually a minimum retention interval instead.",
+    "tags": [
+      "timescaledb",
+      "retention-precision"
+    ]
+  },
+  {
+    "id": "tsdb-recent-010",
+    "topic": "rollup math",
+    "difficulty": "intermediate",
+    "question": "A daily dashboard needs a weighted mean from hourly aggregates. What should the hourly view store?",
+    "period": "2024-2026",
+    "type": "representative",
+    "answer": "Store hourly sum and count of non-null measurements, then compute daily mean as total sum divided by total count. Averaging hourly averages gives each hour equal weight despite different sample counts. Preserve min/max if needed; those combine across hours. For variance, percentiles, or distinct counts, a final scalar may not support correct higher-level rollups. Use mergeable state or retain raw data. Define null handling and timezone-aware day boundaries, then compare daily output with raw calculations over irregular sampling. Suppose one hour has a single reading while another has many; averaging the two hourly means weights each hour equally and is not the mean of all observations. Store sum and non-null count so a higher-level aggregate can combine them correctly. Define the reporting timezone and treatment of null or empty buckets, especially across daylight-saving changes. Min and max can also be rolled up, but variance and percentiles need appropriate mergeable state or raw observations.",
+    "tags": [
+      "timescaledb",
+      "rollup-math"
+    ]
+  },
+  {
+    "id": "tsdb-recent-011",
+    "topic": "PITR",
+    "difficulty": "advanced",
+    "question": "Which backup method supports PITR, and what extension checks are needed?",
+    "period": "2024-2026",
+    "type": "representative",
+    "answer": "PITR generally requires a physical base backup and complete WAL archive through the target time. `pg_dump` is useful for logical portability and selective restore, but is not PITR by itself. Restored PostgreSQL and TimescaleDB library/catalog versions must be compatible. Install the correct extension package and configuration before accepting traffic, following release-specific restore guidance. Test a restore to a point before a known change and query hypertables, compressed data, aggregates, and jobs. A successful backup command alone does not prove recoverability. Practice recovery to a timestamp just before a known change, then verify both ordinary and Timescale-specific objects and background behavior before opening the restored database to users. For example, check that compressed chunks can be queried, continuous aggregates return expected values, and jobs are configured as intended. Confirm WAL continuity, encryption-key access, matching extension libraries, and restore ordering for the exact release. A logical dump may help move selected objects but cannot replay the server's WAL timeline for PITR.",
+    "tags": [
+      "timescaledb",
+      "PITR"
+    ]
+  },
+  {
+    "id": "tsdb-recent-012",
+    "topic": "system choice",
+    "difficulty": "intermediate",
+    "question": "When should a time-series workload move from TimescaleDB to a columnar store?",
+    "period": "2024-2026",
+    "type": "representative",
+    "answer": "Consider columnar storage when broad scans over huge history, high-cardinality grouping, and concurrent analytics dominate, especially if OLTP integration is secondary. Benchmark real data and concurrency. TimescaleDB can remain useful for recent transactions, relational joins, and operational queries. A hybrid system may export older data, but must define delay, schema evolution, corrections, access control, and reconciliation. Moving engines shifts lifecycle work to data movement. Plain PostgreSQL may be sufficient when native partitioning and indexes already meet modest needs. Benchmark scans, grouping, ingestion, freshness, and concurrency using representative historical data before selecting a new engine. A hybrid design can keep operational recent data in TimescaleDB and move older data to columnar storage, but queries spanning the boundary need consistent schemas and reconciliation. For example, late corrections to archived months require a defined re-export or correction path. Include data movement, retention, access control, backup, and restore in total cost.",
+    "tags": [
+      "timescaledb",
+      "system-choice"
+    ]
+  }
+]

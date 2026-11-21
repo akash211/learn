@@ -1,0 +1,239 @@
+- id: dbt-basic-001
+  topic: project lifecycle
+  difficulty: beginner
+  question: What does dbt do, and what does it not do?
+  answer: |
+    dbt manages SQL transformations over data that has already been loaded into a warehouse or supported platform. A developer defines models, dependencies, tests and metadata in a project; dbt parses the project, compiles Jinja, orders the graph and asks an adapter to create or update database relations. It can also run tests, snapshot configured source state, generate documentation artifacts and report node-level results.
+
+    dbt does not normally ingest raw data from operational systems, choose correct business definitions, operate the warehouse itself, or make SQL portable without limits. An ingestion service or upstream job must land source tables, and the adapter translates dbt operations but does not erase differences in SQL, permissions or DDL behavior. Treat dbt as the transformation and project-management layer in a larger data stack.
+  tags: [transformation, ELT, scope]
+
+- id: dbt-basic-002
+  topic: project anatomy
+  difficulty: beginner
+  question: What are the main parts of a dbt project?
+  answer: |
+    `dbt_project.yml` names the project and sets paths and defaults. `models/` contains model SQL and usually YAML properties such as descriptions, tests and contracts. `macros/` contains reusable Jinja; `tests/` commonly holds singular data tests; `seeds/` holds small CSV inputs; `snapshots/` defines snapshot resources; `analyses/` stores SQL not built as models; and `packages.yml` lists external dependencies. Exact paths can be configured, and a project may use additional folders.
+
+    Connection configuration is separate, traditionally in a profile selected at runtime. Generated artifacts such as `manifest.json` and `run_results.json` are typically written under `target/`. Do not assume every directory name determines resource type: dbt discovers resources based on file types and configured paths. Keep credentials out of project files and commit project configuration, SQL and dependency declarations to version control.
+  tags: [project, files, configuration]
+
+- id: dbt-basic-003
+  topic: models
+  difficulty: beginner
+  question: What is a dbt model?
+  answer: |
+    A typical dbt model is a `.sql` file containing a `SELECT` query that describes a transformation. When run, dbt uses its materialization and adapter to build a database relation such as a view or table. The model's file name usually becomes its logical name, while configuration can control schema, alias, materialization and other behavior.
+
+    A model should represent a meaningful transformation and have a clear grain—for example, one row per order line. A filename alone does not guarantee that grain or enforce uniqueness. Models commonly form staging, intermediate and mart layers, but those are team conventions. Downstream SQL should use `{{ ref('model_name') }}` instead of hard-coding a physical table name, so dbt can resolve the relation for the active target and record the dependency in its DAG.
+  tags: [models, SQL, grain]
+
+- id: dbt-basic-004
+  topic: refs and sources
+  difficulty: beginner
+  question: What is the difference between `ref()` and `source()`?
+  answer: |
+    `ref('stg_orders')` points to a model, seed or other dbt-managed resource by its project name. It resolves the target relation and creates a dependency edge, so dbt can order builds and show lineage. `source('app', 'orders')` points to an externally managed table declared under a source and table name in YAML. It also creates a graph edge, but the table itself is normally loaded by an ingestion process rather than built by dbt.
+
+    Both functions are preferable to hard-coded database and schema names. The declared nodes support selection, documentation and environment-aware relation resolution. A `source()` declaration does not create the raw table, and a `ref()` call does not itself build the referenced model. Use literal, parseable references so dbt can discover the graph; dynamically constructing relation strings can hide dependencies from the parser.
+  tags: [ref, source, DAG]
+
+- id: dbt-basic-005
+  topic: DAG and selection
+  difficulty: intermediate
+  question: How does dbt use the DAG, and what does the `+` selector mean?
+  answer: |
+    dbt builds a directed acyclic graph from `ref()` and `source()` dependencies, then orders selected resources so prerequisites are available first. Cycles are invalid because a model cannot depend on its own downstream result. Independent branches can execute concurrently subject to invocation and warehouse limits.
+
+    In selectors, `+model` generally includes ancestors, `model+` includes the node and descendants, and `+model+` includes both directions. For example, `dbt build --select +fct_orders` includes upstream prerequisites and the selected model, while `fct_orders+` can include downstream consumers. A plain `dbt run --select fct_orders` does not necessarily rebuild ancestors; existing relations may be assumed. Use `dbt ls --select ...` to inspect the selected set before expensive CI or production commands, especially when combining graph operators, tags and state selectors.
+  tags: [DAG, selection, lineage]
+
+- id: dbt-basic-006
+  topic: commands
+  difficulty: beginner
+  question: When should you use `dbt run`, `dbt test` and `dbt build`?
+  answer: |
+    `dbt run` builds selected models, but it does not run data tests. `dbt test` runs selected data tests and, in versions with native unit tests, can run unit tests too; tests generally inspect existing relations or compile static fixture inputs. `dbt build` is the broader dependency-aware command: it can build selected models and execute relevant tests and other buildable resource types such as seeds and snapshots in graph order.
+
+    Use `dbt build` for a quality-gated selection when you want transformations and tests together. Use `dbt run` when model execution alone is intended, such as a deliberate rebuild before a separate test stage. Use `dbt test` for focused validation. Selection flags and resource types matter, so confirm exactly what a command will execute with `dbt ls`. None of these commands guarantees all resources succeed atomically; earlier nodes may finish before a later failure.
+  tags: [CLI, run, build]
+
+- id: dbt-basic-007
+  topic: materializations
+  difficulty: beginner
+  question: Compare view, table, incremental and ephemeral materializations.
+  answer: |
+    A view stores a query definition and usually defers computation to consumers. It is quick to build and reflects upstream state when queried, but complex view chains may be expensive. A table stores the full query result, which can improve repeated reads but usually costs more to rebuild. An incremental model stores a table and processes a selected change set on later runs; it can save work on large data but requires correct filtering, key and repair logic.
+
+    An ephemeral model is not created as a warehouse relation. dbt inlines it into downstream SQL as a CTE, which is useful for small helpers but can create large compiled queries. Materialization must fit data volume, reuse, freshness needs, warehouse behavior and recovery requirements. Adapter-specific options exist, so verify support in the actual target. Changing materialization can affect relation names, grants and downstream consumers.
+  tags: [materialization, views, incremental]
+
+- id: dbt-basic-008
+  topic: incremental models
+  difficulty: intermediate
+  question: What does `is_incremental()` do, and what does it not guarantee?
+  answer: |
+    `is_incremental()` is a Jinja helper commonly used to choose a bounded query path when a model is already materialized incrementally and the invocation is not a full refresh. A model may filter records newer than a target watermark only inside `{% if is_incremental() %}` while returning full history on its initial build. This allows one model definition to support both baseline construction and subsequent updates.
+
+    It does not determine which rows are new, ensure updates or deletes are captured, guarantee a safe watermark, or deduplicate inputs. The model author must choose a reliable change signal and a supported strategy such as merge or append. Late arrivals can fall behind a simple `max(timestamp)` filter. Test both incremental and full-refresh paths, compare results to a clean rebuild, and document how to repair older data. A `unique_key` guides some strategies but does not validate uniqueness.
+  tags: [incremental, watermark, is_incremental]
+
+- id: dbt-basic-009
+  topic: data tests
+  difficulty: beginner
+  question: How do generic and singular data tests differ?
+  answer: |
+    A generic data test is a parameterized reusable query, commonly attached to a model or column in YAML. Built-ins include `not_null`, `unique`, `accepted_values` and `relationships`; teams can also write custom generic tests for repeated rules. A singular test is a project-specific SQL query, commonly saved under `tests/`, that returns rows violating one assertion. Zero returned rows means the check passes; returned rows indicate failures.
+
+    Use generic tests for reusable expectations and singular tests for a one-off rule such as a reconciliation between two complex aggregates. Tests run against actual data after relevant relations exist; they do not prove the business logic is correct unless the assertion captures it. The newer YAML property is `data_tests:`; older projects may use `tests:`. Keep syntax aligned with the project's pinned dbt version and make failures actionable rather than simply increasing test count.
+  tags: [tests, generic, singular]
+
+- id: dbt-basic-010
+  topic: sources
+  difficulty: beginner
+  question: What does a source declaration provide?
+  answer: |
+    A source declaration names externally managed database relations in project YAML. It can attach descriptions, column metadata, tests and freshness configuration. Models reference a declared table with `{{ source('source_name', 'table_name') }}`, which lets dbt resolve it for the current target and record the upstream dependency in the DAG.
+
+    A source does not load, own or guarantee the raw table. An ingestion service or external process is responsible for creating and refreshing it. The declaration makes the boundary visible: dbt can test the source's shape or selected properties, check configured freshness, and show lineage from that source into models. Choose a reliable loaded-at timestamp for freshness; an event timestamp can be backdated. Source configuration is most useful when its names, owners and environment mapping correspond to real upstream interfaces and remain maintained as those interfaces change.
+  tags: [sources, ingestion, source]
+
+- id: dbt-basic-011
+  topic: freshness and exposures
+  difficulty: intermediate
+  question: What does source freshness measure, and how is an exposure different?
+  answer: |
+    Source freshness compares a configured timestamp signal—often an ingestion timestamp—to thresholds such as `warn_after` and `error_after`. `dbt source freshness` runs the check. It indicates whether the latest observed timestamp is recent enough; it does not prove that every partition arrived, that rows are correct, or that a business event happened recently. The threshold and timestamp must match source cadence and ownership.
+
+    An exposure is metadata for a downstream consumer such as a dashboard, application or ML job. It can name an owner and declare `depends_on` references to models, which makes consumer impact visible in docs and selectors. It does not execute or validate the dashboard. Freshness describes input arrival; an exposure describes a declared consumer relationship. Both rely on accurate project metadata and need to be explicitly included in scheduling or maintenance processes.
+  tags: [freshness, exposures, ownership]
+
+- id: dbt-basic-012
+  topic: macros and packages
+  difficulty: intermediate
+  question: When should a team create a macro or install a package?
+  answer: |
+    A macro is reusable Jinja logic that generates SQL or performs project-aware operations. It is worthwhile when a pattern recurs and a stable interface makes maintenance easier, such as a shared expression or adapter-dispatched implementation. For a single query's ordinary steps, readable SQL CTEs are often clearer. Excessive macro layers hide business logic and make compiled SQL harder to review.
+
+    A package adds reusable project resources—often macros, tests or models—and is installed with `dbt deps` from dependencies in `packages.yml`. `dbt_utils` is a familiar example providing utilities and tests. Pin package versions, review upgrades and check adapter semantics rather than assuming portability. After changing shared macros or packages, compile and test representative dependents because a small dependency update can alter many models. Use compiled SQL to understand what Jinja actually generates.
+  tags: [Jinja, macros, dbt_utils]
+
+- id: dbt-basic-013
+  topic: snapshots
+  difficulty: intermediate
+  question: What problem do dbt snapshots solve, and what are their limits?
+  answer: |
+    A snapshot records observed changes in a mutable source relation over time, commonly for a type 2 slowly changing dimension. It identifies an entity with a `unique_key` and detects changes using a timestamp strategy with a trustworthy update field or a check strategy comparing selected columns. Snapshot rows gain validity metadata such as `dbt_valid_from` and `dbt_valid_to`, allowing downstream models to query current or historical versions.
+
+    Snapshots run with `dbt snapshot`, not ordinary `dbt run`. They only capture states dbt observes during snapshot invocations. If a source value changes twice between daily runs and only the final value remains, the intermediate state is lost. A snapshot is not a complete event log or guaranteed business-effective history. Choose a stable entity key, document cadence and strategy, and use CDC or an authoritative change log when exact change history is required.
+  tags: [snapshots, SCD2, history]
+
+- id: dbt-basic-014
+  topic: documentation
+  difficulty: beginner
+  question: How does dbt documentation and lineage get generated?
+  answer: |
+    Model and column descriptions, source properties, exposures and other metadata are authored in project YAML. `dbt docs generate` creates documentation artifacts and can introspect the warehouse to collect catalog details; `dbt docs serve` serves the generated site locally. The site includes graph lineage derived largely from `ref()` and `source()` dependencies and declared exposure relationships.
+
+    Documentation does not infer every hard-coded database reference or undocumented dashboard dependency. If a model bypasses `ref()` or a consumer is absent from exposures, lineage can be incomplete. Generated docs can also be stale if they correspond to an old manifest or a different target. Generate documentation from an identifiable release revision and maintain descriptions with the SQL. Descriptions explain intent but do not enforce schema or data quality; use contracts and tests for those purposes.
+  tags: [docs, lineage, catalog]
+
+- id: dbt-basic-015
+  topic: unit tests
+  difficulty: intermediate
+  question: What is a dbt unit test, and how does it differ from a data test?
+  answer: |
+    Native SQL model unit tests, introduced in dbt v1.8, supply small static input rows for a model's `ref()` or `source()` dependencies and compare the model's output with expected rows. They are useful for complex transformation logic such as conditional branches, date calculations, window logic and edge cases before running against a full production-sized dataset.
+
+    A data test instead queries an actual built relation for violations such as duplicate keys or null values. Unit tests check logic on chosen fixtures; data tests check properties of real outputs. Neither replaces integration testing against the target platform. Unit tests have constraints around supported model types and SQL features, so check version and adapter documentation. Put their YAML under model paths, include every required input, and use `dbt test --select "test_type:unit"` for a focused run where supported.
+  tags: [unit-tests, dbt-1.8, testing]
+
+- id: dbt-basic-016
+  topic: model contracts
+  difficulty: intermediate
+  question: What does an enforced model contract guarantee, and what does it not guarantee?
+  answer: |
+    An enforced contract declares the expected output column names and data types in model properties and checks that the model's result matches that schema before materialization, for supported resource types, materializations and adapters. Some platforms also support selected constraints, but enforcement differs. Contracts make stable marts safer as interfaces for BI tools and downstream projects because accidental column or type drift can fail a build rather than silently reach consumers.
+
+    A contract does not prove that values are valid, that a calculation is semantically correct, or that a column is complete and unique. Those expectations require data tests and domain review. Contracts are not supported for every model type, and incremental models need appropriate schema-change handling. Treat column removals and type changes as breaking API changes, coordinate consumers, and validate on the actual adapter rather than assuming identical constraint behavior across platforms.
+  tags: [contracts, schema, interfaces]
+
+- id: dbt-basic-017
+  topic: CI
+  difficulty: intermediate
+  question: What makes a useful dbt pull-request CI check?
+  answer: |
+    A useful check validates the project and its dependencies, builds relevant resources in an isolated non-production target, and runs tests that protect important behavior. Depending on project size, it may compile, run unit tests, build changed models and descendants, and execute selected data tests. The check should use a compatible Core/adapter/package set and report the commit, target and selected nodes. Isolation prevents concurrent pull requests from overwriting one another.
+
+    A passing parse or compile alone does not prove warehouse execution or data quality. A `dbt run` alone does not run data tests. Slim CI can reduce cost by comparing a production manifest and selecting changed nodes, but the baseline artifact and selection semantics must be controlled. Inspect selectors with `dbt ls`, preserve a full-build path for periodic validation, and make failures actionable rather than broadening every test to warning-only.
+  tags: [CI, pull-requests, quality]
+
+- id: dbt-basic-018
+  topic: adapters
+  difficulty: beginner
+  question: What is a dbt adapter, and why does it matter?
+  answer: |
+    An adapter connects dbt's project and command abstractions to a particular data platform. The adapter handles connection behavior, relation operations, SQL generation and adapter-specific capabilities. A project targeting Snowflake installs and configures `dbt-snowflake`; Redshift and PostgreSQL commonly use `dbt-redshift` and `dbt-postgres`, respectively, alongside a compatible dbt Core version.
+
+    The adapter is not merely a credentials file. Materialization strategies, incremental SQL, quoting, tests, constraints, type behavior and supported features can differ. A model that compiles in one adapter may fail or behave differently in another because SQL dialects and DDL semantics vary. Pin compatible versions of Core and the adapter, test upgrades, and check the exact adapter documentation before relying on a feature. dbt reduces repeated orchestration work but does not erase warehouse-specific operational knowledge.
+  tags: [adapters, warehouses, compatibility]
+
+- id: dbt-basic-019
+  topic: environments
+  difficulty: intermediate
+  question: Why separate dbt development, CI and production environments?
+  answer: |
+    Separate environments isolate writes, credentials and data scope. A developer commonly builds into a personal schema, CI uses an ephemeral or dedicated target, and production uses a deployment identity with tightly controlled permissions. This prevents exploratory work from overwriting published relations and lets CI reveal hidden dependencies on old objects that happen to exist in a developer schema.
+
+    Environment separation is more than a different profile name: ensure the database, schema, secrets and warehouse selection are intentional, and do not commit credentials. Keep business logic consistent across environments when possible. A dev-only filter may lower cost but can leave production code paths untested. A production manifest or deferred relation should be treated as a specific baseline, not an implicit guarantee that schemas match. Document how production outputs are promoted, how partial failure is handled and how a release can be repaired.
+  tags: [environments, profiles, deployment]
+
+- id: dbt-basic-020
+  topic: core and cloud
+  difficulty: beginner
+  question: How do dbt Core and dbt Cloud differ?
+  answer: |
+    dbt Core is the open-source command-line framework and project engine. Teams install Core with an adapter, provide profiles and secrets, and run it on machines or infrastructure they operate. They select or build their scheduler, CI, artifact storage, alerting, access controls and deployment workflow.
+
+    dbt Cloud is a hosted platform that adds managed development and orchestration capabilities around dbt projects, with features depending on product configuration. It can take on some platform operations, but teams still own project correctness, warehouse permissions, environment policy and data quality. The essential project concepts—models, `ref()`, tests and DAG semantics—are not different transformation languages. Compare the operating model, integrations, security needs, upgrade responsibility and audit requirements rather than claiming one option makes dbt itself unnecessary. Both ultimately execute transformation logic against a configured data platform.
+  tags: [dbt-core, dbt-cloud, operations]
+
+- id: dbt-basic-021
+  topic: artifacts
+  difficulty: intermediate
+  question: What are `manifest.json` and `run_results.json` used for?
+  answer: |
+    `manifest.json` describes a parsed project: resources, configurations, dependencies and metadata. It is useful for documentation, lineage integrations and state-based selection. `run_results.json` records outcomes for nodes in a particular command invocation, including statuses and execution information. `catalog.json`, generated with documentation, can add warehouse-introspected relation and column metadata.
+
+    Artifacts are generated outputs, not substitutes for source code or a warehouse backup. Keep them tied to a commit SHA, target and job invocation so an operator knows which project they describe. A prior manifest is commonly used for slim CI with `--state`; do not let the current run overwrite that baseline before comparison. Store parallel job artifacts at separate paths, retain them according to policy, and use run results to diagnose partial success rather than treating only the overall exit code as the entire history.
+  tags: [artifacts, manifest, run-results]
+
+- id: dbt-basic-022
+  topic: variables and profiles
+  difficulty: intermediate
+  question: What belongs in `dbt_project.yml`, and what belongs in a profile or secret store?
+  answer: |
+    `dbt_project.yml` is checked-in project configuration: project identity, resource paths, model defaults and other non-secret behavior. A profile supplies connection details and selects an adapter target, such as account or host, database/schema and authentication settings. Credentials should come from protected environment variables or a secret-management system, not from committed files. Deployment platforms can provide their own managed environment configuration.
+
+    Keep target-specific settings explicit. A developer `dev` target should write to a safe schema; production should use a distinct deployment identity. Project variables can configure intentional behavior, but do not use them to hide a large untested matrix of business logic. Profiles and secrets answer “where and how do I connect?”; project configuration answers “what resources and defaults define this transformation project?” Review logs and compiled SQL to ensure secrets are not exposed.
+  tags: [profiles, secrets, configuration]
+
+- id: dbt-basic-023
+  topic: selectors and state
+  difficulty: intermediate
+  question: What does `state:modified+` select, and what must be supplied?
+  answer: |
+    `state:modified` selects nodes dbt considers new or modified by comparing the current parsed project with a prior manifest; the trailing `+` expands selection to downstream dependents. It is commonly used for slim CI so a changed staging model and affected marts are validated without rebuilding every node. The baseline manifest path is supplied with `--state`, for example `dbt build --select state:modified+ --state path/to/prod-artifacts`.
+
+    This is not simply a Git diff selector. Macro, configuration, contract and other parsed changes can affect selection. The manifest must represent the intended baseline, and current output must not overwrite it before comparison. The selector may not include every upstream relation needed in an empty CI schema. Inspect with `dbt ls --select state:modified+ --state ...`, decide how tests and deferred relations work, and keep a full build to catch assumptions slim CI misses.
+  tags: [state, selection, slim-CI]
+
+- id: dbt-basic-024
+  topic: failure diagnosis
+  difficulty: intermediate
+  question: How should you investigate a dbt build that partly succeeded and then failed?
+  answer: |
+    Start with the failing node and phase: parse, compile, connection, SQL execution or test. Read the dbt node-level result and exact warehouse error, then inspect compiled SQL and warehouse query history if execution reached the platform. Determine which upstream models and tests succeeded before the failure; a DAG command is not necessarily an atomic transaction, so some relations may already have changed.
+
+    Decide whether rerunning is safe before retrying. Views or full table builds may be straightforward, but incremental models can require a lookback repair or full refresh, and snapshots preserve history that should not be casually dropped. Check whether the failure is code, permissions, missing source data, adapter mismatch or an incorrect test expectation. Fix the cause, rerun the relevant selection in a safe environment, inspect artifacts and reconcile important outputs before declaring recovery complete.
+  tags: [debugging, failures, recovery]

@@ -1,0 +1,158 @@
+[
+  {
+    "id": "duck-recent-001",
+    "topic": "parquet scan",
+    "difficulty": "intermediate",
+    "question": "How does projection and predicate pushdown reduce work when querying Parquet?",
+    "answer": "Parquet pushdown saves work by avoiding irrelevant columns and row groups before DuckDB processes the remaining data. Projection reduces column reads; eligible filters use file and row-group statistics to skip chunks. In practice, DuckDB can discard whole row groups when statistics show that their values cannot match, and it need not decode columns that the query never selects. For instance, a date filter over partitioned Parquet can skip older files while selecting only a timestamp and revenue column. A function or cast around the filtered column may prevent the storage reader from applying that predicate, so check the physical plan rather than assuming pushdown occurred. Compare scanned rows and bytes with the expected result, including nulls and boundary dates, before tuning file sizes or rewriting expressions.",
+    "tags": [
+      "parquet scan",
+      "representative"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "duck-recent-002",
+    "topic": "larger-than-memory",
+    "difficulty": "intermediate",
+    "question": "What happens when a DuckDB query exceeds its memory budget?",
+    "answer": "DuckDB can spill some intermediate query state to temporary disk when memory is exhausted, allowing supported operators to finish with more I/O and lower speed. Set the memory limit and temporary directory deliberately, and ensure the temporary volume has space and suitable throughput. A large sort or hash aggregation may spill partitions to that directory, trading RAM use for disk reads and writes; some operations or failure modes still cannot be rescued by spilling. For example, an aggregation that previously ran out of memory may finish slowly when spill is enabled, but a full disk can still fail the query. Profile representative workloads, watch temporary space, and reduce unnecessary intermediate data or concurrent heavy queries. Spilling is a safety mechanism, not a promise of unlimited capacity.",
+    "tags": [
+      "larger-than-memory",
+      "representative"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "duck-recent-003",
+    "topic": "concurrency",
+    "difficulty": "advanced",
+    "question": "What is the practical difference between concurrent connections in one process and multiple processes writing one database file?",
+    "answer": "Multiple connections in one DuckDB process can coordinate transactions under its concurrent read/write model; separate processes writing the same file are not an equivalent multi-writer server. The distinction matters operationally: connections within one process share a supported coordination context, while independent processes do not become a transactional server merely because they point at the same file. Optimistic concurrency means conflicting transactions can fail and should be retried only when the application operation is safe to repeat. For example, a local analysis program can use separate connections for readers and a writer, but several web-worker processes concurrently updating one file need a different design. Test the actual deployment and recovery flow; choose a client-server database when multi-process write coordination, remote access, or user isolation is a core requirement.",
+    "tags": [
+      "concurrency",
+      "representative"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "duck-recent-004",
+    "topic": "optimizer",
+    "difficulty": "intermediate",
+    "question": "How would you diagnose an unexpectedly large join result using EXPLAIN ANALYZE?",
+    "answer": "An unexpectedly large join can come from duplicate keys, a missing predicate, or a legitimate many-to-many relationship; EXPLAIN ANALYZE helps locate where row counts expand. For example, if a supposedly unique customer key occurs five times on one side, each matching order can appear five times; the resulting rows may be valid SQL but violate the intended business relationship. Check duplicate counts and join predicates before attempting to fix estimates or add indexes. In the plan, note which operator first expands row count and whether the extra rows amplify memory, sorting, or later joins. Verify the corrected query on fixtures containing duplicate, unmatched, and null keys, then profile realistic data. This separates a correctness bug from an expensive but correct many-to-many join.",
+    "tags": [
+      "optimizer",
+      "representative"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "duck-recent-005",
+    "topic": "remote files",
+    "difficulty": "intermediate",
+    "question": "What should be considered before scanning S3 Parquet directly with DuckDB?",
+    "answer": "Direct S3 Parquet scans can avoid staging but depend on secure credentials, network access, object layout, and request cost; measure them against local staging. For a recurring scan, date-partitioned files and a manifest can reduce object listings and irrelevant reads; a single query over many tiny objects can instead be dominated by request latency. Prefer a short-lived, least-privilege credential supplied through DuckDB secrets or the deployment's identity mechanism. Check region, endpoint, egress, TLS, retry behavior, and network policy in the actual runtime. A useful test compares direct S3 access with staging a representative subset locally, recording bytes read, elapsed time, and cost. Do not expose credentials in notebooks or saved SQL. Confirm both correctness and access-denied behavior before making the remote source a production dependency.",
+    "tags": [
+      "remote files",
+      "representative"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "duck-recent-006",
+    "topic": "JSON",
+    "difficulty": "intermediate",
+    "question": "When should semi-structured JSON be transformed into typed STRUCT or relational columns?",
+    "answer": "Convert stable, frequently queried JSON fields into typed values or relational columns, while retaining raw payloads when replay or schema flexibility matters. A practical pattern is to retain the raw payload for audit or replay while extracting stable fields once into typed columns for downstream filters and joins. For example, parse an event amount as DECIMAL and its event time as TIMESTAMP instead of repeatedly comparing JSON text. Decide whether missing, explicit null, and invalid values should become SQL NULL, a validation error, or a quarantined record; otherwise conversion can silently change meaning. Schema drift may justify keeping optional fields in raw JSON, while frequently joined identifiers usually belong in relational columns. Exercise the conversion with representative producer versions and malformed records before replacing the existing query path.",
+    "tags": [
+      "JSON",
+      "representative"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "duck-recent-007",
+    "topic": "extensions",
+    "difficulty": "advanced",
+    "question": "What should a team verify before relying on PostgreSQL, Iceberg, or Delta extensions in production?",
+    "answer": "Production readiness depends on the exact extension, DuckDB, and source versions; verify supported features, correctness, credentials, snapshots, and write semantics rather than assuming API parity. For a concrete check, query a remote snapshot with filters and confirm in the plan whether predicates and projected columns are pushed down; compare returned types and values with the source. Then test schema evolution, missing credentials, token rotation, and interrupted writes or reads. A reader extension may not implement mutation, and transactional guarantees may differ from those of the source database. Pin a tested version and document the feature subset the application relies on. Keep source-engine integration tests for semantics that DuckDB cannot emulate. Treat a successful connection as only the first compatibility check, not proof of safe production writes or snapshot consistency.",
+    "tags": [
+      "extensions",
+      "representative"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "duck-recent-008",
+    "topic": "threads",
+    "difficulty": "intermediate",
+    "question": "Why might setting DuckDB threads to the maximum reduce application performance?",
+    "answer": "Maximum thread count is not always fastest: parallel queries contend for CPU, memory bandwidth, and I/O, so choose threads from measurements under real concurrency. Start with a moderate thread count and benchmark under the application's expected simultaneous query load. For example, one scan may run faster with eight workers in isolation but perform worse when four such queries compete for the same cores and disk. Compare total completed queries, p95 latency, CPU utilization, storage wait, memory use, and spill volume rather than only one query's wall time. Reserve capacity for the host and other services, and retest after changing container CPU limits or concurrency. More threads help only when the operator has parallel work and the machine can supply resources; they cannot remove an I/O bottleneck or compensate for excessive memory pressure.",
+    "tags": [
+      "threads",
+      "representative"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "duck-recent-009",
+    "topic": "CSV ingestion",
+    "difficulty": "intermediate",
+    "question": "How do you make CSV ingestion deterministic across changing files?",
+    "answer": "Deterministic CSV ingestion requires explicit file selection, schema, parsing options, and malformed-row policy; inference alone can change as new data arrives. Pin a schema or provide an explicit column mapping so a new file cannot silently alter types or column order. For example, test an identifier with leading zeroes, a quoted delimiter inside a field, a timezone-bearing timestamp, and the configured null marker. Maintain an explicit manifest for each ingestion batch and record rejected rows rather than relying on a permissive default. After loading, compare row counts, required-field nulls, and key uniqueness with the source contract. Once validated, writing typed Parquet gives future scans consistent schema and better columnar access. Repeat the same batch to confirm it produces the same values and errors, even when additional unrelated files appear in the directory.",
+    "tags": [
+      "CSV ingestion",
+      "representative"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "duck-recent-010",
+    "topic": "SQL semantics",
+    "difficulty": "intermediate",
+    "question": "How do QUALIFY, window frames, and tie-breaking interact when selecting latest rows?",
+    "answer": "Latest-row queries need a complete deterministic order and an explicit window frame; QUALIFY filters the window result but cannot resolve ties by itself. Suppose two events for an account have the same timestamp: ordering only by time leaves the chosen latest row ambiguous. Add a unique event identifier or another business-defined tie-breaker, then filter the row number in QUALIFY. For cumulative windows, explicitly specify the intended frame; RANGE may group peers with equal ordering values, while ROWS advances row by row. A portability test can express the same logic as a subquery with an outer WHERE when another engine lacks QUALIFY. Verify a single-row partition, tied timestamps, null ordering, and the frame boundary against expected business results. Determinism comes from complete ordering, not from the query happening to return the same row in one run.",
+    "tags": [
+      "SQL semantics",
+      "representative"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "duck-recent-011",
+    "topic": "embedded analytics",
+    "difficulty": "advanced",
+    "question": "When is an embedded DuckDB dashboard a poor fit?",
+    "answer": "An embedded dashboard is a poor fit when users require coordinated multi-process writes, tenant isolation, resource controls, or database-service availability. For example, a single analyst opening local files and running read-heavy reports is a natural embedded workload. A dashboard deployed with several worker processes, shared mutable state, user-specific permissions, and strict latency objectives needs centralized connection management and resource isolation that an embedded file does not automatically provide. Consider whether one process can own the database and serve controlled queries, or whether users require direct concurrent writes. Test connection lifetime, file access, backups, failure recovery, and tenant boundaries under realistic concurrency. If service-level operations are central, use a client-server database for shared state and retain DuckDB for local analysis or batch transformations.",
+    "tags": [
+      "embedded analytics",
+      "representative"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  },
+  {
+    "id": "duck-recent-012",
+    "topic": "testing",
+    "difficulty": "intermediate",
+    "question": "How can DuckDB accelerate tests for a Spark or warehouse SQL pipeline without pretending to be a full emulator?",
+    "answer": "DuckDB accelerates local SQL tests when fixtures and queries are portable, but only target-engine integration tests validate dialect, UDFs, and distributed behavior. Use DuckDB fixtures to catch transformation logic errors quickly, such as incorrect joins, filtering, and aggregation over representative edge cases. Keep a target-engine suite for behavior that depends on the actual warehouse or Spark runtime: dialect-specific syntax, decimal precision, timestamp zones, UDFs, collations, optimizer rules, permissions, and distributed shuffles. For example, a local test cannot prove that a Spark UDF serializes correctly across workers or that warehouse partition pruning occurs. Include comparisons against known expected outputs and test nulls, duplicate keys, and empty partitions. Label local tests as fast unit coverage, not engine certification, and run critical integration and performance checks against the deployed version before release.",
+    "tags": [
+      "testing",
+      "representative"
+    ],
+    "period": "2024-2026",
+    "type": "representative"
+  }
+]

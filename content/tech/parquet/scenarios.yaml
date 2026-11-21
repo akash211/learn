@@ -1,0 +1,167 @@
+- id: parquet-scn-001
+  title: A selective query still scans nearly every row group
+  technologies: [parquet, pyspark]
+  difficulty: advanced
+  prompt: |
+    A daily Spark query filters `event_time` to a one-hour interval on a 12 TB Parquet dataset.
+    The plan shows a pushed filter and a projected schema with four fields, but the scan reads
+    most of the table's bytes and misses its SLA. The dataset is partitioned by ingestion date,
+    not event time. How do you investigate and improve it without claiming a pushdown guarantee?
+  approach: |
+    Separate discovery, partition pruning, column projection and row-group skipping. Inspect the
+    physical plan and runtime scan metrics: paths/files selected, read schema, bytes, row groups
+    read/skipped where exposed, and time before tasks begin. Check footer statistics for the
+    `event_time` leaf across representative files, their min/max ranges, and whether those ranges
+    overlap because rows were written in random order. Confirm the predicate types and timezone
+    semantics, and ensure no cast or unsupported expression prevents translation.
+
+    If the filter is common and file sizes justify the write cost, cluster or sort within suitable
+    partitions by `event_time`, then validate new row-group ranges and actual scan metrics. Do not
+    add high-cardinality event-time directories blindly: a finer partition scheme can create a
+    small-file explosion. If historical data needs a different layout, rewrite it as a controlled
+    table operation, compare correctness and query cost, and retain a rollback plan.
+  red_flags:
+    - Treating a pushed-filter label as proof that row groups were skipped.
+    - Assuming Spark can prune on statistics that are absent or unhelpful.
+    - Partitioning by a near-unique timestamp without considering file and directory counts.
+    - Claiming a speedup without measuring bytes and validating results.
+
+- id: parquet-scn-002
+  title: Millions of tiny objects make query planning dominate
+  technologies: [parquet, delta-lake, duckdb]
+  difficulty: advanced
+  prompt: |
+    An append-only pipeline writes each small micro-batch as many partitioned Parquet objects to
+    S3. After months, a query returning a few rows spends most of its time before scan tasks
+    begin. The team proposes a single giant file per table. Design a diagnosis and remediation
+    that preserves readers' correctness and useful parallelism.
+  approach: |
+    First quantify object count and file-size distribution by partition, listing and footer
+    requests, planning time, actual bytes scanned, and the rate of new file creation. Identify
+    whether excessive partition cardinality, task fan-out, sparse partitions or micro-batch cadence
+    created the objects. Avoid `coalesce(1)` as a blanket fix: it serializes writes and can limit
+    scan parallelism or create an unwieldy file.
+
+    Stop the growth source, then compact incrementally into sizes appropriate to the engines and
+    expected concurrency. For a Delta table, use a table-aware rewrite/optimize operation so a
+    committed snapshot points to the replacement files. For raw Parquet, write immutable output
+    under a new location, validate schema, row counts and partition values, then switch an explicit
+    manifest/catalogue pointer. Do not delete old files while readers may still list them. Verify
+    planning and scan metrics after the cutover and schedule maintenance only at a justified rate.
+  red_flags:
+    - Rewriting in place while readers can observe a partial directory.
+    - Assuming one file is always faster than a set of parallel scan files.
+    - Compaction without stopping the write pattern that creates new tiny objects.
+    - Ignoring S3 request and footer costs in favor of measuring only data bytes.
+
+- id: parquet-scn-003
+  title: A new nested schema breaks one downstream reader
+  technologies: [parquet, pyspark, duckdb]
+  difficulty: intermediate
+  prompt: |
+    A Spark job adds a nullable `profile.preferences` list of structs and writes valid-looking
+    Parquet files. Spark reads them, but an older downstream reader either loses list elements or
+    reports an incompatible schema. The directory contains files from several deployments and
+    some old files do not have `profile`. How do you isolate and safely roll out the change?
+  approach: |
+    Preserve failing and working files and inspect physical schema elements, logical annotations,
+    repetition types, list wrapper conventions and writer identification. A language-level schema
+    alone may hide the physical distinction. Build a tiny corpus that separates absent optional
+    parent, null list, empty list, null element and populated repeated values. Read each with the
+    exact producer and consumer versions and compare values, not only successful parsing.
+
+    Check whether the old reader supports the writer's list convention and nested types. Identify
+    whether schema merging or an external table schema is active, and decide how a missing field
+    should appear for historical rows. Avoid changing more than one type or nesting dimension at
+    once. If the older consumer cannot safely interpret the new representation, stage a compatible
+    writer version, update the reader, or publish a versioned schema/path. Validate mixed old/new
+    files and coordinate the cutover; do not silently rewrite null/empty semantics.
+  red_flags:
+    - Assuming successful Spark round-trip proves all readers interpret nested data identically.
+    - Collapsing null list and empty list without checking business semantics.
+    - Hand-editing Parquet schema trees rather than using a tested library writer.
+    - Enabling schema merge without defining historical-field behavior.
+
+- id: parquet-scn-004
+  title: A codec rollout creates unreadable historical partitions
+  technologies: [parquet, duckdb, redshift]
+  difficulty: intermediate
+  prompt: |
+    A new writer switches a lake from Snappy to Zstd at a high compression level. Local DuckDB
+    reads the output, but an older external-table consumer fails on some partitions. The team
+    wants to keep both old and new files together. What compatibility and rollout checks do you
+    require before broadening the change?
+  approach: |
+    Treat the codec change as a reader compatibility change, not just a storage tuning knob.
+    Identify all writer and reader versions, including the managed external-table service and any
+    older jobs that scan historical paths. Inspect metadata to confirm the actual codec and rule
+    out whole-file gzip wrapping or an unexpected mixed codec. Build fixtures with representative
+    schema, nested columns and output from each writer configuration.
+
+    Test both new and historical files through every supported reader and verify values, nulls,
+    timestamps and counts. Measure write CPU, file sizes, remote bytes, decode CPU and workload
+    latency on representative data; do not state a universal compression ratio. If a consumer
+    lacks support, retain a compatible codec for shared paths, upgrade that consumer, or isolate
+    files behind a controlled table/path boundary. Deploy gradually with rollback and keep the
+    compatibility corpus in CI so future upgrades exercise mixed-codec reads.
+  red_flags:
+    - Concluding support from a single local DuckDB test.
+    - Assuming a managed service supports every Parquet codec level or variant.
+    - Rewriting all historical data before testing and planning rollback.
+    - Calling whole-file compression an equivalent Parquet codec choice.
+
+- id: parquet-scn-005
+  title: Filtering by ID reads too many candidate chunks
+  technologies: [parquet, pyspark, duckdb]
+  difficulty: advanced
+  prompt: |
+    A customer-support query filters a high-cardinality `account_id` with equality and selects
+    two columns. The Parquet dataset is large, partitions are by month, min/max statistics exist,
+    and almost every row group has a wide ID range. A proposal adds bloom filters. How do you
+    decide whether that will help and what alternatives are reasonable?
+  approach: |
+    Confirm the plan prunes unneeded columns and month paths, then inspect actual row-group
+    statistics and scan metrics. Broad min/max ranges on randomly distributed IDs cannot exclude
+    many groups. Check whether candidate writers can emit bloom filters and whether the deployed
+    Spark, DuckDB or other reader versions actually consult them for this predicate. Measure false
+    positives, write overhead if exposed, groups/files skipped and bytes read with realistic IDs.
+
+    Compare clustering or sorting by account ID against its shuffle/write cost and the effect on
+    other query patterns. A table format's clustering/data-skipping features may be relevant, but
+    they are not the same as a guaranteed index. If low-latency point lookups are fundamental, a
+    key-value store or indexed serving system may fit better than scanning lake files. Keep the
+    source of truth and serving layer semantics clear, and validate that result counts are unchanged.
+  red_flags:
+    - Assuming bloom filters are written and supported by every reader.
+    - Calling a bloom positive proof that a matching row exists.
+    - Claiming row-group statistics become useful without changing random physical order.
+    - Using a full table rewrite without estimating write and operational cost.
+
+- id: parquet-scn-006
+  title: Choosing between raw Parquet and a transactional table
+  technologies: [parquet, delta-lake, pyspark]
+  difficulty: advanced
+  prompt: |
+    Two Spark jobs can write the same raw Parquet directory. One overwrites yesterday's partition
+    while another query reads it; a failure leaves a mixture of old and new files. The business
+    now requests merges, deletes, reproducible snapshots and time travel. Should the team keep
+    Parquet and add conventions, or introduce a table format? Explain the decision and migration.
+  approach: |
+    Establish required semantics: concurrent commits, atomic visibility, deletes/merges, snapshot
+    reproducibility, retention and schema governance. Raw Parquet files do not supply a log or
+    commit protocol; directory renames and ad hoc manifests may be storage- and engine-specific.
+    For immutable append-only batches, unique versioned paths plus an explicit publication
+    mechanism can be sufficient. The stated mutable multi-writer requirements strongly favor a
+    table format such as Delta Lake or Iceberg, subject to engine, storage and protocol support.
+
+    Define ownership of writes and readers, convert or ingest data through the table-aware engine,
+    validate schema and row counts, and test concurrent read/write behavior and recovery from
+    failed commits. Ensure consumers use the table protocol rather than globbing underlying files.
+    Plan retention and compaction with the format's rules, and confirm all required readers support
+    the features/protocol version. Roll out a controlled snapshot and retain a rollback path; do not
+    confuse Parquet as a data format with the selected table's transaction semantics.
+  red_flags:
+    - Promising atomicity from plain Parquet files or object-store listing conventions alone.
+    - Letting generic readers glob a transactional table's underlying files as its snapshot.
+    - Ignoring protocol compatibility and table log during migration.
+    - Treating time travel and deletion retention as free storage behavior.

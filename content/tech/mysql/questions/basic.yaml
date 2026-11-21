@@ -1,0 +1,239 @@
+- id: mysql-basic-001
+  topic: InnoDB architecture
+  difficulty: beginner
+  question: What is the InnoDB buffer pool, and how can you tell whether it is too small?
+  answer: |
+    The InnoDB buffer pool is the main in-memory cache for table and index pages. Reads that hit cached pages avoid storage I/O; writes usually modify cached pages first, making them dirty until background flushing writes them to tablespace files. It also participates in internal page management, so it is not merely an optional query cache.
+
+    Size it for the active working set while leaving memory for connections, temporary operations, the operating system, and other services. Review buffer-pool read counters as interval rates, dirty-page levels, eviction patterns, and storage latency. A high hit ratio alone is not conclusive: an important query may repeatedly miss, or a scan may evict useful pages. Increase memory only after measuring host pressure and checking that the true bottleneck is page residency rather than poor access paths.
+  tags: [innodb, buffer-pool, memory]
+
+- id: mysql-basic-002
+  topic: InnoDB architecture
+  difficulty: intermediate
+  question: What do InnoDB redo and undo logs do, and how are they different?
+  answer: |
+    Redo records describe changes needed to recover modified database pages after a crash. InnoDB follows write-ahead logging: the relevant redo must be durable before a dirty page is safely written to its final tablespace location. Recovery replays redo from a checkpoint to restore a consistent state. Redo is sequential recovery machinery, not a user-facing history log.
+
+    Undo records preserve information needed to roll back uncommitted changes and reconstruct older row versions for MVCC consistent reads. They remain useful while active transactions may still need those versions, then purge can reclaim them. Long-running transactions can therefore grow undo history. Redo and undo solve different problems; neither is a substitute for a tested backup. Binlogs are separate again, supporting replication and point-in-time recovery.
+  tags: [redo, undo, mvcc, crash-recovery]
+
+- id: mysql-basic-003
+  topic: InnoDB architecture
+  difficulty: intermediate
+  question: Why does InnoDB use a doublewrite mechanism?
+  answer: |
+    An InnoDB page is typically larger than the storage device's guaranteed atomic write unit. If a crash interrupts writing a page, some sectors may contain new bytes and others old bytes. This torn page may not be recoverable by replaying redo because the page itself is incomplete or corrupted.
+
+    The doublewrite path first writes modified pages to a protected area and flushes that copy, then writes them to their normal tablespace locations. On restart, InnoDB can restore a torn page from the complete copy and apply redo. MySQL 8.0.20 and later support a separate doublewrite file; earlier releases use a system-tablespace area. Keep the protection enabled unless the exact storage stack provides a documented equivalent and the risk is accepted. Do not infer page-atomic writes from a generic durability claim.
+  tags: [doublewrite, pages, recovery]
+
+- id: mysql-basic-004
+  topic: indexes
+  difficulty: beginner
+  question: How does an InnoDB clustered index differ from a secondary index?
+  answer: |
+    InnoDB organizes each table around a clustered index, normally the primary key. Its leaf pages contain the full row, so finding a primary key leads directly to the row. If no primary key exists, InnoDB selects a suitable all-NOT-NULL unique key or creates a hidden row identifier, but an explicit primary key is easier to reason about.
+
+    A secondary-index leaf stores its indexed key plus the primary-key columns. A query that finds a secondary key and needs other row columns then looks up the clustered record, potentially adding random I/O. Since primary-key values are repeated in every secondary index, a wide primary key increases all secondary-index storage and reduces cache density. This is why compact, stable primary keys have consequences beyond the primary index itself.
+  tags: [clustered-index, secondary-index, primary-key]
+
+- id: mysql-basic-005
+  topic: indexes
+  difficulty: intermediate
+  question: What does the leftmost-prefix rule mean for a composite index?
+  answer: |
+    An index on `(tenant_id, created_at, status)` is ordered first by tenant, then by creation time within each tenant, then by status within those values. The optimizer can use the leading prefix to locate a tenant and can then narrow or order rows using subsequent columns in suitable query shapes. It generally cannot seek efficiently by `status` alone because matching values are spread throughout the index.
+
+    Put equality predicates before range or ordering columns when that matches the workload, but do not apply a formula without checking the actual queries. A range on an earlier key part often limits how later parts can narrow the search, although they may still help cover or filter the query. Verify the selected key and rows estimate with `EXPLAIN`, and consider sort order and write cost as part of the index design.
+  tags: [composite-index, leftmost-prefix, query-design]
+
+- id: mysql-basic-006
+  topic: indexes
+  difficulty: intermediate
+  question: What is a covering index, and what is its trade-off in MySQL?
+  answer: |
+    A covering index contains the indexed predicates and every column needed by a query's projection and ordering, so the engine can answer from the secondary-index leaf without fetching each full clustered row. Avoiding those clustered lookups can reduce random reads, especially when a query returns a narrow result set from many candidate rows.
+
+    Coverage has a cost. MySQL/InnoDB does not provide PostgreSQL-style `INCLUDE` columns for ordinary B-tree indexes; appended columns participate in the key and make records wider. Wider indexes use more disk and buffer-pool space, reduce page fan-out, and increase insert and update work. Add payload columns only after observing that row lookups dominate a real query. Then compare latency, rows examined, write throughput, and storage rather than treating index-only access as automatically beneficial.
+  tags: [covering-index, innodb, write-amplification]
+
+- id: mysql-basic-007
+  topic: query optimization
+  difficulty: beginner
+  question: What does EXPLAIN tell you, and what does it not tell you?
+  answer: |
+    `EXPLAIN` shows the optimizer's chosen plan without executing the statement. Depending on the output format, it reports table access order, selected and possible indexes, access type, estimated rows, and extra work such as temporary tables or sorting. Use it to form a hypothesis about how a query will execute and whether its estimated access path fits the predicates.
+
+    It does not report the query's actual elapsed time, actual row counts, or every runtime wait. A full table scan can be correct for a small table, and an index plan can still read many rows. MySQL 8.0.18 added `EXPLAIN ANALYZE`, which executes the statement and reports actual iterator timing and rows; use it carefully because it consumes resources and data-changing statements can change data. Compare estimates with measured execution, not plan labels alone.
+  tags: [explain, optimizer, plans]
+
+- id: mysql-basic-008
+  topic: query optimization
+  difficulty: intermediate
+  question: When should you use EXPLAIN ANALYZE rather than ordinary EXPLAIN?
+  answer: |
+    Use ordinary `EXPLAIN` first to inspect the optimizer's estimated access path without running the query. Use `EXPLAIN ANALYZE` when you need to compare those estimates with observed iterator rows and timing during execution. It can reveal that a filter returns far more rows than estimated, a nested-loop inner operation runs thousands of times, or a sort dominates runtime.
+
+    `EXPLAIN ANALYZE` is not a safe dry run: it executes the statement. A large SELECT can add substantial load, take locks, and affect cache state; analyzing a modifying statement can apply its changes. Run it on a representative safe query, staging environment, or replica where appropriate, and understand transaction effects. Iterator times can overlap, so don't blindly add every displayed duration. Find the earliest important estimate error and validate changes against representative parameters and workload.
+  tags: [explain-analyze, performance, safety]
+
+- id: mysql-basic-009
+  topic: query optimization
+  difficulty: intermediate
+  question: Why can a query fail to use an index even though one exists?
+  answer: |
+    The optimizer chooses an index only when its estimated cost is lower than alternatives. It may prefer a table scan when a condition matches a large fraction of rows, when the table is small, or when index lookups would cause many clustered-row reads. A composite index may not help if the predicate omits its leading columns. Stale or sampled statistics and skewed data can also lead to poor estimates.
+
+    Query expressions and type conversions can make an indexed condition less usable. Wrapping a column in a function, comparing mismatched types, or using a collation that changes semantics may prevent a straightforward range lookup; a compatible functional index can sometimes help. Inspect `EXPLAIN` estimates and selected key, then confirm with `EXPLAIN ANALYZE` where safe. Refresh statistics or redesign the access path based on evidence before forcing an index with a hint.
+  tags: [indexes, optimizer, statistics]
+
+- id: mysql-basic-010
+  topic: transactions and isolation
+  difficulty: beginner
+  question: What is a consistent read in InnoDB?
+  answer: |
+    A consistent read is a nonlocking read that uses an InnoDB read view to see a transactionally consistent version of rows. InnoDB uses undo information to reconstruct older versions when another transaction has changed a row since the read view was established. This lets ordinary readers coexist with writers without taking exclusive row locks for every result.
+
+    The snapshot behaviour depends on isolation level. Under InnoDB's default `REPEATABLE READ`, consistent reads in a transaction normally share a snapshot established by the first consistent read. Under `READ COMMITTED`, each consistent read generally gets a fresh snapshot. A consistent read is different from `SELECT ... FOR UPDATE`, which is a locking/current read. Long-lived transactions can keep old versions needed by their read views, delaying purge, so commit promptly even when the transaction is read-only.
+  tags: [mvcc, consistent-read, isolation]
+
+- id: mysql-basic-011
+  topic: transactions and isolation
+  difficulty: intermediate
+  question: What is a next-key lock, and why might an insert wait for a row that does not exist?
+  answer: |
+    A next-key lock combines a record lock on an index entry with a lock on the gap preceding that entry. InnoDB uses next-key and gap locks in relevant locking searches, particularly under the default `REPEATABLE READ`, to prevent phantom rows in ranges. A transaction running a locking range query can therefore block another transaction from inserting a key into a protected gap even though that exact key is absent.
+
+    Lock scope depends on the index and access path. A broad scan may lock many records or gaps, while a selective indexed lookup limits the region. `READ COMMITTED` generally reduces gap locking for searches, but gap locks still arise in cases such as foreign-key and duplicate-key checks. Inspect `performance_schema.data_locks` and `data_lock_waits` during the wait and reproduce the specific statements; do not assume the blocked insert is unrelated just because no matching row existed.
+  tags: [next-key-lock, gap-lock, locking]
+
+- id: mysql-basic-012
+  topic: transactions and isolation
+  difficulty: intermediate
+  question: How should an application respond to an InnoDB deadlock?
+  answer: |
+    InnoDB detects a deadlock cycle and rolls back one transaction to let the other make progress. The application should treat the deadlock as a retryable transaction failure when its business operation is safe to repeat. Retry the complete transaction, not only the statement that happened to receive the error, because earlier reads and decisions may no longer be valid. Use bounded retries with backoff and ensure external effects such as sending payment requests are idempotent or occur outside the retried transaction.
+
+    Reduce deadlock frequency by accessing rows and tables in a consistent order, keeping transactions short, and using indexes that avoid unnecessarily broad scans and locks. Examine the deadlock details in `SHOW ENGINE INNODB STATUS\G` and the application trace to learn which statements acquired conflicting locks. Do not disable deadlock detection as a generic fix; that can turn a promptly detected cycle into longer lock waits without correcting the competing access pattern.
+  tags: [deadlocks, retry, transactions]
+
+- id: mysql-basic-013
+  topic: replication
+  difficulty: beginner
+  question: How does standard MySQL source-to-replica replication work?
+  answer: |
+    The source records transactions in its binary log. A replica connects to the source and retrieves events into a relay log, then its applier executes those events against its own data. Network retrieval and event application are separate stages, so a replica can have received recent events but still be behind while applying them. Standard replication is commonly asynchronous: the source can acknowledge a commit before a replica has received or applied it.
+
+    Replication can support read scaling, recovery options, and data movement, but it is not by itself a backup or a consensus protocol. Monitor the receiver and applier states, GTID progress or log coordinates, relay-log growth, and application-specific freshness. `SHOW REPLICA STATUS\G` provides useful diagnostic output, but a single lag field is not a complete guarantee. A safe failover plan must account for data loss risk and prevent the former source from accepting conflicting writes.
+  tags: [replication, binlog, replica]
+
+- id: mysql-basic-014
+  topic: replication
+  difficulty: intermediate
+  question: What are GTIDs and how do they help with replication?
+  answer: |
+    A Global Transaction Identifier (GTID) assigns an identity to a committed transaction so replication progress can be described as sets of executed transactions rather than only as a binary-log file and position. This helps a replica determine which transactions it has already applied and makes re-pointing or provisioning replicas easier when topology changes. Inspect `gtid_executed` and related state when diagnosing GTID-based replication.
+
+    GTID use requires compatible configuration, including `gtid_mode` and `enforce_gtid_consistency`, and changes should follow the documented transition procedure for the exact MySQL version. GTIDs do not reconcile conflicting writes or make multi-primary replication safe automatically. A failover process still needs to choose the correct candidate, consider transactions that were not replicated, and fence the old source. GTID identity is bookkeeping for replication history, not a distributed consensus decision.
+  tags: [gtid, replication, failover]
+
+- id: mysql-basic-015
+  topic: replication
+  difficulty: intermediate
+  question: What does semi-synchronous replication guarantee, and what does it not guarantee?
+  answer: |
+    Semi-synchronous replication can delay acknowledging a source commit until at least a replica has acknowledged receipt and logging of the event, reducing the risk window in some source failures compared with fully asynchronous replication. It adds network-dependent latency, and exact behaviour depends on server version and configuration. A timeout can allow the source to fall back to asynchronous operation according to the configured policy.
+
+    The acknowledgement generally does not mean that the replica has applied the transaction and made it visible to queries. It also does not mean a quorum committed the transaction, nor does it by itself provide zero data loss under every failure. Define the recovery-point objective and test replica loss, network partitions, and source failure. Managed services may implement durability differently, so rely on their documented guarantees rather than inferring semantics from the term “semi-sync.”
+  tags: [semi-sync, durability, replication]
+
+- id: mysql-basic-016
+  topic: partitioning and sharding
+  difficulty: intermediate
+  question: How does MySQL table partitioning differ from sharding?
+  answer: |
+    MySQL partitioning divides one logical table into partitions managed by the same server. The optimizer may prune partitions when a query constrains the partition key, and partition operations can simplify data lifecycle tasks such as removing an old time range. Each partition still shares that server's compute and storage capacity; partitioning does not distribute writes across independent machines.
+
+    Sharding distributes subsets of data across separate database servers or clusters and typically requires application or routing-layer shard-key logic. It can expand aggregate capacity, but brings cross-shard queries, global uniqueness, rebalancing, and transaction coordination challenges. Partitioning has its own restrictions, including a requirement that every unique key include the partitioning columns. Choose neither as a generic performance switch: measure the bottleneck, validate pruning or routing for actual queries, and budget for operational complexity.
+  tags: [partitioning, sharding, scale]
+
+- id: mysql-basic-017
+  topic: partitioning and sharding
+  difficulty: intermediate
+  question: Why must MySQL unique keys on a partitioned table include the partition key?
+  answer: |
+    MySQL's partitioning implementation enforces unique keys within the rules available across the table's partitions. To guarantee uniqueness without checking every other partition for each insert, each `UNIQUE` key—including the primary key—must include all columns used in the partitioning expression. For example, partitioning by `occurred_at` means a primary key such as `(event_id, occurred_at)` may be allowed, while `PRIMARY KEY (event_id)` alone is not.
+
+    This affects data modelling: the composite key no longer guarantees that `event_id` is globally unique by itself. If global identity is required, consider key generation that guarantees uniqueness by design, a separate identity registry, or a different partitioning strategy. Review foreign keys and application joins as well. Check exact partitioning limitations for the MySQL release and validate DDL before adopting the design; don't discover the constraint late in a migration.
+  tags: [partitioning, unique-keys, schema]
+
+- id: mysql-basic-018
+  topic: JSON and generated columns
+  difficulty: beginner
+  question: What is the benefit of MySQL's JSON type compared with storing JSON text?
+  answer: |
+    MySQL's `JSON` type validates input and stores a binary representation that supports JSON path operations without reparsing the original text on every access in the same way a plain text column would. Functions such as `JSON_EXTRACT`, `JSON_SET`, and the `->` shorthand let applications query or update document values. The type is useful for optional or evolving attributes associated with a relational row.
+
+    JSON does not automatically create indexes on arbitrary paths, enforce all application-level shape rules, or behave exactly like PostgreSQL `jsonb`. Frequent filter fields can be exposed with generated columns and indexed. Core facts that need joins, foreign keys, uniqueness, or strong constraints often belong in ordinary typed columns. Treat a JSON document as data with schema and migration needs, not a place to avoid modelling decisions. Test missing paths, JSON nulls, types, and collation-sensitive comparisons.
+  tags: [json, data-types, schema]
+
+- id: mysql-basic-019
+  topic: JSON and generated columns
+  difficulty: intermediate
+  question: How can you index a frequently queried JSON property in MySQL?
+  answer: |
+    A common pattern is to add a generated column that extracts the property, choose an explicit SQL type and collation, and create a normal index on that generated column. For example, a generated `brand` column can extract `$.brand` from a JSON document and support `WHERE brand = 'Acme'`. A generated column may be `VIRTUAL` or `STORED`; storage and computation trade-offs differ, and supported indexing depends on the expression and release.
+
+    MySQL 8.0.13 introduced functional key parts for eligible expressions, but a named generated column is often easier to query, inspect, and reuse. Cast JSON values deliberately: a number extracted as text may compare lexicographically rather than numerically. Check expression restrictions, null behaviour, and whether the query expression matches the indexed definition. Use this only for measured paths; if the property is central to joins and constraints, a regular relational column may be cleaner.
+  tags: [generated-column, json-index, functional-index]
+
+- id: mysql-basic-020
+  topic: backups and recovery
+  difficulty: beginner
+  question: What is the difference between a logical dump and a physical backup?
+  answer: |
+    A logical dump such as `mysqldump` exports schema and rows as SQL statements. It is portable, inspectable, and useful for smaller databases or selective object exports, but a large restore can be slow because it must execute statements and rebuild indexes. For InnoDB, `--single-transaction` can provide a consistent snapshot for transactional tables, assuming DDL is controlled during the dump.
+
+    A physical backup copies database files and associated metadata; Percona XtraBackup is a common tool for supported self-managed MySQL environments. It can be more suitable for large datasets but needs a prepare step and strict version compatibility. Managed services may require their own backup method. Neither format is proven by a successful backup command: restore it in an isolated environment, verify data, and measure recovery time. Protect backup files and keys separately from the source server.
+  tags: [backup, mysqldump, xtrabackup]
+
+- id: mysql-basic-021
+  topic: backups and recovery
+  difficulty: intermediate
+  question: How do binary logs support point-in-time recovery?
+  answer: |
+    A base backup gives a consistent starting point, and binary logs record subsequent transactions. To recover to a point before an accidental update or delete, restore the base backup to an isolated server and replay the continuous required binlog sequence only up to the target point. This lets recovery be more precise than restoring the most recent full backup, provided the logs are complete and retained.
+
+    Establish the base backup's binlog coordinates or GTID metadata, preserve every necessary log without gaps, and verify event boundaries and time zones. `mysqlbinlog` can filter by time or position, but a timestamp alone may be ambiguous; review the destructive event carefully and test the exact runbook. Do not replay into the only production copy. RPO depends on the last recoverable event; RTO includes restore, replay, validation, and cutover time. A replica is not a substitute because mistakes can replicate.
+  tags: [pitr, binlog, recovery]
+
+- id: mysql-basic-022
+  topic: monitoring
+  difficulty: beginner
+  question: What information does Performance Schema provide?
+  answer: |
+    Performance Schema instruments MySQL server activity, including statements, waits, stages, locks, memory, and table-related events. The `sys` schema provides higher-level views built on this instrumentation, such as statement summaries that group similar query shapes and surface execution counts, latency, and rows examined. These views can help identify costly statements and active lock waits.
+
+    The instrumentation is diagnostic data, not necessarily a long-term metrics store. Export selected measurements to a time-series system, preserve restart/reset context, and calculate rates from counter differences over known intervals. Instrumentation settings affect what can be observed, while collection has some cost. Query text may include sensitive literals, so protect monitoring accounts and dashboards. Combine statement summaries with application traces, `EXPLAIN`, and system metrics; a digest ranking reveals where to investigate, not the root cause or guaranteed fix.
+  tags: [performance-schema, sys-schema, monitoring]
+
+- id: mysql-basic-023
+  topic: monitoring
+  difficulty: intermediate
+  question: How does pt-query-digest help investigate slow MySQL workloads?
+  answer: |
+    Percona Toolkit's `pt-query-digest` parses slow-query logs and groups similar statements into normalized query digests. It can rank patterns by total or average time, count, rows examined, and other measurements, helping distinguish one slow rare query from a moderately slow statement executed very frequently. It is a practical way to prioritize investigation when raw logs are too large to read line by line.
+
+    The tool does not know the application's intent or select the right index automatically. After finding a digest, inspect representative parameters, schema, transaction context, and `EXPLAIN` or safe `EXPLAIN ANALYZE` output. Slow logs can expose sensitive literals, so handle them with controlled access and retention. Ensure logging thresholds, rotation, and collection are configured before an incident; on managed services, confirm how logs are exposed and which utilities are permitted.
+  tags: [pt-query-digest, slow-query-log, observability]
+
+- id: mysql-basic-024
+  topic: schema migrations
+  difficulty: intermediate
+  question: Why are online schema changes not necessarily lock-free?
+  answer: |
+    MySQL's online DDL algorithms allow concurrent DML for many changes, but they can still need metadata locks at the beginning or final cutover. Even an operation described as in-place may rebuild data, consume substantial disk and I/O, or fail to support the requested algorithm on a particular table or server version. A queued metadata lock can also block later statements behind the DDL request.
+
+    Online-change tools such as `gh-ost` and `pt-online-schema-change` copy into a shadow table and capture concurrent writes, but they add load and still require a cutover lock. Their compatibility requirements differ, especially around binlogs, triggers, foreign keys, and managed-service privileges. Test the exact migration on production-like data, set a suitable lock timeout, monitor replica lag and free space, and prepare an abort or forward-fix plan. Expand-and-contract application deployments reduce compatibility risk during rolling releases.
+  tags: [online-ddl, gh-ost, pt-osc]

@@ -1,0 +1,114 @@
+slug: dbt
+title: dbt
+category: data-engineering
+summary: A SQL-first transformation framework that compiles modular analytics code, orders it as a DAG, and builds tested, documented relations in a data platform.
+level: core
+relations:
+  - to: sql
+    type: foundation
+    note: dbt models are primarily SQL queries; understanding joins, grain, nulls and warehouse SQL is essential to authoring correct transformations.
+  - to: snowflake
+    type: uses
+    note: dbt-snowflake compiles project models into Snowflake SQL and manages their relations through the adapter.
+  - to: redshift
+    type: uses
+    note: dbt-redshift uses Redshift SQL and adapter-specific materialization and incremental behavior.
+  - to: postgresql
+    type: uses
+    note: PostgreSQL is a supported target through dbt-postgres and a useful local-development warehouse for core workflows.
+  - to: airflow
+    type: complements
+    note: Airflow can orchestrate dbt commands alongside ingestion and other jobs; dbt owns transformation DAG semantics.
+  - to: git
+    type: uses
+    note: A dbt project is typically versioned in Git, with pull requests, CI and deploys controlling code and configuration changes.
+intro:
+  what: |
+    dbt (data build tool) is a framework for transforming data already loaded into a warehouse or lakehouse. Analysts and engineers write SQL SELECT statements as models; dbt parses project files, resolves dependencies, compiles Jinja and executes SQL through a platform adapter. It creates database objects such as views and tables, runs tests, and builds documentation and lineage from the same project graph.
+
+    The key idea is that SQL transformations can be organized like software: small named models reference one another, configuration lives alongside code, tests express expectations, and Git records reviewable changes. A model is not merely a query pasted into a scheduler. It is a node in a dependency DAG, and dbt knows which upstream relations must exist before it can be built.
+
+    dbt Core is the open-source command-line framework; it works with an adapter and can run locally or on infrastructure your team operates. dbt Cloud is a hosted development and orchestration platform around dbt projects, with managed environments and workflow features. Both run dbt project logic; they differ in hosted services and operating model, not in the basic meaning of ref() or a model.
+  why: |
+    Warehouses made SQL transformations scalable, but teams still needed a disciplined way to organize SQL, manage dependencies, deploy changes and verify outputs. Hand-written scripts often duplicated logic, relied on implicit execution order, and had little reviewable lineage. dbt gives transformations a project structure and uses dependency declarations to compile and execute models in topological order.
+
+    It also makes quality and ownership explicit. Tests can fail a build when keys duplicate or required values become null; source freshness can reveal a stalled ingestion; documentation and exposures can connect data assets to downstream reports. The framework cannot decide whether a business definition is correct, but it gives a team durable places to state assumptions and detect violations.
+  problems:
+    - Replacing copied SQL and fragile execution order with reusable models and an explicit DAG.
+    - Reviewing transformation changes as code and deploying them consistently across environments.
+    - Catching invalid data with repeatable tests and source-freshness checks.
+    - Tracing downstream impact through model references, documentation and lineage.
+    - Managing warehouse objects with adapter-aware builds rather than bespoke DDL scripts.
+  where_used:
+    - ELT after ingestion tools land application, event, finance or operational data in a warehouse.
+    - Shared staging, intermediate and marts layers used by analytics and business intelligence.
+    - CI pipelines that validate model changes before merge or production deployment.
+    - Warehouse projects that need repeatable incremental processing, snapshots or governed interfaces.
+  ecosystem: |
+    dbt is the transformation layer in an analytics stack. Ingestion tools bring data into Snowflake, Redshift, PostgreSQL or another supported platform; dbt models reshape it in place; BI tools and applications consume published relations. Git and CI provide change review and validation. Airflow or another orchestrator can coordinate dbt with ingestion, ML and non-dbt tasks, while dbt itself understands ordering and selection within its model graph.
+
+    dbt Core supplies the CLI and project engine, but a target-specific adapter is also required (for example, dbt-snowflake, dbt-redshift or dbt-postgres). dbt Cloud adds a hosted platform for development, environment management and orchestration. Neither removes the need to understand the target warehouse's SQL dialect, permissions, cost model or transaction behavior.
+  alternatives:
+    - name: Warehouse-native SQL scripts
+      note: Direct SQL and platform scheduling can be simpler for a small project, but dependency tracking, testing and reusable conventions become team responsibilities.
+    - name: SQLMesh
+      note: A SQL transformation framework with a different plan, environment and virtual-data-management model; compare its operational model with your team's needs.
+    - name: Spark or DataFrame pipelines
+      note: Better suited when transformation logic requires distributed procedural code or non-SQL libraries, but often adds a separate runtime and programming surface.
+  related: [sql, snowflake, redshift, postgresql, airflow, git]
+chapters:
+  - id: lifecycle-project-anatomy
+    title: The dbt Model Lifecycle and Project Anatomy
+    file: chapters/01-lifecycle-project-anatomy.md
+    minutes: 12
+    level: core
+  - id: models-refs-dag
+    title: Models, refs and the DAG
+    file: chapters/02-models-refs-dag.md
+    minutes: 12
+    level: core
+  - id: materializations
+    title: Materialisations and Choosing the Right One
+    file: chapters/03-materializations.md
+    minutes: 12
+    level: core
+  - id: incremental-late-data
+    title: Incremental Strategies and Late-Arriving Data
+    file: chapters/04-incremental-late-data.md
+    minutes: 13
+    level: advanced
+  - id: tests-contracts
+    title: Tests and Data Contracts
+    file: chapters/05-tests-contracts.md
+    minutes: 13
+    level: core
+  - id: sources-freshness-exposures
+    title: Sources, Freshness and Exposures
+    file: chapters/06-sources-freshness-exposures.md
+    minutes: 11
+    level: core
+  - id: jinja-macros-packages
+    title: Macros, Jinja and Packages
+    file: chapters/07-jinja-macros-packages.md
+    minutes: 12
+    level: core
+  - id: snapshots-scd2
+    title: Snapshots for SCD Type 2 History
+    file: chapters/08-snapshots-scd2.md
+    minutes: 11
+    level: advanced
+  - id: docs-lineage-semantic
+    title: Documentation, Lineage and the Semantic Layer
+    file: chapters/09-docs-lineage-semantic.md
+    minutes: 12
+    level: core
+  - id: deployment-ci-artifacts
+    title: 'Deployment: Core, Cloud, CI and Artifacts'
+    file: chapters/10-deployment-ci-artifacts.md
+    minutes: 14
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

@@ -1,0 +1,191 @@
+- id: parquet-basic-001
+  topic: "file format"
+  difficulty: beginner
+  question: "What is Parquet, and what does it not provide?"
+  answer: |
+    Parquet is an open, self-describing columnar file format for typed data. Metadata describes a schema, row groups, column chunks, page encodings, compression and optional statistics. Engines use it to project columns and sometimes skip regions that cannot match a filter. It is not a database, query engine or transaction protocol: a directory of files has no inherent atomic commits, concurrent-writer coordination, updates, deletes, time travel or global schema policy. Those require an engine, convention, catalogue or table format such as Delta Lake or Iceberg. Parquet specifies physical files, not the current logical table snapshot. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["file-format", parquet]
+
+- id: parquet-basic-002
+  topic: "columnar layout"
+  difficulty: beginner
+  question: "Why is columnar storage effective for analytical scans?"
+  answer: |
+    A columnar file stores values from the same field together. A query selecting a few columns can read those chunks without decoding unrelated fields from a wide record. This reduces I/O and often improves compression because same-type values are adjacent. Encodings and statistics can further compact values or identify row groups that cannot match. Benefits depend on query and layout: scans needing every field, many tiny files or unclustered data see less advantage. Footer reads, discovery, decoding and output materialization still cost time. Columnar describes organization; it does not guarantee that every scan is fast. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["columnar-layout", parquet]
+
+- id: parquet-basic-003
+  topic: "file structure"
+  difficulty: beginner
+  question: "Describe the main structural levels of a Parquet file."
+  answer: |
+    The outer file contains data and a footer, with `PAR1` magic bytes at both ends. The footer stores Thrift-serialized `FileMetaData`, including a schema tree and row-group descriptions, plus a length to locate it from the end. A row group covers rows; each leaf column has a column chunk, divided into pages such as data pages and sometimes a dictionary page. This hierarchy lets readers locate selected chunks and decode pages as needed. Row groups are not directory partitions, and pages are not rows. Copying data without a footer or concatenating files byte-for-byte does not create a valid merged file. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["file-structure", parquet]
+
+- id: parquet-basic-004
+  topic: "footer"
+  difficulty: beginner
+  question: "What information is in a Parquet footer, and why read it first?"
+  answer: |
+    The footer contains schema elements, row-group metadata and optional key-value metadata. Column-chunk metadata records locations, sizes, codec and encodings, and may include minimum, maximum or null-count statistics. It can describe dictionary-page offsets and indexes. The trailing length and magic bytes let readers fetch metadata before requesting column data. A reader needs the footer to understand types and locate chunks, and can use it to prune columns or row groups. Metadata requests cost time on many small files. Statistics can be absent or conservative; their presence does not guarantee pruning. Data without a valid footer is not a complete readable file. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["footer", parquet]
+
+- id: parquet-basic-005
+  topic: "row groups"
+  difficulty: beginner
+  question: "What is a row group, and how does its size affect reading?"
+  answer: |
+    A row group is a horizontal group of rows in one file. It contains a column chunk for each leaf column, and chunks contain pages. Engines often schedule row groups or combinations as scan work, though this is engine-specific. Row-group size affects metadata overhead, parallelism, decode memory and statistics granularity. Very large groups can limit independent work and raise memory needs; very small groups add metadata and can reduce efficient reads. There is no universal optimum: storage, engine, schema and workload matter. A file can have multiple row groups, and a directory partition can contain many files. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["row-groups", parquet]
+
+- id: parquet-basic-006
+  topic: "column chunks"
+  difficulty: beginner
+  question: "What is a column chunk, and how does projection use it?"
+  answer: |
+    A column chunk is the data for one leaf column within one row group. Metadata identifies type, codec, encodings, offsets and sizes; pages contain encoded values and possibly nested levels. Since chunks are column-specific, a query needing `amount` can often avoid unrelated fields. The reader still needs columns used by filters, joins, grouping or expressions, even if they are not in the output. Nested fields may need structural level streams and pruning support varies. Projection pushdown is the engine using file structure; selecting fields after loading the entire file does not save initial I/O. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["column-chunks", parquet]
+
+- id: parquet-basic-007
+  topic: "dictionary"
+  difficulty: beginner
+  question: "How does dictionary encoding work, and when can it be ineffective?"
+  answer: |
+    A writer may store distinct values for a column chunk in a dictionary page and encode data-page values as dictionary indices. This can save space for repeated strings or low-cardinality fields such as status. Indices may use run-length and bit-packing, and page bytes are then compressed by the codec. Dictionary encoding is not guaranteed or always efficient: a high-cardinality dictionary can grow large, so the writer may fall back to `PLAIN`. A dictionary belongs to a column chunk, not necessarily a whole file or dataset. Inspect actual encodings rather than assuming a setting produced dictionaries everywhere. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["dictionary", parquet]
+
+- id: parquet-basic-008
+  topic: "RLE and bit-packing"
+  difficulty: beginner
+  question: "What do RLE and bit-packing do in Parquet?"
+  answer: |
+    Run-length encoding represents consecutive repetitions as a run; bit-packing stores small integers using only the bits their values need. Parquet uses a hybrid of these techniques in relevant streams, including repetition/definition levels and dictionary indices. Long runs benefit from RLE, while varied but small integers can benefit from bit-packing. These are encodings, not compression codecs, and are not necessarily applied to every column. The writer chooses based on type, data and implementation. A codec such as Snappy or Zstd may compress encoded page bytes afterward. A compressed file does not reveal which value encoding it used. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["rle-and-bit-packing", parquet]
+
+- id: parquet-basic-009
+  topic: "delta encoding"
+  difficulty: beginner
+  question: "What are Parquet delta encodings useful for?"
+  answer: |
+    Delta encodings store differences or shared structure instead of every full value. `DELTA_BINARY_PACKED` encodes integer deltas, which may suit ordered times or counters with small adjacent differences. `DELTA_LENGTH_BYTE_ARRAY` and `DELTA_BYTE_ARRAY` represent byte-array lengths or common prefixes. Results depend on patterns and writer support. Delta encoding does not sort data, and random rows do not gain narrow row-group min/max ranges merely because delta encoding exists. Sorting can improve value correlation and statistics, but costs compute and may need a shuffle. Encoding is about value representation; ordering and statistics affect what a scan can skip. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["delta-encoding", parquet]
+
+- id: parquet-basic-010
+  topic: "statistics"
+  difficulty: beginner
+  question: "How do Parquet min/max statistics support row-group pruning?"
+  answer: |
+    Column metadata may record minimum, maximum and null count. If a predicate cannot overlap a reliable row-group range, a reader can prove that group cannot match and avoid reading relevant data. Page indexes, when written and supported, can offer finer information. Statistics do not identify matching rows or guarantee skipping: missing, truncated or ambiguous values must be handled conservatively, and nulls need correct semantics. Randomly distributed data often gives every group a broad range. Clustering by a filtered field tends to narrow ranges. Inspect metadata and scan counters; a filter visible in a plan alone does not prove row groups were pruned. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["statistics", parquet]
+
+- id: parquet-basic-011
+  topic: "encoding and compression"
+  difficulty: beginner
+  question: "How are Parquet encodings different from compression codecs?"
+  answer: |
+    An encoding transforms typed values into a storage representation; examples are `PLAIN`, dictionary, RLE/bit-packing and delta. A codec such as Snappy, Zstd, GZIP or LZ4 compresses page payloads. Metadata identifies codecs and pages declare encodings; a reader uses both to reconstruct values. Dictionary may remove repetition before compression, while a codec trades CPU for smaller payload. Changing codec does not change schema or ordering, and changing an encoding supplies neither transactions nor an index. Compare writers on the same input and layout, and confirm codec support in every consumer. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["encoding-and-compression", parquet]
+
+- id: parquet-basic-012
+  topic: "codec choice"
+  difficulty: beginner
+  question: "How should a team choose among Snappy, Zstd, GZIP and LZ4?"
+  answer: |
+    Check support in every required writer and reader first. Snappy is common for compatibility and relatively low CPU cost. Zstd has tunable levels and may trade writer CPU for smaller files; results depend on data and level. GZIP is widely available but can cost more CPU. LZ4 emphasizes speed, but implementations and historical variants require compatibility testing. Measure representative data and queries, including CPU, bytes transferred and latency; no codec wins for all workloads. Internal Parquet GZIP differs from wrapping the whole file in `.gz`, which impairs footer and range access. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["codec-choice", parquet]
+
+- id: parquet-basic-013
+  topic: "whole-file gzip"
+  difficulty: intermediate
+  question: "Why is a `.parquet.gz` file different from Parquet using GZIP compression?"
+  answer: |
+    Parquet's internal `GZIP` codec is recorded in chunk metadata and applied within pages. A reader can locate the footer and selected column data, then decompress needed units. Externally wrapping the entire file in gzip is different: ordinary footer and chunk offsets are unavailable through normal Parquet range access, so the reader generally must decompress the stream. This defeats selective reads and many engines do not treat such an object as ordinary Parquet. Use internal compression instead. Confirm actual metadata; the extension alone does not reveal which compression layer was used. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["whole-file-gzip", parquet]
+
+- id: parquet-basic-014
+  topic: "schema evolution"
+  difficulty: intermediate
+  question: "What happens when a new optional field is added to Parquet data?"
+  answer: |
+    An old file footer describes only fields present when written. If a reader merges per-file schemas or reads against a registered table schema, the new field may appear as null for older rows. This depends on engine and discovery settings; schema merging is not universal. Adding an optional field is usually safer than a required field, for which old records have no value. Renames, type changes, nested reshaping and timestamp or decimal annotations require review. Raw directories have per-file schemas but no global evolution policy. A table format or registry can govern changes, but test old and new files with consumers. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["schema-evolution", parquet]
+
+- id: parquet-basic-015
+  topic: "nested types"
+  difficulty: intermediate
+  question: "How do repetition and definition levels represent nested values?"
+  answer: |
+    Parquet represents nested structures as leaf-column streams plus repetition and definition levels. Definition levels show how much of a path is defined, distinguishing absent optional ancestors from present values. Repetition levels show whether a value continues a repeated field or starts a new repeated record. This preserves nested records while storing column-wise, an approach associated with Dremel. Schema trees and list/map conventions matter for interoperability. A query selecting one nested leaf may avoid siblings, but readers still need levels and may limit nested pruning. Round-trip null list, empty list and repeated values with real libraries. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["nested-types", parquet]
+
+- id: parquet-basic-016
+  topic: "partitioning"
+  difficulty: intermediate
+  question: "How should directory partition columns be chosen?"
+  answer: |
+    Choose directory partitions from common, coarse filters that eliminate meaningful data while keeping cardinality manageable. Date, region or a limited tenant set may fit real queries. A near-unique identifier creates many directories and tiny files. Combining individually plausible columns multiplies cardinalities and creates sparse partitions. Partitioning creates path groups and directory pruning; it is not sorting rows within files. Keep high-cardinality keys in data columns and consider ordering for row-group statistics. Measure files per partition, sizes, planning time and filter use; a daily path with few rows can still cause a small-file problem. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["partitioning", parquet]
+
+- id: parquet-basic-017
+  topic: "small files"
+  difficulty: intermediate
+  question: "Why are many small Parquet files costly, and how does compaction help?"
+  answer: |
+    Each file requires listing, a footer read, metadata parsing and usually task scheduling. Many tiny objects can make planning and remote request overhead dominate useful scans. They add catalogue or table-log entries and can create inefficient parallelism. Compression does not remove per-file cost. Compaction rewrites many small files into fewer larger ones while preserving rows. Choose sizes and partitioning suited to readers; do not blindly create one file. For mutable tables, use the table format's rewrite operation to preserve snapshots. For raw files, publish immutable outputs safely to avoid partial replacement. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["small-files", parquet]
+
+- id: parquet-basic-018
+  topic: "predicate pushdown"
+  difficulty: intermediate
+  question: "What is predicate pushdown, and what does the phrase not guarantee?"
+  answer: |
+    Predicate pushdown means moving or translating a filter closer to the source, potentially using partition values, footer statistics, page indexes or evaluation during decode. It can avoid paths or row groups when predicate and layout permit. A plan showing a pushed filter does not prove many bytes were skipped: ranges may overlap, statistics may be absent or expressions unsupported, and the reader may recheck the predicate. Verify physical scan and runtime counters for files, bytes and row groups. Pushdown is an optimization opportunity, not an index-like guarantee of point lookup. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["predicate-pushdown", parquet]
+
+- id: parquet-basic-019
+  topic: "projection pruning"
+  difficulty: intermediate
+  question: "What is column pruning, and which columns might still be read?"
+  answer: |
+    Column pruning requests needed fields rather than every field in each record, allowing Parquet to avoid unrelated chunks. The output list is not the whole dependency set: predicates, joins, grouping, ordering or computed expressions may also need columns. Nested pruning can limit I/O to a leaf, but support varies by engine. Selecting all columns and dropping some in application code is too late to save the read. Inspect the scan read schema and bytes. Projection removes fields; predicate pruning attempts to eliminate files, groups or rows, a distinct optimization. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["projection-pruning", parquet]
+
+- id: parquet-basic-020
+  topic: "bloom filters"
+  difficulty: intermediate
+  question: "What can a Parquet bloom filter do, and what can it not do?"
+  answer: |
+    A bloom filter tests whether a value may exist in a region such as a column chunk. It can establish that a queried value is definitely absent and let a reader skip that region; a positive may be a false positive and needs normal checking. It may help selective equality predicates when writer and reader support it. Bloom filters are optional and not universal. They do not return matching rows, eliminate candidate decoding, or replace clustering and statistics. Confirm filters are written and consulted by the actual engine, rather than inferring support from a library option. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["bloom-filters", parquet]
+
+- id: parquet-basic-021
+  topic: "remote reads"
+  difficulty: intermediate
+  question: "Why can remote Parquet scans be slow even when few bytes are needed?"
+  answer: |
+    Remote readers pay for listing, footer requests, range reads, network transfer, latency, credentials, retries and scheduling. A narrow projection can still touch many files and footers. Tiny objects make request count dominate, while throttling or coordinator bottlenecks can cap throughput. Footer-at-end supports range access, but engines differ in prefetch. Use a supported cloud connector and measure planning separately from scanning, plus counts, bytes, concurrency and retries. Better partitioning, manifests/catalogues or compaction may reduce discovery. More workers will not necessarily fix serial listing or coordinator bottlenecks. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["remote-reads", parquet]
+
+- id: parquet-basic-022
+  topic: "vectorized reader"
+  difficulty: intermediate
+  question: "What does a vectorized Parquet reader do?"
+  answer: |
+    A vectorized reader decodes values in batches rather than processing one record at a time. Batch processing can reduce per-row overhead and align with columnar execution. Spark, DuckDB and Arrow have different implementations and supported paths; vectorization is an engine feature, not a file-format guarantee. Some schemas may trigger row-wise fallback. Compressed bytes can understate memory for decoded batches, dictionaries and nested values. Vectorization does not fix small files or unnecessary projection. Check plans and metrics for the actual path, then benchmark the real schema and codec instead of assuming every Parquet scan is vectorized. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["vectorized-reader", parquet]
+
+- id: parquet-basic-023
+  topic: "table formats"
+  difficulty: intermediate
+  question: "When should Parquet files be managed through a table format?"
+  answer: |
+    Use a table format for reliable snapshots, concurrent writers, atomic commits, updates/deletes, merges, time travel, coordinated compaction or governed schema evolution. Delta Lake, Iceberg and Hudi record table metadata and file actions over data files, commonly Parquet. Readers need protocol support to identify the logical snapshot. Raw Parquet may suit immutable batches written to unique paths and explicitly published after validation. It does not know which files are obsolete or whether a write completed. A raw glob over Delta may include files outside the current snapshot; use table-aware APIs. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["table-formats", parquet]
+
+- id: parquet-basic-024
+  topic: "Parquet and Avro"
+  difficulty: intermediate
+  question: "How do Parquet and Avro differ, and where might a pipeline use both?"
+  answer: |
+    Parquet is columnar and suited to analytical scans projecting a subset of fields across records. Avro is row-oriented schema-based serialization often used for event interchange and streaming, where complete records and writer/reader schema resolution matter. A pipeline can ingest Avro events, validate their schema, then transform batches into Parquet for analytics. Conversion must handle nullability, logical types, timestamps, decimals and nested values. Avro evolution does not automatically set the Parquet directory's global schema policy. Test converted files with analytical readers and retain the event contract separately. A practical review separates format guarantees from engine-specific optimizations. Check the physical schema, codec and metadata in files written by the deployed version, then read them with the oldest supported consumer. Test nulls and mixed historical schemas, not just a fresh happy-path file.
+  tags: ["parquet-and-avro", parquet]

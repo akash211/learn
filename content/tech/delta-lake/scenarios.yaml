@@ -1,0 +1,165 @@
+- id: delta-scn-001
+  title: A rollback succeeds in staging but fails after production vacuum
+  technologies: [delta-lake, pyspark, airflow]
+  difficulty: advanced
+  prompt: |
+    An Airflow-managed Spark pipeline overwrote a curated Delta table with a faulty batch. The team
+    plans to restore last night's version, but the table has a daily `VACUUM` job with a 24-hour
+    retention override. The bad write was 30 hours ago, and a previous cleanup run succeeded.
+    `DESCRIBE HISTORY` still lists the older version. What do you investigate and how do you recover?
+  approach: |
+    Separate log history from data-file availability. Confirm the bad commit version and restore
+    target, then check whether all files needed by that snapshot remain in storage; history entries
+    alone do not prove that restore is possible. Inspect vacuum logs, retention policy, active
+    readers, and whether a separate backup or replayable source exists. Do not hand-copy files into
+    the table directory or edit `_delta_log`.
+
+    If the old files remain, use the supported restore operation in a compatible runtime and
+    validate row counts, key invariants and downstream consumers. If they are gone, restore from
+    an independent backup or rebuild from source, then reconcile downstream state. Afterward,
+    replace the unsafe 24-hour policy with a documented recovery window based on longest queries,
+    streams and incident objectives; enable approval and dry-run review where available. Rehearse
+    this recovery path before the next incident.
+  red_flags:
+    - Assuming a history entry means old Parquet files still exist.
+    - Suggesting `VACUUM RETAIN 0 HOURS` or manual log editing as a repair.
+    - Claiming Delta can recreate physically deleted data without a backup or source.
+
+- id: delta-scn-002
+  title: A CDC merge occasionally regresses customer state
+  technologies: [delta-lake, pyspark, kafka]
+  difficulty: advanced
+  prompt: |
+    A Kafka-to-Delta CDC job uses `foreachBatch` and `MERGE` keyed by `customer_id`. During retries,
+    some customer records revert to older addresses. Source events include an event timestamp and
+    a Kafka partition/offset, but batches can be replayed after checkpoint recovery. The target has
+    no source sequence column. Diagnose the likely issue and propose a safe design.
+  approach: |
+    Treat this as an ordering/idempotence problem, not a Delta transaction corruption. Determine
+    which source metadata represents authoritative per-entity order; a Kafka offset is only ordered
+    within a partition, and event timestamp may tie or be inaccurate. Retain the source's commit
+    sequence/version if available, plus a deterministic event ID. Deduplicate events and order them
+    per customer before merge; persist `last_applied_sequence` in the target and update only when
+    the new event is later. Handle deletes explicitly.
+
+    Make the merge replay-safe because `foreachBatch` may execute again. Preserve the checkpoint;
+    do not use a checkpoint reset as an ordinary fix. If a multi-partition source has no global key
+    ordering, define how ownership or source ordering is established. Backfill target sequence
+    state from raw CDC, reconcile regressed keys, test duplicate and out-of-order cases, and monitor
+    stale-event rejection counts. Delta makes the table commit atomic but cannot choose business
+    ordering for the pipeline.
+  red_flags:
+    - Calling exactly-once Delta writes a guarantee that the callback runs once.
+    - Using ingestion wall-clock timestamps without examining source ordering semantics.
+    - Resetting the checkpoint and re-running without deduplication or reconciliation.
+
+- id: delta-scn-003
+  title: An OSS reader returns rows deleted by a managed runtime
+  technologies: [delta-lake, databricks, pyspark]
+  difficulty: advanced
+  prompt: |
+    A Databricks job enabled deletion vectors on a shared Delta table and ran `DELETE` successfully.
+    A downstream service using an older Delta client reads the table and sees rows that should have
+    been deleted. The data files are Parquet and the service uses a raw directory scan. What is the
+    likely cause, and what is a safe fix?
+  approach: |
+    Explain that the raw Parquet reader bypasses `_delta_log` and deletion-vector semantics. The
+    table is a protocol-aware snapshot, not a glob of every physical file. Inventory the consumer's
+    exact Delta client/version and verify both protocol and DV read support. Do not enable that
+    client as a writer until it can correctly construct and commit snapshots.
+
+    Short term, replace the raw scan with a compatible Delta-aware reader or expose a validated
+    export/snapshot tailored to the service. If the requirement is physical erasure, a logical
+    delete is insufficient: use the supported rewrite/purge path, then vacuum after retention and
+    verify old files and backups. Disabling a property does not necessarily downgrade protocol or
+    rewrite historical files. Test in an isolated copy and coordinate any protocol migration with
+    all consumers. Add compatibility checks to deployment gates so a feature cannot be enabled
+    without sign-off from downstream owners.
+  red_flags:
+    - Blaming Parquet encoding when the client ignored the Delta log.
+    - Advising manual deletion of files or log actions as the first repair.
+    - Treating SQL DELETE as proof of physical erasure.
+
+- id: delta-scn-004
+  title: A large table has thousands of tiny files and slow selective queries
+  technologies: [delta-lake, pyspark, airflow]
+  difficulty: intermediate
+  prompt: |
+    A 40 TB event table receives a two-minute Structured Streaming micro-batch. After months of
+    growth, queries filtering on `tenant_id` scan thousands of files and take several minutes. The
+    team wants to partition by tenant id and run `OPTIMIZE ZORDER BY (tenant_id, event_ts)` hourly.
+    How do you evaluate a better plan?
+  approach: |
+    Start with evidence: file-size distribution, active file count, scan bytes, files skipped,
+    predicate selectivity, tenant cardinality/skew, micro-batch output sizes and current partition
+    layout. The symptoms suggest small-file overhead, but they do not prove high-cardinality
+    partitioning is appropriate. Compact small files at a cadence and scope matched to hot data;
+    tune trigger/write sizing if feasible.
+
+    Test data skipping or a supported locality strategy on a representative copy. Z-order is
+    Databricks-specific syntax and maintenance support varies; compare actual query gains and rewrite
+    costs. Consider liquid clustering only after confirming protocol and all client support, noting
+    its incompatibility with partitioning/Z-order in OSS documented behavior. Avoid hourly full-table
+    rewrites; measure bytes rewritten versus query work saved. Stage rollout and verify p95 latency,
+    files scanned and streaming lag. Decide whether partitioning helps only if tenant cardinality,
+    size per tenant and query patterns support it.
+  red_flags:
+    - Partitioning immediately by a likely high-cardinality key without measuring.
+    - Treating Z-order or liquid clustering as a universal index.
+    - Scheduling repeated full-table rewrites without accounting for write cost.
+
+- id: delta-scn-005
+  title: Merge concurrency conflicts spike after a second ingestion job is added
+  technologies: [delta-lake, pyspark, airflow]
+  difficulty: advanced
+  prompt: |
+    A Delta fact table was written by one daily job. A second near-real-time job now merges updates
+    every five minutes. Both jobs run successfully alone, but production sees concurrent modification
+    exceptions and long retries. The two pipelines appear to target different business keys, and
+    the table is partitioned by event date. Diagnose and recommend an approach.
+  approach: |
+    Inspect transaction history and exception types, then map each merge's read and write sets,
+    target-file scans and partition predicates. Different business keys can still conflict if both
+    operations scan or rewrite overlapping files, or if metadata/layout changes overlap. Confirm
+    partition pruning is correct and predicates do not broaden to the whole table. Measure merge
+    duration, target files touched, conflict rate and retry work.
+
+    Options include staging updates and consolidating into a single writer, assigning disjoint
+    ownership by a truly safe partition/key boundary, narrowing merge predicates, or adjusting
+    cadence to reduce overlap. Do not simply increase retries; re-run from fresh snapshots with
+    bounded backoff and make source batches idempotent. Assess whether row-level concurrency is
+    available and appropriate in the exact runtime/features, not as an assumed OSS property. For
+    multi-table side effects, add reconciliation. Validate final uniqueness and source sequence
+    correctness after deployment.
+  red_flags:
+    - Assuming different business keys guarantee different physical files or transaction read sets.
+    - Increasing retry loops without reducing contention or recomputing against fresh state.
+    - Assuming row-level concurrency is enabled in every Delta implementation.
+
+- id: delta-scn-006
+  title: A new table feature breaks the lagging analytics client
+  technologies: [delta-lake, databricks, pyspark]
+  difficulty: advanced
+  prompt: |
+    A team enabled liquid clustering and deletion vectors on a high-volume Delta table in its
+    managed runtime. Queries improved, but an older OSS Spark reader and a Python delta-rs process
+    now fail to read or write it. The product team wants to downgrade the protocol immediately.
+    Propose a compatibility and rollback plan.
+  approach: |
+    Capture the table's protocol, enabled features, runtime versions and exact read/write error
+    messages. Check support matrices for each deployed OSS Spark and delta-rs release; “Delta client”
+    does not imply feature parity. Determine whether the failures are reader-feature requirements,
+    writer-feature requirements, catalog access or unsupported operations. Do not alter protocol
+    manually or assume that turning off properties downgrades it.
+
+    Choose a canonical writer and decide whether upgrading all clients is feasible. If not, check
+    whether the specific features can be dropped by the current Delta release and what rewrites,
+    protected checkpoints and history behavior that entails; not every feature is droppable. Test
+    migration on a copy with all consumers, read correctness and write/recovery paths. As a temporary
+    service path, produce a compatible export rather than letting old clients scan raw Parquet.
+    Schedule the migration with a rollback/rebuild plan and establish a compatibility gate for
+    future feature enablement.
+  red_flags:
+    - Assuming every protocol can be downgraded by setting table properties.
+    - Enabling old clients to write without validating feature semantics.
+    - Ignoring catalog, storage access and exact client versions in diagnosis.

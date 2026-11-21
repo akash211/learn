@@ -1,0 +1,139 @@
+- id: ans-scn-001
+  title: The play targets every production host unexpectedly
+  technologies: [ansible, linux]
+  difficulty: intermediate
+  prompt: |
+    A play intended for a small web canary is about to run in production. Its output from `--list-hosts`
+    includes database and batch machines as well as web nodes. The inventory was changed yesterday to
+    combine static hosts with a cloud dynamic inventory plugin. The operator used `--limit web` and
+    assumed that was a safe guard. No tasks have run yet.
+  approach: |
+    Stop before applying changes. Re-run `ansible-inventory --graph` and `--list` with the exact sources,
+    credentials and revision used by the deployment, then run `ansible-playbook --list-hosts` with the
+    full play pattern and limit. Inspect merged group membership, plugin filters, account/project scope,
+    caching and naming collisions. Confirm why database or batch hosts satisfy the pattern or whether
+    the play itself uses `all`. A limit narrows the play's candidate set but is not a confirmation
+    screen. Change the inventory or pattern so environment and role boundaries are explicit, test the
+    canary selection, and make CI fail closed on an empty or unexpectedly broad set. Record the resolved
+    targets in the deployment audit trail before proceeding.
+  red_flags:
+    - "Proceeding because `--limit web` was present without reconciling the actual list."
+    - "Deleting hosts from inventory without understanding the dynamic source merge."
+    - "Disabling the dynamic plugin rather than fixing its account or filter scope."
+
+- id: ans-scn-002
+  title: The configuration file changes on every run
+  technologies: [ansible, linux]
+  difficulty: intermediate
+  prompt: |
+    A role installs a service config using `ansible.builtin.template`, then reports changed on every
+    scheduled run even though the service settings appear identical. The deployment handler restarts
+    the service each time, causing a short interruption. The task sets owner and mode, and the template
+    includes a timestamp generated during rendering. Operators are considering `changed_when: false`.
+  approach: |
+    Inspect the task diff and identify which bytes differ between runs. The generated timestamp makes
+    the template output non-deterministic, so Ansible correctly sees a change. Remove runtime data that
+    is not part of desired configuration, or make it stable and explicitly sourced if it is needed.
+    Run the role twice and compare output; the second converge should not change the file. Keep the
+    change-triggered handler so a real config change still reloads or restarts the service. Validate the
+    candidate file before activation and use a reload rather than restart only if the service supports a
+    safe reload. Do not set `changed_when: false` on a task that modifies the file; that hides the
+    change and suppresses required handler notifications. Verify service health after the correction.
+  red_flags:
+    - "Setting `changed_when: false` to silence the report while the file still changes."
+    - "Removing the handler, which leaves real configuration changes unapplied."
+    - "Ignoring the diff and repeatedly restarting the service."
+
+- id: ans-scn-003
+  title: A missing variable produces a dangerous fallback
+  technologies: [ansible]
+  difficulty: intermediate
+  prompt: |
+    A deployment role expects `app_release` to be set by the environment inventory. In production, the
+    inventory file was renamed and the variable is absent. A role default silently falls back to `latest`,
+    so the play downloads a moving artifact and restarts every node. The pipeline passed syntax check and
+    the operator asks whether adding the missing inventory value is enough.
+  approach: |
+    Stop the rollout and inspect the effective variable sources using the exact inventory and extra
+    variables from the run. Treat a mutable `latest` artifact as unsafe for reproducibility. Change the
+    role contract so `app_release` is required or defaults only to a known safe value; assert that it is
+    present and matches the project's version format before any task mutates a host. Verify the artifact
+    with a checksum or immutable versioned URL. Add a CI test for the production inventory naming or
+    assert inventory-specific inputs before deployment. After selecting a fixed release, deploy to one
+    canary, check service health, then proceed in batches. Syntax checking only validates structure; it
+    cannot prove the desired variable was loaded or the selected artifact is safe.
+  red_flags:
+    - "Keeping `latest` and rerunning until the play succeeds."
+    - "Assuming a green syntax check validates variable resolution."
+    - "Fixing the inventory but not protecting against future missing required inputs."
+
+- id: ans-scn-004
+  title: A Vault value appears in CI logs
+  technologies: [ansible, cicd]
+  difficulty: advanced
+  prompt: |
+    A CI deployment failed while updating a database credential. The job log includes the value in a
+    debug message and the task diff shows the rendered configuration. The variable came from an
+    Ansible Vault file and the vault password was supplied by a protected CI secret. The deployment has
+    completed on some hosts but not all, and the old credential is still accepted by the database.
+  approach: |
+    Treat the value as exposed. Restrict access to the logs and artifacts, revoke or rotate the
+    credential through the database's supported process, and determine which hosts received the new
+    configuration before deciding how to complete or roll back. Remove debug output and protect
+    sensitive tasks with `no_log: true`; disable or carefully filter diffs for secret-bearing files.
+    Set restrictive target-file permissions and check callback plugins and CI artifact retention for
+    other copies. Vault protects ciphertext at rest, not decrypted runtime data. Test the rotation
+    sequence in a non-production environment and deploy to a canary before completing the fleet. Review
+    which jobs can receive the vault password, especially untrusted branch and pull-request jobs.
+  red_flags:
+    - "Deleting the log and assuming the credential is no longer exposed."
+    - "Relying only on `no_log` while leaving a credential in a broad-access target file."
+    - "Retrying the whole fleet without knowing which hosts already changed."
+
+- id: ans-scn-005
+  title: Pipelining fails after privilege escalation
+  technologies: [ansible, linux]
+  difficulty: advanced
+  prompt: |
+    An operations team enabled SSH pipelining to improve a configuration run. Most hosts are faster,
+    but a subset now fails on privileged tasks with an error related to pseudo-terminal allocation.
+    Those machines use a different sudoers policy maintained by a security team. The team proposes
+    setting `ansible_ssh_common_args` to request a TTY for every host.
+  approach: |
+    Isolate the failing transport and privilege-escalation combination rather than applying a global
+    SSH override. Confirm the Ansible and OpenSSH settings, sudoers policy, whether sudo requires a TTY,
+    and whether failures occur for unprivileged modules too. Test pipelining on a representative host
+    with and without `become`. Coordinate any sudo policy change with the security owner; do not weaken
+    or broaden policy merely to retain a performance optimization. If a safe compatible configuration
+    is unavailable, disable pipelining for the affected group or use the known-good connection behavior.
+    Measure total runtime to determine whether pipelining matters after the issue is fixed. It does not
+    address unrelated bottlenecks such as package-manager locks or slow application restarts.
+  red_flags:
+    - "Enabling a TTY globally without evaluating security and connection side effects."
+    - "Changing sudoers policy without the policy owner or testing."
+    - "Assuming more connection optimization is always worth the compatibility risk."
+
+- id: ans-scn-006
+  title: Decide whether Ansible or image replacement owns host configuration
+  technologies: [ansible, terraform, cicd]
+  difficulty: advanced
+  prompt: |
+    A team provisions cloud VMs with Terraform, configures packages and application settings with
+    Ansible, and also bakes some of those same settings into a base image. The fleet drifts: some hosts
+    receive a later playbook fix while newly replaced hosts inherit older image defaults. Product asks
+    whether Terraform should take over the whole workflow or whether ongoing configuration management
+    should be removed.
+  approach: |
+    Map each property to one authoritative lifecycle owner. Terraform should normally manage provider
+    resources such as instance shape, network, disks and identity. Decide whether guest packages and
+    service configuration are owned by the image pipeline or by Ansible, not both. If the fleet is
+    immutable, bake and test a versioned image, then replace hosts through a canary rollout with health
+    checks and rollback. If hosts remain mutable, keep Ansible as the guest-state owner and ensure
+    replacements run the same reviewed playbook and pinned collections. Terraform can pass instance
+    outputs into the configuration stage but should not duplicate guest-level state. Compare team
+    capability, recovery, audit and release needs; select the simplest model that can be tested and
+    operated consistently, then remove stale competing definitions.
+  red_flags:
+    - "Using Terraform to manage every layer without examining its state and provider boundaries."
+    - "Keeping duplicate settings in the image and playbook without a precedence contract."
+    - "Removing Ansible before designing image updates, rollout and rollback."

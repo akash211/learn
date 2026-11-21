@@ -1,0 +1,134 @@
+slug: terraform
+title: Terraform
+category: cloud-infrastructure
+summary: Declarative infrastructure with HCL, a dependency graph and shared state, from safe plans to tested, governed production changes.
+level: core
+relations:
+  - to: cicd
+    type: uses
+    note: "CI pipelines run formatting, validation, policy checks and reviewed plans before controlled applies; Terraform state and credentials must be handled deliberately in that workflow."
+  - to: kubernetes
+    type: complements
+    note: "Terraform commonly provisions clusters, networks and managed services around Kubernetes, while Kubernetes controllers reconcile workloads inside the cluster; avoid making both tools authoritative for the same object."
+  - to: ansible
+    type: complements
+    note: "Terraform primarily provisions and tracks infrastructure resources; Ansible is often used for guest configuration and application setup after provisioning, with a clear ownership boundary between them."
+intro:
+  what: |
+    Terraform is an infrastructure-as-code tool: describe desired infrastructure in HashiCorp
+    Configuration Language (HCL), let Terraform build a dependency graph, inspect a proposed
+    plan, and apply the required provider API operations. A configuration is not a sequence of
+    shell commands. It declares resources such as networks, databases and DNS records, along
+    with data sources that read existing objects and outputs that expose selected results.
+
+    The state maps configuration addresses to real objects and records values needed to plan
+    subsequent changes. A provider implements the resource and data-source schemas for an API.
+    Modules package related declarations into reusable units. The CLI supplies a controlled
+    workflow: `terraform init`, `terraform validate`, `terraform plan`, and `terraform apply`.
+  why: |
+    Creating infrastructure by hand or by imperative scripts makes it hard to review the full
+    change, reproduce an environment, or determine which system owns an object. Terraform turns
+    desired changes into a plan that can be reviewed before execution and keeps a durable mapping
+    between declarations and remote resources. That makes routine changes auditable and lets
+    teams rebuild environments from versioned configuration instead of relying on tribal memory.
+
+    Declarative does not mean risk-free or automatically idempotent. The provider's behavior,
+    current remote state, credentials, state backend, and API semantics all affect the result.
+    A plan may replace a database or reveal drift; applying it can destroy production data.
+    State may contain credentials or private values, and concurrent applies can corrupt the
+    workflow if locking is absent. Sound Terraform practice is therefore as much about safe
+    review, state ownership, lifecycle design and recovery as it is about HCL syntax.
+  problems:
+    - Express cloud and service infrastructure as reviewable, versioned configuration.
+    - Calculate dependency order across resources rather than hand-writing imperative sequencing.
+    - Reuse consistent infrastructure patterns through modules and typed interfaces.
+    - Detect configuration drift and preview changes before making API calls.
+    - Share infrastructure ownership with remote state, locking and explicit team workflows.
+  where_used:
+    - Provisioning accounts, networks, compute, identity, storage and managed databases.
+    - Building platform foundations and repeatable development, test and production environments.
+    - CI pipelines that validate, policy-check, publish and apply reviewed infrastructure plans.
+    - Managing infrastructure at multiple providers through versioned provider plugins.
+    - Bootstrapping Kubernetes clusters and surrounding services, with workloads managed separately.
+  ecosystem: |
+    Terraform sits in the provisioning layer. Providers translate its resource graph into API
+    calls; a remote backend stores state and can coordinate concurrent writers. Git and CI
+    provide review and promotion, while policy tools such as Sentinel or OPA can reject plans
+    that violate organizational rules. Monitoring, cloud audit logs and drift detection provide
+    operational feedback after apply. Ansible often handles configuration inside provisioned
+    machines, while Kubernetes controllers reconcile in-cluster application objects.
+
+    Choose one authoritative owner for each object. If a cloud console operator, Terraform,
+    Kubernetes controller and another IaC tool all modify the same field, each may undo the
+    other's work or continually produce diffs. Terraform's graph is useful for dependencies,
+    but it does not make arbitrary external effects transactional; APIs can partially fail and
+    state must be recovered carefully. OpenTofu is a compatible open-source fork with its own
+    evolving release and compatibility policy. Pulumi and CDK-style tools let teams express
+    infrastructure through general-purpose languages, trading HCL's constrained declarative
+    model for familiar programming abstractions and their associated testing and complexity.
+  alternatives:
+    - name: OpenTofu
+      note: "An open-source Terraform fork that supports HCL and much of the same workflow; verify compatibility and provider/module behavior for the exact versions in use."
+    - name: Pulumi
+      note: "Infrastructure as code using general-purpose languages; useful where programming abstractions and language-native tests outweigh the simpler constrained configuration model."
+    - name: AWS CDK and other cloud CDKs
+      note: "Define infrastructure in code and synthesize provider-specific templates; strong cloud-native integrations, but often more tightly coupled to a cloud or deployment engine."
+    - name: Ansible
+      note: "Often complements rather than replaces Terraform: configuration management is a better fit for many in-guest setup tasks than resource lifecycle and cloud API management."
+related: [cicd, kubernetes, ansible]
+chapters:
+  - id: hcl-resource-graph
+    title: HCL and the Resource Graph
+    file: chapters/01-hcl-resource-graph.md
+    minutes: 13
+    level: core
+  - id: state-backends
+    title: State, Backends and Workspaces
+    file: chapters/02-state-backends.md
+    minutes: 14
+    level: core
+  - id: variables-locals-outputs
+    title: Variables, Locals, Outputs and Validation
+    file: chapters/03-variables-locals-outputs.md
+    minutes: 13
+    level: core
+  - id: modules-composition
+    title: Modules and Composition Patterns
+    file: chapters/04-modules-composition.md
+    minutes: 13
+    level: core
+  - id: providers-versions
+    title: Providers, Versions and Dependency Pinning
+    file: chapters/05-providers-versions.md
+    minutes: 12
+    level: core
+  - id: plan-apply-drift-imports
+    title: Plan, Apply, Drift and Imports
+    file: chapters/06-plan-apply-drift-imports.md
+    minutes: 14
+    level: core
+  - id: iteration-dynamic-blocks
+    title: for_each, count and Dynamic Blocks
+    file: chapters/07-iteration-dynamic-blocks.md
+    minutes: 12
+    level: core
+  - id: secrets-policy
+    title: Secrets, Sensitive Values and Policy as Code
+    file: chapters/08-secrets-policy.md
+    minutes: 14
+    level: advanced
+  - id: testing-ci
+    title: Testing Terraform and CI Plans
+    file: chapters/09-testing-ci.md
+    minutes: 13
+    level: advanced
+  - id: production-practices
+    title: Production Practices and IaC Choices
+    file: chapters/10-production-practices.md
+    minutes: 15
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

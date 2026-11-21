@@ -1,0 +1,143 @@
+- id: k8s-recent-001
+  topic: gateway-api
+  difficulty: intermediate
+  question: When would you use Gateway API instead of a new Ingress resource?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Gateway API is useful when teams need richer, role-oriented traffic configuration or a cleaner separation between platform-owned listeners and application-owned routes. GatewayClass selects an implementation, Gateway represents traffic infrastructure and listeners, and HTTPRoute or another route type defines host, path, header or backend behavior. The model supports portable capabilities beyond the core Ingress API, including weighted traffic patterns, though implementations vary in conformance and features.
+
+    It is not built into every cluster as a ready-to-use controller. Gateway API CRDs and a compatible controller must be installed, versioned and operated. Check the controller's support matrix, route attachment policy, status conditions, TLS behavior and observability. Ingress remains valid for existing deployments; migrate when there is a concrete need, not just because the API is newer. Keep external DNS, certificates and load-balancer lifecycle explicit during migration.
+  tags: [gateway-api, ingress, traffic-management]
+
+- id: k8s-recent-002
+  topic: gateway-api
+  difficulty: intermediate
+  question: How do Gateway, GatewayClass and HTTPRoute fit together, and what can prevent a route from working?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A GatewayClass identifies the controller responsible for a class of gateways. A Gateway instance describes listeners such as protocol, port, hostname and route attachment rules. An HTTPRoute attaches to a Gateway and describes matching requests and backend references, often to Services. This separates infrastructure ownership from application routing and can support a shared edge managed by a platform team.
+
+    An accepted YAML object does not guarantee programmed traffic. The class controller may not exist, a listener may reject the route's namespace or hostname, a backend Service may be missing, or the controller may not support the requested feature. Inspect `Accepted`, `ResolvedRefs` and `Programmed` conditions where applicable, plus controller logs and endpoint status. Test TLS, cross-namespace references and health behavior with the selected implementation; portability is bounded by actual conformance and provider features.
+  tags: [gateway-api, conditions, troubleshooting]
+
+- id: k8s-recent-003
+  topic: sidecars
+  difficulty: intermediate
+  question: What changed with native sidecar containers, and why does init ordering matter?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Kubernetes supports restartable sidecars declared in `initContainers` with `restartPolicy: Always`. Unlike a regular init container that exits before app startup, this container starts in the ordered init sequence and remains running alongside later init containers and application containers. The ordering lets a proxy, log shipper or setup helper become available before the application begins. On Pod shutdown, sidecars can remain alive until application containers stop, then terminate in reverse order.
+
+    This lifecycle behavior became stable in Kubernetes v1.33; clusters may still differ by version and old clusters need compatibility planning. Check whether admission webhooks and client libraries preserve the field. Resource accounting also changes because sidecars overlap later initialization and app execution. Treat it as a Pod API capability, not a reason to put every helper in a sidecar; independent scaling and failure boundaries may still favor separate workloads.
+  tags: [sidecar, init-containers, lifecycle]
+
+- id: k8s-recent-004
+  topic: sidecars
+  difficulty: intermediate
+  question: How do restartable init-container sidecars affect effective Pod resource requests?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    A regular init container runs alone, one at a time, before the application containers. A restartable sidecar declared under `initContainers` stays running while subsequent init containers run and after application startup. Therefore, its request contributes during later initialization as well as to the steady-state sum with application containers. Kubernetes calculates effective Pod requests using the peak concurrent phase rather than simply adding every init request as if all ran together.
+
+    This matters for scheduling and node autoscaling: a large setup init container may dominate the initialization peak, while persistent sidecars increase the running request. Revisit requests when migrating from a conventional sidecar container to the native lifecycle form. Inspect the effective admitted Pod and the version-specific resource calculation; do not estimate capacity only from the main app container. Accurate requests avoid unexpected Pending Pods and excess reserved node capacity.
+  tags: [resource-accounting, sidecar, scheduling]
+
+- id: k8s-recent-005
+  topic: admission-policy
+  difficulty: intermediate
+  question: What is ValidatingAdmissionPolicy, and when can CEL replace an admission webhook?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    ValidatingAdmissionPolicy lets a cluster define request validation using Common Expression Language (CEL) in the API server. A policy describes matching resources and validation expressions; a ValidatingAdmissionPolicyBinding attaches the policy to a scope and selects actions such as Deny, Warn or Audit. The feature is stable in Kubernetes v1.30. Policies can be parameterized and scoped without operating a separate webhook service.
+
+    CEL is appropriate for declarative checks such as requiring labels, limiting fields or validating relationships expressible from the admitted object and available variables. A webhook may still be needed for complex mutation, external lookups or logic outside CEL's model. Admission is on the API write path, so test failure policy, match scope, exemptions and upgrade behavior carefully. A binding is required for a policy to affect requests; creating the policy alone does not enforce it.
+  tags: [cel, admission, policy]
+
+- id: k8s-recent-006
+  topic: admission-policy
+  difficulty: advanced
+  question: How would you safely introduce a CEL-based admission rule that rejects unsafe images?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    First define the exact scope: which namespaces, workload kinds, operations and containers are covered, and what approved image reference means. A ValidatingAdmissionPolicy can match resource rules and evaluate fields with CEL; a binding scopes it and selects validation actions. Begin with `Warn` or `Audit` where supported to discover existing violations and exemptions before switching the binding to `Deny`.
+
+    Validate expressions against realistic objects, missing optional fields, init containers, sidecars, system namespaces and update operations. Keep the rule focused; image policy may need to examine both app and init containers and should avoid rejecting trusted platform components accidentally. Monitor evaluation errors and have a documented rollback path. A fail-closed or broad policy can block ordinary deployments when misconfigured. For cryptographic signature verification or external registry context, use an appropriate dedicated policy component rather than assuming CEL performs those checks itself.
+  tags: [cel, admission, supply-chain]
+
+- id: k8s-recent-007
+  topic: node-provisioning
+  difficulty: advanced
+  question: What does Karpenter do, and how is it different from the Kubernetes scheduler?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    The Kubernetes scheduler selects an existing eligible node for each Pod. Karpenter is an external node lifecycle and provisioning controller used in supported environments; it can observe unschedulable Pods and provision nodes that satisfy configured NodePool and provider NodeClass constraints. It can also manage node disruption and consolidation according to its APIs and policies. Karpenter does not replace the scheduler: once a node is registered, the scheduler still binds Pods to it.
+
+    Karpenter is not a Kubernetes core component, and its APIs and provider integrations evolve. Use the installed version's documentation and CRD schema; older examples using legacy resource names may not apply. It cannot fix contradictory Pod affinity, blocked cloud quota, missing storage support or unavailable instance capacity. Evaluate permissions, limits, node image upgrades, disruption budgets and PDB interactions before production use, and test what happens when replacement capacity cannot be launched.
+  tags: [karpenter, scheduler, node-autoscaling]
+
+- id: k8s-recent-008
+  topic: node-provisioning
+  difficulty: advanced
+  question: How should Karpenter consolidation and disruption budgets be evaluated for production?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Consolidation tries to remove or replace underused nodes when workloads can be rescheduled, which can reduce compute cost but creates Pod evictions and node churn. Karpenter NodePool disruption budgets can rate-limit certain voluntary disruption methods; the controller also simulates whether Pods fit and may launch replacements before terminating existing nodes. PodDisruptionBudgets can constrain eviction of application Pods, but they are a separate protection layer with different scope.
+
+    Do not treat either budget as a guarantee against every node termination path. Expiration, repair, provider failures and version-specific behaviors may differ. Check the exact Karpenter release documentation, disruption reasons, termination grace period and handling of blocking Pods. Test with real topology spread, anti-affinity, local volumes and DaemonSets, because they can prevent consolidation or make replacement unsafe. Monitor disruption events and ensure workloads have graceful shutdown, enough replicas and a recovery plan when capacity is unavailable.
+  tags: [karpenter, disruption, cost]
+
+- id: k8s-recent-009
+  topic: ebpf
+  difficulty: intermediate
+  question: Where can eBPF-based tooling help with Kubernetes networking or observability?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    eBPF programs run in the Linux kernel and can observe or influence selected networking and system events with low overhead when implemented and configured appropriately. Kubernetes platforms use eBPF-based CNI dataplanes and observability tools for service networking, flow visibility, policy enforcement, performance tracing or syscall signals. Tools such as Cilium and Hubble are examples in this ecosystem, but their exact features depend on versions, deployment mode and kernel support.
+
+    eBPF is not automatically enabled by Kubernetes, nor does its use remove the need to understand network policy and packet paths. Verify kernel compatibility, privileges, upgrade procedures and operational support. An eBPF dataplane may change how kube-proxy functions or is replaced, so avoid applying generic assumptions about iptables behavior. Use flow telemetry to test a specific hypothesis, and protect sensitive metadata such as names, IPs and service relationships in observability systems.
+  tags: [ebpf, cni, observability]
+
+- id: k8s-recent-010
+  topic: ebpf
+  difficulty: intermediate
+  question: How would you use eBPF flow visibility to debug a Service connection failure?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    First establish the failing source Pod, destination Service, port and time window, then check the Service selector and EndpointSlices. eBPF-based flow tooling can add visibility into observed connections, policy verdicts, drops or translation behavior, depending on the CNI and tool. That can help distinguish name resolution, routing, policy denial and a backend that accepts but fails the application protocol.
+
+    Treat telemetry as one evidence source, not a substitute for endpoint and application checks. Confirm the tool's visibility scope, sampling and metadata retention; absence of a flow can mean the event was not captured rather than that no packet existed. Compare with a controlled connection test from the same namespace and inspect CNI agent status. Because eBPF networking is implementation-specific and kernel-dependent, use the cluster vendor's documented diagnostics rather than assuming command names or fields are portable.
+  tags: [ebpf, network-policy, debugging]
+
+- id: k8s-recent-011
+  topic: api-evolution
+  difficulty: intermediate
+  question: Why do Kubernetes API and feature maturity levels matter when authoring manifests?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Kubernetes features move through alpha, beta and stable maturity, and their API fields, defaults or operational behavior can evolve. A manifest copied from a recent tutorial may be rejected by an older cluster, depend on a disabled feature gate, or use an API that has been removed. CRDs and controllers add their own version compatibility constraints beyond the Kubernetes server version.
+
+    Check the cluster's served APIs with `kubectl api-resources`, inspect the relevant API reference and release notes, and validate the manifest against a representative cluster. For production, pin supported controller versions and plan migrations before API removal. Do not use a successful YAML parse as proof of API validity: YAML syntax validation checks structure, while server-side validation checks schemas and admission. Feature gates should be enabled only according to supported upgrade and provider guidance.
+  tags: [api-versions, compatibility, upgrades]
+
+- id: k8s-recent-012
+  topic: autoscaling
+  difficulty: advanced
+  question: How can HPA, VPA and node autoscaling create feedback loops?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    HPA changes replica count, VPA may change resource requests and restart Pods to apply recommendations, and a node autoscaler provisions or removes nodes. These controllers influence one another: HPA CPU utilization is measured relative to requests, so changing requests can change the utilization signal; more replicas increase aggregate requests and may trigger node provisioning; node provisioning delay can leave replicas Pending while demand continues.
+
+    Define which controller owns each dimension and avoid letting HPA and VPA independently manipulate the same resource without a tested design. Check startup and readiness behavior, metrics freshness, stabilization settings, node pool constraints, quotas and rollout surge. A custom metric may better reflect demand but must scale sensibly with replica count. Load-test both scale-up and scale-down, including missing metrics and capacity failures. Observe replica, request, Pending Pod and node counts together to identify oscillation and delays.
+  tags: [hpa, vpa, node-autoscaling]

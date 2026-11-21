@@ -1,0 +1,124 @@
+slug: parquet
+title: Apache Parquet
+category: data-engineering
+summary: An open, column-oriented file format for analytical data, built around typed schemas, row groups, column chunks, pages, encodings and statistics.
+level: core
+relations:
+  - to: pyspark
+    type: uses
+    note: Spark commonly reads and writes Parquet; file sizing, row-group statistics and physical ordering determine how efficiently Spark can scan it.
+  - to: duckdb
+    type: uses
+    note: DuckDB scans Parquet directly and pushes projections and supported filters into its vectorised reader, including remote objects.
+  - to: delta-lake
+    type: foundation
+    note: Delta Lake stores table data in Parquet files and adds a transaction log, atomic commits, schema controls and table-level operations.
+  - to: snowflake
+    type: uses
+    note: Snowflake can load and unload Parquet for typed interchange with object storage and external data pipelines.
+  - to: redshift
+    type: uses
+    note: Redshift Spectrum reads external Parquet data in S3, where partition layout and column pruning affect scan work.
+intro:
+  what: |
+    Apache Parquet is an open-source, self-describing columnar file format designed for efficient
+    storage and retrieval of structured data. A file stores a schema and groups rows into row
+    groups; within each group, each field has a column chunk, which is divided into pages. The
+    footer records the schema and offsets, encodings, compression and optional statistics needed
+    by readers to locate and decode data.
+
+    Parquet is a file format, not a database, table format, query engine or transaction protocol.
+    It gives engines a shared physical representation and metadata conventions. Spark, DuckDB,
+    Arrow, Trino, warehouses and lakehouse systems can exchange files, but catalogues, atomic
+    updates, concurrency, deletes and retention need an additional layer or careful workflow.
+  why: |
+    Analytical queries often need a small subset of columns from many records. Row-oriented
+    formats make those scans read and decode fields that the query never uses. Parquet puts values
+    from the same column together, making projection efficient, giving compression codecs
+    homogeneous input, and allowing statistics to describe ranges inside a file.
+
+    Its schema and format specification also make it portable across languages and engines. The
+    challenge is that the format's capabilities are only potential: file size, row-group layout,
+    ordering, encodings, codec support and reader implementation all influence real performance.
+  problems:
+    - Store typed analytical datasets compactly while preserving a schema in each file.
+    - Read a few requested columns without decoding every field in every row.
+    - Skip row groups whose recorded column statistics cannot match a filter.
+    - Exchange datasets across compatible engines without a proprietary row format.
+    - Represent nested records and repeated values while preserving their structure.
+  where_used:
+    - Data lake and lakehouse files on object stores or distributed file systems.
+    - Batch ETL output from Spark, Flink, pandas/PyArrow and DuckDB.
+    - External tables and bulk interchange for warehouses and query engines.
+    - Long-lived analytical archives where schema and metadata need to travel with files.
+  ecosystem: |
+    Parquet is the physical file layer. Arrow is a columnar in-memory representation and ecosystem
+    that can bridge to Parquet, but its memory layout is not the Parquet on-disk layout. Spark,
+    DuckDB and other engines supply query planning and readers. A directory convention or catalogue
+    supplies table discovery. Delta Lake, Iceberg and Hudi build transaction and table-management
+    semantics over data files, commonly Parquet. In a raw Parquet directory there is no universal
+    commit log, snapshot isolation, uniqueness constraint or safe concurrent writer protocol.
+  alternatives:
+    - name: ORC
+      note: Another columnar analytical format with stripes, indexes and a strong Hive ecosystem; choose based on engine interoperability and reader support.
+    - name: Avro
+      note: Row-oriented and well suited to event interchange, schema resolution and streaming writes; less efficient for analytical projection scans.
+    - name: Delta Lake
+      note: A table layer over Parquet that adds a transaction log and operations such as atomic commits, deletes and merges.
+  related: [pyspark, duckdb, delta-lake, snowflake, redshift]
+chapters:
+  - id: why-columnar
+    title: Why Columnar Storage
+    file: chapters/01-why-columnar.md
+    minutes: 12
+    level: core
+  - id: file-anatomy
+    title: 'File Anatomy: Footer, Row Groups, Chunks and Pages'
+    file: chapters/02-file-anatomy.md
+    minutes: 13
+    level: core
+  - id: encodings-statistics
+    title: Encodings and Statistics
+    file: chapters/03-encodings-statistics.md
+    minutes: 13
+    level: core
+  - id: compression
+    title: Compression Codecs and Selection
+    file: chapters/04-compression.md
+    minutes: 11
+    level: core
+  - id: schemas-nested
+    title: Schema Evolution and Nested Types
+    file: chapters/05-schemas-nested.md
+    minutes: 14
+    level: advanced
+  - id: partitioning-small-files
+    title: Partitioning Layouts and Small Files
+    file: chapters/06-partitioning-small-files.md
+    minutes: 13
+    level: core
+  - id: predicate-pushdown
+    title: Predicate Pushdown and Row-Group Pruning
+    file: chapters/07-predicate-pushdown.md
+    minutes: 13
+    level: core
+  - id: writing-files
+    title: Writing Well from Spark, pandas and DuckDB
+    file: chapters/08-writing-files.md
+    minutes: 14
+    level: advanced
+  - id: reading-at-scale
+    title: Reading at Scale
+    file: chapters/09-reading-at-scale.md
+    minutes: 13
+    level: advanced
+  - id: alternatives-boundaries
+    title: Parquet, ORC, Avro, Delta and the Boundaries of a File Format
+    file: chapters/10-alternatives-boundaries.md
+    minutes: 13
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml
