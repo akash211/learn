@@ -1,0 +1,90 @@
+concepts:
+  - title: Four object types
+    detail: "Blob is file bytes, tree is a directory listing, commit is a tree plus parents and metadata, annotated tag points at an object. All are named by the hash of their content."
+  - title: A commit is a snapshot, not a diff
+    detail: "It stores a full tree hash; diffs are computed by comparing trees. Unchanged files are shared blob objects, which is why history is cheap."
+  - title: Refs and symbolic HEAD
+    detail: "A branch is a file with a commit hash. `HEAD` usually contains `ref: refs/heads/main`, so it follows the branch; with a raw hash in it, you are detached."
+  - title: Detached HEAD
+    detail: "Commits made there are reachable only through `HEAD` and the reflog. `git switch -c rescued <sha>` attaches a branch before they are collected."
+  - title: The index is a tree
+    detail: "The staging area holds the exact snapshot the next commit will use. `git diff` compares worktree to index; `git diff --cached` compares index to HEAD."
+  - title: Reachability drives GC
+    detail: "Objects are garbage only when no ref or reflog entry reaches them. `reset` and `amend` move refs and leave the old objects recoverable until `gc` prunes them."
+  - title: Merge base
+    detail: "The best common ancestor of two commits. A three-way merge diffs base-to-ours and base-to-theirs; `A...B` diffs from the merge base and is what a PR shows."
+  - title: Fast-forward
+    detail: "If the target has no commits the source lacks, the branch pointer just moves. `--no-ff` forces a merge commit to record the branch boundary."
+  - title: Rebase creates new commits
+    detail: "Each replayed commit gets a new hash and parent. Old commits stay in the reflog, which is why a bad rebase is recoverable and a force-push is required to publish."
+  - title: Refspec
+    detail: "`src:dst`, with `+` allowing non-fast-forward. The default fetch refspec maps `refs/heads/*` to `refs/remotes/origin/*`, which is why fetch cannot touch local branches."
+  - title: Remote-tracking refs are a cache
+    detail: "`origin/main` records the last fetch or push, not the server's live state. `--force-with-lease` compares against it, so a stale fetch weakens the lease."
+  - title: Force-with-lease
+    detail: "Refuses the push if the remote ref no longer matches your tracking ref. Add `--force-if-includes` to also require that your branch contains the remote tip it replaces."
+  - title: Three reset modes
+    detail: "`--soft` moves the branch only, `--mixed` also resets the index, `--hard` also resets the working tree and destroys uncommitted edits."
+  - title: Annotated vs lightweight tags
+    detail: "Annotated tags are objects with tagger, message and optional signature; `git describe` ignores lightweight tags by default. `v1.4.0^{}` peels to the commit."
+  - title: Reflog is local and temporary
+    detail: "Every ref move is logged locally, default 90 days for reachable and 30 for unreachable entries. It is never pushed, so it cannot recover a colleague's lost commit."
+  - title: Changed-path filters vs required checks
+    detail: "A workflow skipped by `paths:` reports nothing, so a required check with that name stays pending and blocks the PR. Required workflows must always run."
+
+traps:
+  - "During a rebase, `--ours` is the upstream branch and `--theirs` is your own commit — the opposite of a merge, and a silent way to keep the wrong code."
+  - "Using `--force-with-lease` without fetching first: the lease compares against a stale tracking ref, so it can overwrite a colleague's new commit."
+  - "Believing `git reset --hard` deletes commits. It moves a ref; only `git gc` after reflog expiry removes the objects."
+  - "Deleting a large file in a new commit and expecting clones to shrink. The blob stays reachable from history until a rewrite or LFS migration."
+  - "Squash-merging a PR and then continuing on the same branch: your local commits are not ancestors of `main`, so the next PR re-sends them."
+  - "Assuming a `git push` sends tags, or that moving a published tag is harmless — image labels, lockfiles and submodule pointers may already reference it."
+
+advanced:
+  - "`git rebase --onto main old-base feature` replays only the commits after `old-base`, which is how you drop a prefix of a branch without interactive editing."
+  - "`git range-diff old...tip new...tip` matches two versions of a series commit by commit — the correct review tool after a rebase."
+  - "Rebasing or cherry-picking invalidates commit signatures: the new commit has a new hash and no signature unless it is re-signed."
+  - "Reverting a merge with `-m 1` is remembered only as a normal commit; re-merging the branch does nothing, so restoring it requires reverting the revert."
+  - "`git commit-graph write --reachable` is usually the largest performance win on a long history, because ancestry queries stop walking objects."
+  - "`git filter-repo` rewrites every hash; every clone must be re-cloned or hard-reset, or it will re-push the old objects on the next push."
+
+comparisons:
+  - a: merge
+    b: rebase
+    difference: "Merge preserves history and hashes with a two-parent commit; rebase produces a linear history of new commits and requires a force-push to publish."
+  - a: fetch
+    b: pull
+    difference: "Fetch only updates remote-tracking refs; pull also integrates, merging or rebasing according to `pull.rebase` and `pull.ff`."
+  - a: reset
+    b: revert
+    difference: "Reset moves the branch and rewrites local history; revert adds an inverse commit, which is safe on shared branches."
+  - a: annotated tag
+    b: lightweight tag
+    difference: "Annotated tags are objects with tagger, date and message and are used by `git describe`; lightweight tags are bare refs, suitable only locally."
+  - a: submodule
+    b: subtree
+    difference: "Submodule pins a commit in a separate repository and needs init/update; subtree copies the code and history into the parent with no consumer tooling."
+  - a: squash merge
+    b: merge commit
+    difference: "Squash produces one linear commit and loses intra-PR history; a merge commit preserves every commit and the branch topology."
+  - a: cache
+    b: artifact
+    difference: "A cache is keyed, immutable and best-effort for reusing dependencies; an artifact is a named output with retention, used to pass files between jobs."
+
+commands:
+  - label: Inspect what a commit really contains
+    code: git cat-file -p HEAD^{tree}
+  - label: Read the graph with branch labels
+    code: git log --oneline --graph --decorate --all
+  - label: Unstage without losing the edit
+    code: git restore --staged .
+  - label: Update a feature branch without a merge commit
+    code: git fetch origin && git rebase origin/main
+  - label: Publish a rewritten branch safely
+    code: git push --force-with-lease --force-if-includes origin HEAD
+  - label: Find and restore a lost commit
+    code: git reflog && git branch recovered <sha>
+  - label: Automate a regression search
+    code: git bisect start HEAD v1.3.0 && git bisect run ./scripts/repro.sh
+  - label: Derive a version from the nearest tag
+    code: git describe --tags --always --dirty

@@ -1,0 +1,79 @@
+concepts:
+  - title: 100-byte file header
+    detail: The file begins with `SQLite format 3`; page size sits at offset 16, the WAL flag at 18–19, the page count at 28, the freelist at 32–36, `user_version` at 60 and `application_id` at 68.
+  - title: Rowid alias
+    detail: An `INTEGER PRIMARY KEY` column is not an indexed column — it is the b-tree key itself, so a lookup is one descent. Any other primary key costs a second b-tree.
+  - title: Storage class vs affinity
+    detail: Values are NULL, INTEGER, REAL, TEXT or BLOB; the declared type only chooses one of five affinities that coerce on write and on comparison. NUMERIC turns `'500.0'` into the integer 500.
+  - title: Rollback journal
+    detail: Original page images are written to `-journal` before modification, and commit means deleting it. A writer needs EXCLUSIVE at the end, so a long reader delays every commit.
+  - title: WAL frame
+    detail: A 24-byte frame header plus a page image, appended to `-wal`. A commit is a frame with a non-zero database-size field; recovery replays to the last valid commit.
+  - title: Snapshot and checkpoint
+    detail: WAL readers hold the last committed frame at their first read. A checkpoint cannot recycle frames a reader still needs, so one long reader grows the WAL indefinitely.
+  - title: BEGIN IMMEDIATE
+    detail: Takes the write lock before the read, turning a mid-transaction `SQLITE_BUSY_SNAPSHOT` failure into a wait at `BEGIN`. Mandatory for counters, queue claims and balances.
+  - title: BUSY_SNAPSHOT
+    detail: A deferred transaction that read, then tried to write after another commit. The busy handler is not invoked; the transaction must roll back and retry from the start.
+  - title: sqlite_stat1
+    detail: ANALYZE stores the row count plus the average rows per distinct prefix for each index, as in `50000 25 1`. No histograms and no most-common-values list, so skewed data produces bad plans silently.
+  - title: Covering index
+    detail: An index holding every column the query reads, including the implicit rowid. `EXPLAIN QUERY PLAN` says `USING COVERING INDEX`; there is no `INCLUDE` clause, you widen the key.
+  - title: WITHOUT ROWID
+    detail: The declared primary key becomes the table key, removing the secondary index. Wins on composite keys and small rows; loses on wide rows and random inserts.
+  - title: FTS5 external content
+    detail: Declaring `content='docs', content_rowid='id'` stores only the inverted index; triggers mirror changes and `'rebuild'` repairs after a bulk load. The `'delete'` command must receive the old column values.
+  - title: Generated column
+    detail: A `GENERATED ALWAYS AS (expr)` column is VIRTUAL by default and computed on read; STORED is computed on write and cannot be added by `ALTER TABLE`. Deterministic expressions only, no subqueries, never part of a primary key.
+  - title: Durability in WAL
+    detail: With `synchronous=NORMAL`, commits fsync only at checkpoint — they survive an application crash and may be lost on power loss, but the file cannot be corrupted. FULL fsyncs every commit.
+traps:
+  - Thinking `cp app.db` is a backup. In WAL mode the recent commits are in `app.db-wal`; copying only the main file gives a stale snapshot, and copying all three non-atomically can give a torn one.
+  - Believing WAL mode allows concurrent writers. It allows concurrent readers; writers are still serialized by a single write lock.
+  - Declaring a column `NUMERIC` or `DECIMAL` for money and expecting fixed-point storage. NUMERIC affinity converts `'500.0'` to the integer 500, and REAL cannot represent cents exactly.
+  - Assuming foreign keys are enforced. `PRAGMA foreign_keys` is off by default, is per connection, and is a no-op inside a transaction.
+  - Expecting an index on `(a, b)` to serve `WHERE b = ?`. Only a leftmost prefix of the key is usable.
+  - Expecting `LIKE 'abc%'` to use a plain index. Default LIKE is case-insensitive, so it needs a `COLLATE NOCASE` index; `GLOB 'abc*'` is case-sensitive and does use a BINARY index.
+advanced:
+  - A column declared `INTEGER PRIMARY KEY DESC` is not a rowid alias. The DESC suffix creates a separate unique index and a hidden rowid, so `rowid` and the declared key diverge.
+  - The busy handler is skipped for lock-upgrade deadlocks and for `SQLITE_BUSY_SNAPSHOT`. Retrying the statement is pointless; the transaction has to restart.
+  - Without `AUTOINCREMENT`, SQLite may reuse the highest rowid after deletion, and once a rowid reaches 9223372036854775807 new rowids are chosen at random and can collide with existing rows.
+  - WAL requires a `-shm` shared-memory file with coherent mmap and advisory locks, which is why it must not be used on NFS or SMB. Rollback mode is not safe there either, just less obviously broken.
+  - Running `PRAGMA optimize` with `analysis_limit` is the current replacement for blanket `ANALYZE`: it only touches tables the connection actually queried, and bounds the rows sampled per index.
+  - A partial index is used only when the query predicate provably implies its `WHERE` clause. `status = 'pending'` qualifies; `status IN (...)` and a parameterised `status = ?` do not.
+comparisons:
+  - a: Rollback journal
+    b: WAL
+    difference: The journal copies original pages and needs an exclusive lock at commit, so readers delay writers; WAL appends frames and lets readers keep a snapshot, so they do not block each other — but WAL needs shared memory and checkpoints.
+  - a: BEGIN
+    b: BEGIN IMMEDIATE
+    difference: Deferred takes no lock until the first statement and can fail with `BUSY_SNAPSHOT` mid-transaction; IMMEDIATE takes the write lock up front, so contention becomes a bounded wait.
+  - a: VACUUM
+    b: VACUUM INTO
+    difference: VACUUM rebuilds in place and holds a write lock for the whole rebuild; VACUUM INTO writes a consistent compacted copy to a new file while the original stays usable.
+  - a: rowid table
+    b: WITHOUT ROWID
+    difference: A rowid table is keyed by an implicit integer and needs a separate index for any other primary key; WITHOUT ROWID makes the declared key the table key, saving one b-tree but enlarging the key stored in every page.
+  - a: SQLite
+    b: PostgreSQL
+    difference: Embedded, zero-ops and single-writer versus a server with concurrent writers, row locks, replication, roles and extensions. SQLite wins on operational simplicity, Postgres on concurrency and scale-out.
+  - a: SQLite
+    b: DuckDB
+    difference: Row-oriented with per-row b-trees and many small transactions versus columnar with vectorised scans. SQLite for OLTP and point lookups, DuckDB for aggregations over millions of rows — and DuckDB can read a SQLite file directly.
+commands:
+  - label: Production pragmas, once per connection
+    code: "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA temp_store=MEMORY;"
+  - label: Page and freelist accounting
+    code: "SELECT (SELECT * FROM pragma_page_count()) AS pages, (SELECT * FROM pragma_freelist_count()) AS free, (SELECT * FROM pragma_page_size()) AS page_size;"
+  - label: Space used per table and index
+    code: "SELECT name, count(*) AS pages, sum(pgsize)/1024 AS kib FROM dbstat GROUP BY name ORDER BY 3 DESC;"
+  - label: Read a query plan
+    code: "EXPLAIN QUERY PLAN SELECT * FROM orders WHERE customer_id=17 ORDER BY created_at DESC LIMIT 50;"
+  - label: Refresh statistics cheaply
+    code: "PRAGMA analysis_limit=400; PRAGMA optimize;"
+  - label: Consistent backup while running
+    code: "VACUUM INTO '/backups/app-' || strftime('%Y%m%dT%H%M%S','now') || '.db';"
+  - label: Verify a database or backup
+    code: "PRAGMA integrity_check; PRAGMA foreign_key_check; PRAGMA quick_check;"
+  - label: Repair an external-content FTS5 index
+    code: "INSERT INTO docs_fts(docs_fts) VALUES('rebuild'); INSERT INTO docs_fts(docs_fts) VALUES('integrity-check'); INSERT INTO docs_fts(docs_fts) VALUES('optimize');"

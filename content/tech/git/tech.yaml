@@ -1,0 +1,137 @@
+slug: git
+title: Git & GitHub
+category: version-control-apis
+summary: The object model and DAG underneath Git, the history-editing and branching workflows teams actually run, and how GitHub turns all of it into review, CI and releases.
+level: core
+relations:
+  - to: cicd
+    type: foundation
+    note: Every CI system is triggered by a ref change. Branches, tags, merge commits and shallow clones decide what a pipeline builds and what it can cache.
+  - to: linux
+    type: complements
+    note: Git is a POSIX command-line tool with a content-addressed store in .git; shell fluency, file modes, symlinks and line endings all show up in its behaviour.
+  - to: docker
+    type: complements
+    note: Build contexts, .dockerignore and layer caching mirror Git's ignore rules and working-tree semantics; CI images are usually built from a tag.
+intro:
+  what: |
+    Git is a distributed version control system built on a single idea: store every version of
+    every file as an immutable object addressed by the hash of its contents, then let named
+    references (branches, tags, `HEAD`) point into the resulting graph. A commit is not a diff.
+    It is a snapshot of a tree plus a pointer to its parents, which makes history a directed
+    acyclic graph that can be walked, compared, copied and rewritten.
+
+    Practically, Git is three things layered on that model: a content store you can inspect with
+    plumbing commands, a staging area that lets you compose the next snapshot deliberately, and a
+    distributed protocol for exchanging objects and refs between repositories. GitHub adds a
+    hosted remote on top — pull requests, review, protected branches, Actions runners, releases —
+    but every button maps back to a ref update or an object exchange.
+
+    Interviewers rarely ask you to recite commands. They ask what a command does to the graph:
+    which commits are created, which refs move, what becomes unreachable, and what a colleague
+    will see after you push.
+  why: |
+    Version control exists because code is edited by several people over years, and the questions
+    that matter are historical: what changed, why, who reviewed it, what shipped, and how do we
+    undo it without losing anyone's work. Centralised systems answered those questions with a
+    server and a lock; Git answered them with an offline-capable graph, cheap branching and
+    content hashing.
+
+    Cheap branches changed engineering practice. When a branch costs a pointer instead of a
+    directory copy, feature branches, pull-request review, release branches, bisection and
+    experiment-and-throw-away become normal. The cost moved from creating branches to merging
+    them, which is why merge strategy, rebase policy and review design are the parts teams argue
+    about.
+
+    Git also became the substrate for everything downstream: CI triggers, deployment gates,
+    infrastructure-as-code review, changelog generation and supply-chain provenance all read the
+    commit graph. A team with a messy graph pays for it in every one of those systems.
+  problems:
+    - Record every change with authorship, time and intent, without a central lock.
+    - Let many people edit the same codebase concurrently and merge work predictably.
+    - Find the commit that introduced a bug, and revert it without hand-editing files.
+    - Reproduce any past state of the tree exactly, by hash.
+    - Review changes before they land, with discussion attached to the exact lines.
+    - Automate builds, tests and releases from ref changes.
+  where_used:
+    - Application and infrastructure source code, including Kubernetes manifests and Terraform.
+    - CI/CD pipelines on GitHub Actions, GitLab CI, Jenkins and Buildkite.
+    - Release management: tags, changelogs, versioned artefacts and hotfix branches.
+    - Data and platform repositories holding dbt models, SQL, Airflow DAGs and config.
+    - Documentation, runbooks and internal tooling kept next to the code they describe.
+  ecosystem: |
+    Git is the transport and the source of truth; GitHub is one hosting layer among several.
+    Actions consumes refs and produces artefacts; container registries tag images with commit
+    SHAs; issue trackers link commits to tickets; observability tools annotate deploys with
+    versions. The commit graph is the join key across all of them, which is why object names,
+    tags and merge policy are worth understanding rather than memorising as trivia.
+
+    Neighbouring tools specialise: `gh` for the GitHub API, `pre-commit` for local hooks,
+    `git-lfs` for large binaries, `git-filter-repo` for history rewriting and `git-cliff` or
+    `release-please` for changelogs. Each one is a thin layer over the same object store.
+  alternatives:
+    - name: Mercurial
+      note: Similar distributed model, simpler history rewriting, far smaller hosting ecosystem today.
+    - name: Subversion
+      note: Centralised with path-based locking; still found in enterprises with large binary assets.
+    - name: Perforce
+      note: Handles very large binaries and monorepos well, at the cost of a central server.
+    - name: Jujutsu
+      note: Git-compatible client with first-class conflict tracking and undoable operations.
+related: [linux, cicd, docker]
+chapters:
+  - id: objects-refs-dag
+    title: "Objects, Refs and the Commit DAG"
+    file: chapters/01-objects-refs-dag.md
+    minutes: 13
+    level: core
+  - id: commits-staging-history
+    title: "Commits, Staging and History Surgery"
+    file: chapters/02-commits-staging-history.md
+    minutes: 14
+    level: core
+  - id: branching-models
+    title: "Branching Models and Merge Strategies"
+    file: chapters/03-branching-models.md
+    minutes: 12
+    level: core
+  - id: conflicts
+    title: "Conflicts and the Resolution Workflow"
+    file: chapters/04-conflicts.md
+    minutes: 12
+    level: core
+  - id: remotes
+    title: "Remotes, Tracking and Fetch vs Pull"
+    file: chapters/05-remotes.md
+    minutes: 13
+    level: core
+  - id: github-collaboration
+    title: "GitHub Collaboration: PRs, Reviews and Protection"
+    file: chapters/06-github-collaboration.md
+    minutes: 13
+    level: core
+  - id: github-actions
+    title: "GitHub Actions as CI"
+    file: chapters/07-github-actions.md
+    minutes: 14
+    level: core
+  - id: releases
+    title: "Releases, Tags, Semantic Versioning and Changelogs"
+    file: chapters/08-releases-tags-semver.md
+    minutes: 12
+    level: core
+  - id: monorepos
+    title: "Monorepos, Submodules and Large Files"
+    file: chapters/09-monorepos-submodules-lfs.md
+    minutes: 13
+    level: advanced
+  - id: recovery-hygiene
+    title: "Recovery, Bisection and Repository Hygiene"
+    file: chapters/10-recovery-hygiene.md
+    minutes: 13
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

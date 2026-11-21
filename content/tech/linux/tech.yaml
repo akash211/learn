@@ -1,0 +1,147 @@
+slug: linux
+title: Linux Server Administration
+category: cloud-infrastructure
+summary: Boot, systemd, processes, storage, networking, logs, patching and SSH on a real server — the operational layer everything else is built on.
+level: core
+relations:
+  - to: bash
+    type: uses
+    note: Every operational task in this module is expressed as shell — pipes over `/proc`, loops across units, exit codes in a runbook script.
+  - to: docker
+    type: foundation
+    note: Containers are namespaces, cgroups, capabilities and a root filesystem — all kernel features administered here, which is why container debugging is Linux debugging with fewer tools.
+  - to: kubernetes
+    type: foundation
+    note: Nodes are Linux hosts; kubelet runs as a systemd unit, container logs land in journald, and cgroup v2 pressure and conntrack limits decide whether a node stays Ready.
+  - to: ansible
+    type: uses
+    note: Configuration management is the industrial form of the manual runbook — the same files, permissions and services, applied idempotently across a fleet.
+  - to: terraform
+    type: complements
+    note: Terraform creates the host, its disks and its network; everything after first boot — users, mounts, services, patching — is this module's territory.
+intro:
+  what: |
+    Linux server administration is the practice of keeping a machine that nobody is looking at
+    healthy: it boots, it runs its services, it has storage headroom, it can be reached, it logs what
+    happened, and it is patched. The tooling is small and stable — `systemctl`, `journalctl`, `ip`,
+    `ss`, `nft`, `lvs`, `ps` — but each one encodes a model, and the model is what makes an unfamiliar
+    host legible.
+
+    This module works through the operating system in the order failures appear: boot and systemd,
+    processes and cgroups, filesystems and LVM, identity and permissions, networking, logs, package
+    management, performance triage, SSH, and finally the security posture and routine checks that hold
+    all of it together. Every chapter is written against real commands and real file paths on
+    Debian/Ubuntu and RHEL-family hosts, and notes where the two diverge.
+
+    The unifying idea is that Linux exposes almost all of its state as files and counters, so
+    diagnosis is reading, not guessing. A hung process is a `D` state in `/proc/<pid>/stat`; memory
+    pressure is `si/so` in `vmstat` and `full avg10` in `/proc/pressure/memory`; a packet that never
+    arrived is a missing `established,related` rule in `nft list ruleset`. Learn where the kernel
+    writes the answer and most incidents collapse into a two-minute check.
+  why: |
+    Almost every higher layer assumes this one. A container that will not start is a cgroup limit or a
+    missing capability; a Kubernetes node that goes NotReady is usually disk pressure, conntrack
+    exhaustion or an expired certificate; a deploy that fails is often a full `/var` or a service that
+    never reloaded its config. Engineers who only know the orchestrator spend their incidents working
+    around a host they cannot read.
+
+    The failure modes are also remarkably stable, which makes the knowledge compound. A server that
+    reboots into `emergency.target` because of an `fstab` typo, an OOM kill blamed on a memory leak, an
+    `authorized_keys` file with the wrong mode, a journal that was never persistent so the crash
+    evidence is gone — the same dozen causes account for most of the pages. Each one has a specific
+    check and a specific fix, and knowing them is the difference between a maintenance window and an
+    outage.
+  problems:
+    - Get a host to boot predictably, and recover it when it does not.
+    - Supervise services with restart policy, ordering, limits and clean signal handling.
+    - Keep storage from filling, and grow it online when it does.
+    - Control who can log in, what they can run, and prove it afterwards.
+    - Make the network reachable and closed in exactly the intended places.
+    - Retain enough log history to explain an incident that already happened.
+    - Patch continuously without turning every kernel update into an event.
+    - Find the saturated resource in minutes instead of guessing.
+  where_used:
+    - Cloud VMs and bare-metal hosts — the substrate under every managed service.
+    - Kubernetes nodes, where kubelet, containerd and the CNI all run as systemd units.
+    - Database and cache servers, where memory, mount options and file-descriptor limits are tuning parameters.
+    - Build and CI runners, which are Linux hosts with an unusual I/O and process profile.
+    - Appliances and edge devices, where the same tools run with no distribution support behind them.
+    - Incident response, where host forensics starts with `ps`, `ss`, `last` and the journal.
+  ecosystem: |
+    Linux is the layer that everything else in this library sits on. Bash is how you drive it;
+    Docker and Kubernetes are its namespaces, cgroups and capabilities packaged for application
+    delivery; Ansible applies the same files and units across a fleet; Terraform creates the machine
+    and its block devices but stops at the login prompt. Postgres, Python services and CI runners all
+    inherit their limits, mounts and log destinations from the settings in this module.
+
+    The practical consequence is leverage: a change here affects everything above it. Raising
+    `LimitNOFILE` fixes a connection-refused bug in an application, setting `noatime` changes write
+    volume for a database, and a `nofail` on a data mount decides whether a reboot is survivable. That
+    is also the risk — the blast radius of a host-level change is the whole host, which is why the
+    runbook discipline in the last chapter matters as much as the commands.
+  alternatives:
+    - name: Windows Server
+      note: The same role with a different administration model; common in mixed estates and for AD-centric workloads.
+    - name: FreeBSD
+      note: Predictable release engineering and ZFS/jails; smaller ecosystem and less third-party support.
+    - name: Container-optimised and immutable distros (Flatcar, Bottlerocket, Fedora CoreOS)
+      note: Shrink the mutable surface by making the OS image the unit of change; you still debug them with these tools.
+    - name: Managed platform services
+      note: Remove host administration entirely at the cost of control over kernel, storage and tuning.
+related: [bash, docker, kubernetes, ansible, terraform]
+chapters:
+  - id: boot-and-systemd
+    title: Boot, Bootloaders and systemd Service Management
+    file: chapters/01-boot-and-systemd.md
+    minutes: 14
+    level: core
+  - id: processes-signals-cgroups
+    title: Processes, Signals, Scheduling and cgroups
+    file: chapters/02-processes-signals-cgroups.md
+    minutes: 14
+    level: core
+  - id: filesystems-mounts-lvm
+    title: Filesystems, Mounts, Disks and LVM
+    file: chapters/03-filesystems-mounts-lvm.md
+    minutes: 13
+    level: core
+  - id: users-permissions-sudo-pam
+    title: Users, Groups, Permissions, sudo and PAM
+    file: chapters/04-users-permissions-sudo-pam.md
+    minutes: 13
+    level: core
+  - id: networking
+    title: Networking — Addressing, DNS, Sockets and Firewalls
+    file: chapters/05-networking.md
+    minutes: 14
+    level: core
+  - id: logs-journald
+    title: Logs, journald and Log Retention
+    file: chapters/06-logs-journald.md
+    minutes: 11
+    level: core
+  - id: package-management-patching
+    title: Package Management and Patching
+    file: chapters/07-package-management-patching.md
+    minutes: 13
+    level: core
+  - id: performance-triage
+    title: Performance Triage — Load, CPU, Memory and I/O
+    file: chapters/08-performance-triage.md
+    minutes: 14
+    level: advanced
+  - id: ssh-hardening
+    title: SSH Hardening and Key Management
+    file: chapters/09-ssh-hardening.md
+    minutes: 13
+    level: advanced
+  - id: security-posture-runbook
+    title: Security Posture and the Routine Ops Runbook
+    file: chapters/10-security-posture-runbook.md
+    minutes: 14
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

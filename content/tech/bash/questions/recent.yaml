@@ -1,0 +1,344 @@
+- id: bash-recent-001
+  topic: error handling
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: Why is `set -Eeuo pipefail` the standard header rather than just `set -e`, and what does each flag actually buy?
+  answer: |
+    `-e` exits on an untested failure, `-u` turns an unset variable into an error instead of an
+    empty string, and `pipefail` makes a pipeline fail if any stage fails. Those three are the
+    "stop lying to me" set.
+
+    `-E` (errtrace) is the one interviewers probe, because it does nothing visible until you add a
+    trap. Without `-E`, an `ERR` trap is not inherited by functions, subshells or command
+    substitutions, so an error inside `do_work()` exits the script with a bare status and no line
+    number. With it, the handler fires and `$LINENO`/`$BASH_COMMAND` tell you where.
+
+    With `-u`, required inputs get `${VAR:?message}` and optional ones `${VAR:-default}`; otherwise
+    the first unset reference aborts at the exact line, which is what you want.
+
+    Two additions people make: `shopt -s inherit_errexit` (bash 4.4+) so `-e` also applies inside
+    `$(...)`, and `IFS=$'\n\t'` so accidental splitting ignores spaces. Neither replaces quoting.
+  tags: [strict-mode, errexit, errtrace, pipefail]
+
+- id: bash-recent-002
+  topic: pipelines
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: Under `set -euo pipefail`, why does `producer | head -n 1` sometimes abort the script, and how do you fix it properly?
+  answer: |
+    Because `head` exits after the first line, closing the pipe. The producer's next write gets
+    SIGPIPE, so it dies with status 141. Without `pipefail` that is invisible — the pipeline's
+    status is `head`'s 0. With `pipefail`, the pipeline reports 141 and `set -e` aborts.
+
+    It is intermittent: whether the producer writes again depends on whether its output fits in the
+    pipe buffer (64 KiB by default). A small output "works", a large one fails — the classic
+    flaky-CI shell bug.
+
+    Fixes, in order of preference:
+
+    1. Avoid the pipe: `read -r first < <(producer)` reads one line and the producer ends normally.
+    2. Capture once, then process: `out=$(producer); first=${out%%$'\n'*}`.
+    3. Accept the truncation deliberately for that one pipeline, with a comment:
+       `producer | head -n1 || [[ ${PIPESTATUS[0]} -eq 141 ]]`.
+
+    Do not remove `pipefail` globally and do not sprinkle `|| true` — that hides the real failures
+    the flag exists to catch. The same trap applies to `grep -q`, which also exits early.
+  tags: [sigpipe, pipefail, head, flaky-ci]
+
+- id: bash-recent-003
+  topic: error handling
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: A script has `set -euo pipefail` yet continues past a failed command. Where do you look first?
+  answer: |
+    Start with the three masking patterns, in this order:
+
+    1. **`local x=$(cmd)`** — the status is `local`'s, which is 0, so the failure vanishes. Same for
+       `declare`, `export`, `readonly`. Fix: `local x; x=$(cmd)` on two lines.
+    2. **A function used as a condition** — `if do_work; then` disables `-e` for the whole body of
+       `do_work`, not just the test, so later failures inside it continue. Fix: explicit
+       `cmd || return 1` inside the function.
+    3. **A pipeline without the failing stage last** — `cmd | tee log` reports `tee`'s status; the
+       header's `pipefail` covers this, but a nested `bash -c` or a subshell may not inherit the
+       option.
+
+    Other candidates: a background job (`cmd &` is never checked — you must `wait` and test),
+    arithmetic returning 0 (`(( i++ ))` when `i` was 0), and a command inside `$(...)` whose status
+    is discarded.
+
+    `bash -x` with `PS4='+$LINENO: '` shows exactly which line succeeded unexpectedly, which is
+    faster than reading the script for the fourth time.
+  tags: [errexit, debugging, local, subshell]
+
+- id: bash-recent-004
+  topic: containers
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: Why does a container running a shell entrypoint take 30 seconds to stop, and what is the fix?
+  answer: |
+    Because PID 1 in the container is the shell, and the shell does not forward signals to its
+    children. `docker stop` sends SIGTERM to PID 1 (the script), the script is blocked in a
+    foreground `wait`/`sleep`/child process, so the trap runs only after that command completes —
+    and after the grace period Docker sends SIGKILL. The app never sees TERM and never shuts down
+    cleanly.
+
+    Two fixes, often combined:
+
+    - **`exec "$@"`** at the end of the entrypoint. `exec` replaces the shell with the real process,
+      so PID 1 is the app, signals arrive directly, and the exit status propagates. This is the
+      single most valuable line in an entrypoint.
+    - If work must happen before the app starts, run it, then `exec`. If the script must stay
+      (multiple children, log multiplexing), trap and forward:
+      `trap 'kill -TERM "$child"; wait "$child"; exit 143' TERM`, having started the app with `&`.
+
+    Also consider `tini`/`dumb-init` as PID 1 for reaping zombies, and confirm the app itself
+    handles TERM — many runtimes install their own handler.
+  tags: [containers, signals, entrypoint, exec]
+
+- id: bash-recent-005
+  topic: portability
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: Your script works locally but fails in a `FROM alpine` image with "not found". What is happening?
+  answer: |
+    Almost always a missing interpreter or a musl/glibc mismatch, not a missing file.
+
+    Alpine ships `busybox ash` for `/bin/sh` and **no bash** at all. A script with
+    `#!/usr/bin/env bash` therefore fails with `bash: not found`, and `#!/bin/bash` gives
+    "no such file or directory" — the kernel is reporting the missing interpreter, not the script.
+
+    Options:
+
+    1. Install bash: `RUN apk add --no-cache bash` — explicit, adds ~10 MB.
+    2. Rewrite to POSIX: `#!/bin/sh`, no `[[ ]]`, no arrays, no `local` assumptions, no
+       `${v//a/b}`, no `pipefail` (ash has no equivalent), so error handling must be explicit
+       `|| exit`.
+    3. Use a distroless or debian-slim base where bash exists.
+
+    Related failures: a dynamically linked binary built against glibc will not run on musl
+    (`not found` again, because its loader is missing), and `sed -i`, `grep -P`, `sort -h` and
+    `readlink -f` behave differently in busybox. Reproduce in the target image, not on the host.
+  tags: [alpine, busybox, posix, containers]
+
+- id: bash-recent-006
+  topic: idempotency
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: How do you make a bootstrap or deploy script safe to run twice?
+  answer: |
+    Make every step "check, then act", and prefer the flag that already means "make it so":
+
+    ```bash
+    mkdir -p /srv/app/logs
+    ln -sfn /opt/app/releases/"$VER" /srv/app/current
+    id -u app >/dev/null 2>&1 || useradd -m -s /bin/bash app
+    grep -qxF 'export PATH=/opt/bin:$PATH' /etc/profile.d/app.sh || echo ... >> /etc/profile.d/app.sh
+    ```
+
+    Three specific hazards:
+
+    - `ln -sf` without `-n` links *into* an existing symlinked directory, producing
+      `current/current` on the second run. `-snf` is the correct form.
+    - Appending to a config file duplicates lines unless guarded by a `grep -qxF` check.
+    - `useradd` fails on the second run; either tolerate the specific "already exists" failure or
+      test with `id` first.
+
+    For anything that rewrites a file, write to a temp file in the same directory and `mv` it into
+    place — atomic, and a second run simply produces the same content. For destructive steps, add
+    `--dry-run`.
+
+    The test: run the script twice in a clean container and diff the resulting filesystem state.
+  tags: [idempotency, bootstrap, symlinks, dry-run]
+
+- id: bash-recent-007
+  topic: concurrency
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: A cron job occasionally overlaps itself and corrupts an output file. What is the right fix?
+  answer: |
+    Take a lock that is released by the kernel when the process dies, rather than a PID file:
+
+    ```bash
+    exec 9>/var/lock/report.lock
+    flock -n 9 || { echo "already running" >&2; exit 0; }
+    ```
+
+    `flock` holds the lock for the lifetime of the open file descriptor, so it is released on normal
+    exit, on error, and on `kill -9` — no stale-lock cleanup, no PID reuse problem. `-n` fails
+    immediately instead of queueing (right for cron); `-w 30` waits, which is right when a second
+    run should eventually happen.
+
+    A PID file has both failure modes at once: the file survives `kill -9`, and the PID may be
+    reused by an unrelated process, so `kill $(cat app.pid)` can kill the wrong thing. If you must
+    use one, verify liveness *and* identity: `ps -p "$pid" -o cmd=` against the expected command
+    line, or store the process start time from `ps -o lstart=`.
+
+    Belt and braces: write output via temp file + `mv`, so even a racing run cannot leave a
+    half-written file. Also `set -o noclobber` for the lock file itself if creating it must be
+    exclusive.
+  tags: [flock, cron, locking, atomic-write]
+
+- id: bash-recent-008
+  topic: logging
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: How should a shell script log, and why is logging to stdout a bug in most scripts?
+  answer: |
+    stdout is the script's data channel. If a caller does `result=$(./fetch.sh)` or
+    `./dump.sh | gzip > x.gz`, anything you print to stdout corrupts the payload. Logs belong on
+    stderr:
+
+    ```bash
+    log() { printf '%s %-5s %s\n' "$(date -u +%FT%TZ)" "$1" "${*:2}" >&2; }
+    log INFO "starting, 3 targets"
+    log ERROR "upload failed rc=$rc for $key"
+    ```
+
+    Properties worth having: RFC 3339 UTC timestamps (sortable across hosts), one line per event
+    (`tr '\n' ' '` any external output first, or multi-line stack traces break log parsing), the
+    level as a fixed-width token for `grep`, and the failing key plus exit status in error lines.
+
+    Never log secrets. `set -x` prints expanded arguments, so a token passed to `curl` lands in the
+    log; redirect the trace with `BASH_XTRACEFD` or disable tracing around that call. Under
+    Kubernetes, stdout/stderr is the log pipe, so stderr is still captured — the distinction is
+    about the *script's* contract with its caller, not about visibility.
+
+    End with one summary line (`synced 14/14 in 32s`) so the last line is the outcome.
+  tags: [logging, stderr, secrets, observability]
+
+- id: bash-recent-009
+  topic: testing
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: How do you test shell scripts in CI, and what does shellcheck catch that tests do not?
+  answer: |
+    Three layers, all cheap:
+
+    1. **Syntax**: `bash -n script.sh` — parses without executing, catches unbalanced quotes and
+       blocks before anything runs.
+    2. **Static analysis**: `shellcheck -x script.sh` in CI, failing on warnings. It catches unquoted
+       expansions (SC2086), `local x=$(cmd)` (SC2155), `cat file | cmd` (SC2002), unquoted `$@`,
+       tests that will never be true (`[ "$x" = y ]` with a missing space), and unused variables. It
+       understands `source` with `-x` and can be told about `# shellcheck disable=` per line — use
+       that sparingly and with a reason.
+    3. **Behaviour**: `bats` for unit tests of functions (source the library, assert on `$output` and
+       `$status`), plus running the script itself against fixtures in a container.
+
+    Test the failure paths explicitly: missing argument, missing dependency (`command -v jq`),
+    unwritable destination, empty input. Those are the branches nobody exercises by hand and the ones
+    that run at 3 a.m.
+
+    What shellcheck cannot do: know your intent. It will not tell you that `-mtime -1` is not "last
+    24 hours", or that deleting with an empty variable is a disaster. Enable `set -u` and test with
+    `bash -x` for that.
+  tags: [shellcheck, bats, ci, static-analysis]
+
+- id: bash-recent-010
+  topic: portability
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: What breaks when you move a bash script to `#!/bin/sh`, and how do you decide which shebang to use?
+  answer: |
+    `sh` on Debian/Ubuntu is `dash`, on Alpine `busybox ash` — both POSIX, neither bash. Moving a
+    bash script there breaks on `[[ ]]`, arrays (`a=(1 2)`), `local` (unspecified, though widely
+    present), `$'...'`, herestrings `<<<`, process substitution `<(...)`, `${v//a/b}`, `${v^^}`,
+    `+=`, `source`, `function f {}`, and — importantly — `set -o pipefail`, which `dash` does not
+    implement at all.
+
+    Losing `pipefail` means `producer | consumer` reports only the consumer's status, so error
+    handling must become explicit: `producer > tmp || exit 1; consumer < tmp`.
+
+    Decision rule:
+
+    - **`#!/bin/sh`** when the script must run in a minimal image (Alpine, distroless, busybox
+      initramfs), inside `docker run` on a scratch base, or as a POSIX-portable installer. Keep it
+      under ~100 lines and check with `shellcheck -s sh` and `dash -n`.
+    - **`#!/usr/bin/env bash`** for everything else, with a `BASH_VERSINFO` check if you use bash 4
+      features (associative arrays are not in macOS's 3.2).
+
+    Do not write bash syntax under a `sh` shebang and hope: the failure appears only on the one
+    platform you did not test.
+  tags: [posix, dash, busybox, shebang]
+
+- id: bash-recent-011
+  topic: files
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: How do you update a config file or JSON payload safely, so a crash cannot leave it half-written?
+  answer: |
+    Write to a temporary file in the **same directory**, then rename over the target:
+
+    ```bash
+    tmp=$(mktemp "./.config.XXXXXX")
+    jq '.timeout = 30' config.json > "$tmp" && mv -f -- "$tmp" config.json
+    ```
+
+    `rename(2)` within one filesystem is atomic: a reader sees either the old file or the new one,
+    never a partial write. Same directory matters for two reasons — cross-device `mv` degrades to
+    copy+delete (not atomic), and the temp file inherits the directory's ownership and SELinux
+    context.
+
+    Details that make it robust:
+
+    - `mktemp` in the target directory, with the template's `X`s at the end, and a prefix beginning
+      with `.` so a stray file is hidden and clearly temporary.
+    - Check the pipeline's status: `jq ... > "$tmp"` can produce an empty file if `jq` fails; use
+      `jq ... > "$tmp" && mv ...` so a failed transform leaves the original intact.
+    - Preserve mode if the file is executable or 600: `chmod --reference=config.json "$tmp"` (GNU)
+      before the `mv`.
+    - Clean up on failure with `trap 'rm -f -- "$tmp"' EXIT`.
+
+    For "append one line if absent", atomicity needs a lock as well — a check-then-append race
+    duplicates the line.
+  tags: [atomic-write, mktemp, rename, json]
+
+- id: bash-recent-012
+  topic: processes
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: A script is supposed to run jobs in parallel and fail if any fails. What does the naive version get wrong?
+  answer: |
+    The naive version is:
+
+    ```bash
+    for j in "${jobs[@]}"; do run "$j" & done
+    wait
+    ```
+
+    Three problems. `wait` with no arguments returns 0 regardless of individual statuses, so
+    failures are lost — `set -e` does not cover background jobs at all. Unbounded parallelism can fork hundreds
+    of processes and exhaust file descriptors or memory. And output from concurrent jobs interleaves
+    into unreadable log lines.
+
+    A correct version bounds concurrency and collects statuses:
+
+    ```bash
+    pids=(); rc=0
+    for j in "${jobs[@]}"; do
+      run "$j" > "out/$j.log" 2>&1 &
+      pids+=($!)
+      (( ${#pids[@]} >= 8 )) && { wait -n; pids=("${pids[@]:1}"); }
+    done
+    for p in "${pids[@]}"; do wait "$p" || rc=1; done
+    exit "$rc"
+    ```
+
+    `wait -n` (bash 4.3+) returns when *any* child finishes, which is how you keep N in flight; each
+    job writes to its own log file to avoid interleaving. If you need per-job status rather than a
+    single flag, record it in an associative array keyed by PID inside each subshell's wrapper.
+
+    Alternative: `xargs -P N -n 1` with a wrapper that exits non-zero — it reports 123 if any
+    invocation failed.
+  tags: [parallelism, wait, background-jobs, xargs]

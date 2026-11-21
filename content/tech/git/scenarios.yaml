@@ -1,0 +1,211 @@
+- id: git-scn-001
+  title: A force-push erased a teammate's commits from a shared branch
+  technologies: [git, github]
+  difficulty: advanced
+  prompt: |
+    Two engineers share `feature/checkout-v2`. On Friday, engineer A rebases the branch onto
+    `main` and runs `git push --force`. Engineer B had pushed four commits to the same branch that
+    morning, after A's last fetch. The remote branch now points at A's rewritten history. B's
+    commits are not in it, the open PR no longer shows them, and B's local branch still has them
+    but cannot push without another force. The team's first instinct is to re-do the work by hand
+    from memory.
+  approach: |
+    Establish first that nothing is lost. A force-push moves a ref; the old commits still exist in
+    B's clone and in GitHub's object store until GC. Recovery is a ref operation, not a rewrite.
+
+    1. In B's clone, find the pre-force-push tip: `git reflog show feature/checkout-v2` or
+       `git reflog` and look for the entry before the fetch that moved `origin/...`. `git fsck
+       --unreachable` is the fallback if the reflog was expired.
+    2. Verify the commits are the expected ones: `git log --oneline <old-tip>` and
+       `git log --stat <old-tip> ^origin/feature/checkout-v2`.
+    3. Integrate rather than re-push blindly: fetch, then `git rebase --onto
+       origin/feature/checkout-v2 <old-base> <old-tip>` to replay only B's four commits onto A's
+       new history. Cherry-picking each commit is the slower equivalent.
+    4. Push with `--force-with-lease`, after a fresh fetch, and tell A to reset to the new tip.
+    5. Fix the process: protect the branch (no force-push, require PR), make "fetch before force"
+       a rule, and use `--force-with-lease --force-if-includes` rather than `--force`.
+    6. If someone had already merged the old commits elsewhere, they now have duplicates; resolve
+       by reverting the duplicates rather than rewriting more shared history.
+  red_flags:
+    - Asking B to re-type the commits without checking the reflog.
+    - Running `git gc` or `git reflog expire` during recovery.
+    - Force-pushing B's recovered branch over A's without fetching first.
+    - Concluding that force-push should be banned entirely instead of scoped to unprotected
+      branches.
+    - Blaming GitHub for "losing" commits that were never fetched into the pusher's clone.
+
+- id: git-scn-002
+  title: A production credential has been in the repository for three weeks
+  technologies: [git, github, github-actions]
+  difficulty: advanced
+  prompt: |
+    A scanner alerts on an AWS access key committed to `config/prod.env` 23 days ago. The file was
+    deleted in a later commit, but it exists in history, in three release tags, and in at least
+    forty branches and forks. The key is still active and the repository is private. The team wants
+    to "just delete the commit" and move on.
+  approach: |
+    Separate containment from cleanup, and do them in that order. History rewriting does not
+    un-leak a secret.
+
+    1. Rotate the credential immediately, then check CloudTrail (or the provider's audit log) for
+       use from unexpected principals. Revoke sessions if the key was used.
+    2. Scope the exposure: `git log --all --oneline -- config/prod.env`, `git rev-list --objects
+       --all | grep prod.env`, and check tags, forks and CI logs. Assume anything pushed to a
+       remote is public.
+    3. Freeze the repository: announce a window, pause merges, list open PRs that will need
+       rebasing.
+    4. Rewrite on a mirror clone with `git filter-repo --path config/prod.env --invert-paths`
+       (or `--replace-text` if the value appears in several files). Never rewrite a working copy
+       with uncommitted work.
+    5. Force-push all branches and tags (`git push --force --all`, `--force --tags`), then ask the
+       host to purge cached objects; a SHA-addressable object can remain fetchable otherwise.
+    6. Have every clone re-clone or hard-reset; stale clones will re-push the secret.
+    7. Prevent recurrence: secret scanning in CI and as a pre-commit hook, environment-scoped
+       credentials, OIDC instead of static keys, and `.gitignore` for env files.
+  red_flags:
+    - Rewriting history before rotating the key.
+    - Deleting the file in a new commit and calling it fixed.
+    - Rewriting only `main` and leaving tags and branches intact.
+    - Assuming a private repository means the key was not exfiltrated.
+    - Force-pushing without a freeze, leaving open PRs to reintroduce the file.
+
+- id: git-scn-003
+  title: CI on the monorepo takes 45 minutes for a one-line docs change
+  technologies: [git, github-actions]
+  difficulty: advanced
+  prompt: |
+    A repository holds a web app, an API, three shared libraries and a data pipeline. Every pull
+    request triggers the full workflow: 18 jobs, a full clone, dependency install, and the whole
+    test suite. A README typo takes 45 minutes and occupies the same runners as a database
+    migration. Developers have started batching unrelated changes to "make the CI time worth it",
+    which makes review worse. The team proposes splitting into five repositories.
+  approach: |
+    Diagnose where the time goes before changing the architecture; a monorepo is usually a CI
+    configuration problem first.
+
+    1. Measure per-job durations and queue time. `gh run view <id>` and the job timing view show
+       whether the cost is checkout, install, tests or waiting for a runner.
+    2. Fix checkout: the default `actions/checkout` is shallow but still fetches the whole tree.
+       Use `--filter=blob:none` with sparse checkout for jobs that need one package, and avoid
+       `fetch-depth: 0` unless tags or merge-base diffs are needed.
+    3. Make jobs selective: path filters or a changed-files action, ideally driven by the build
+       graph (Nx, Turborepo, Bazel) so a change to `libs/ui` rebuilds its dependents. Path filters
+       alone miss transitive dependencies.
+    4. Fix caching: key on lockfile hashes, cache the package manager's store rather than
+       `node_modules`, and never restore across incompatible tool versions.
+    5. Split the required set from the full set: lint and affected unit tests required, full
+       integration suite on a label or nightly. Keep the required path under ten minutes.
+    6. Add a merge queue so integration testing happens once per batch instead of per rebase, and
+       set job timeouts so a hung job cannot hold a runner.
+    7. Only then consider splitting the repository — and note that it trades CI cost for
+       cross-repo version coordination, which is usually more expensive.
+  red_flags:
+    - Splitting the repository as the first move.
+    - Adding `paths:` filters to required workflows, creating permanently blocked PRs.
+    - Caching `node_modules` across branches and debugging phantom dependency versions.
+    - Making everything non-required so PRs merge without tests.
+    - Running the full matrix on docs changes "for safety".
+
+- id: git-scn-004
+  title: A hotfix must ship from a release branch while main has unreleased work
+  technologies: [git, github]
+  difficulty: intermediate
+  prompt: |
+    `release/2.8` was cut from `main` two weeks ago and is what production runs. `main` has since
+    merged a large, unfinished feature behind a flag. A customer-facing bug is found in 2.8 and
+    must ship as 2.8.1 today. An engineer suggests merging `main` into `release/2.8` "so we have
+    everything", then tagging. The team also wants the fix on `main` so it is not lost in the next
+    release.
+  approach: |
+    Keep the patch release minimal and make the fix exist in both histories without dragging
+    unreleased work along.
+
+    1. Branch from the release branch: `git switch -c hotfix/2.8.1 release/2.8`.
+    2. Fix and test there; keep the commit small and self-contained. If the fix depends on a change
+       that only exists on `main`, re-implement the minimal part rather than merging `main`.
+    3. Commit, tag the release commit (`git tag -a v2.8.1 -m "2.8.1"`), and push the branch and tag
+       (`git push origin hotfix/2.8.1 v2.8.1`). Deploy from the tag, not from a moving branch.
+    4. Merge or cherry-pick the fix back to `main`: `git switch main && git cherry-pick -x <sha>`.
+       Merging the hotfix branch is fine if it contains only the fix.
+    5. Verify the fix is present on both lines: `git branch --contains <sha>` and
+       `git log --cherry-pick main...release/2.8`.
+    6. After the release, merge `release/2.8` back only if the branch contains release-only
+       changes; otherwise delete it and let the next release branch from `main`.
+  red_flags:
+    - Merging `main` into the release branch and shipping unreleased features.
+    - Tagging `main` because "the fix is in there somewhere".
+    - Fixing only the release branch and losing the fix at the next release.
+    - Cherry-picking without `-x`, making later duplicate detection harder.
+    - Force-moving the `v2.8.0` tag instead of publishing `v2.8.1`.
+
+- id: git-scn-005
+  title: The feature branch contains 87 merge commits from main
+  technologies: [git, github]
+  difficulty: intermediate
+  prompt: |
+    A feature branch has been open for five weeks. Its log shows 87 "Merge branch 'main' into
+    feature/search" commits, interleaved with 12 real commits. The PR shows 214 commits and 40
+    files, including changes the author never made. Rebasing now produces conflicts in files the
+    author did not touch, and reviewers have stopped reading. `git pull` is the team's standard
+    update command and `pull.rebase` is unset.
+  approach: |
+    Explain the cause before the fix: with `pull.rebase` unset, every `git pull` on a divergent
+    branch creates a merge commit, and each merge brings `main`'s history into the PR's commit
+    list without making the diff smaller.
+
+    1. Establish a safety point: `git branch backup/search` and note the tip hash.
+    2. Fetch, then rebase only the author's commits: `git rebase --onto origin/main <merge-base>
+       feature/search`, or use `git rebase -i origin/main` and drop the merge commits. Enable
+       `rerere` first so repeated resolutions are reused.
+    3. Resolve conflicts commit by commit, running the tests at each step; a five-week branch
+       usually has semantic conflicts that a single squash would hide.
+    4. Push with `--force-with-lease` after a fresh fetch, and ask reviewers to re-review with
+       `git range-diff` rather than from scratch.
+    5. Prevent recurrence: `git config --global pull.ff only`, so a divergent pull fails instead of
+       merging; update with `git fetch && git rebase origin/main`.
+    6. Fix the process cause: branches should live days, not weeks, and the PR should have been
+       split. Protection can require branches to be up to date, which forces frequent integration
+       but will make the merge queue or rebase discipline mandatory.
+  red_flags:
+    - Squashing 214 commits into one and losing the ability to bisect.
+    - Continuing to `git pull` during the cleanup, adding more merge commits.
+    - Force-pushing without warning reviewers or checking for others' commits on the branch.
+    - Resolving 40 files at once instead of commit by commit.
+    - Blaming Git rather than the update policy.
+
+- id: git-scn-006
+  title: A required check never runs on documentation-only pull requests
+  technologies: [git, github-actions]
+  difficulty: intermediate
+  prompt: |
+    `main` requires the "test" check before merging. The workflow has `paths-ignore: ['docs/**',
+    '**.md']` to save runner minutes. Documentation PRs now sit with "Expected — Waiting for status
+    to be reported" and cannot be merged, even though every other check is green. Re-running
+    workflows does not help. An engineer with admin rights has been merging them via a bypass,
+    which the team dislikes.
+  approach: |
+    The mechanism is specific: a workflow skipped by `paths`/`paths-ignore` (or by branch filters)
+    does not report a success or a failure, so the required check stays pending forever. There is
+    nothing to re-run.
+
+    1. Confirm the cause in the PR's checks tab: the workflow run does not exist, rather than
+       having failed. `gh pr checks` shows the expected check as pending with no run URL.
+    2. Choose a fix that keeps the required check name stable:
+       - Remove the path filter from the required workflow and make the docs case cheap inside it
+         (a job that exits early still reports success under the same name).
+       - Or keep the filter and add a companion workflow that always runs and reports the same
+         check name, with a job-level `if` that skips the expensive steps.
+    3. Do not rename the check while fixing it; protection references the name, and a rename
+       leaves PRs blocked on the old one.
+    4. Verify with a docs-only PR end to end, including the merge button becoming available without
+       a bypass.
+    5. Remove the admin-bypass habit: audit who can bypass and why, and make the bypass list
+       explicit in the ruleset rather than relying on admin rights.
+    6. Apply the same reasoning to any required workflow with `branches:` filters — the same
+       deadlock appears when a required check only runs on `main`.
+  red_flags:
+    - Telling people to re-run the workflow, which cannot create a skipped run.
+    - Removing the check from the required list for all PRs.
+    - Renaming the required check to work around the block.
+    - Making docs PRs permanently bypass-protected.
+    - Assuming a skipped job reports success because the workflow file is valid.

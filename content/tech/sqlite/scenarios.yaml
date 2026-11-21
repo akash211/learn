@@ -1,0 +1,316 @@
+- id: sqlite-scn-001
+  title: '"Database is locked" under normal traffic'
+  technologies: [sqlite, python]
+  difficulty: intermediate
+  prompt: |
+    A Python service runs four gunicorn workers against one SQLite file on local disk. Under
+    moderate load, roughly one request in fifty fails with `sqlite3.OperationalError: database is
+    locked`, and p99 latency has spikes of about five seconds that correlate with nothing in the
+    application logs. The file was created a year ago with default settings; the only pragma in the
+    codebase is `PRAGMA foreign_keys=ON`.
+
+    A developer proposes raising `busy_timeout` to 60 seconds and adding a retry decorator around
+    every query. The on-call engineer wants to know why a database with four writers is locking at
+    all.
+  approach: |
+    Start with the model: SQLite allows many readers and one writer, and the default rollback
+    journal makes a committing writer wait for every reader. Then measure before changing.
+
+    1. **Check the journal mode.** `PRAGMA journal_mode` will be `delete`. Switching to WAL is the
+       single biggest change: readers stop blocking the writer and the writer stops blocking
+       readers. `PRAGMA journal_mode=WAL` is persistent, but every connection still needs
+       `synchronous=NORMAL` and a `busy_timeout`.
+    2. **Find the long transactions.** Query `sqlite3` from the app's own instrumentation or enable
+       a progress handler; the usual culprit is a `SELECT` cursor left open while rendering a
+       response, or a `BEGIN` held across an HTTP call. In rollback mode one long reader blocks
+       every commit; in WAL mode it blocks checkpointing and the WAL grows.
+    3. **Classify the lock errors.** `SQLITE_BUSY` on a write is contention; `SQLITE_BUSY_SNAPSHOT`
+       is a deferred transaction that read, then tried to write after another commit. The second
+       is not a timeout problem — the busy handler is not invoked — and the fix is `BEGIN
+       IMMEDIATE` around every read-modify-write.
+    4. **Check for upgrade deadlocks.** Two connections holding SHARED and both trying to write
+       produce `SQLITE_BUSY` with no busy-handler retry. `BEGIN IMMEDIATE` removes the window.
+    5. **Then tune the timeout.** `PRAGMA busy_timeout=5000` per connection turns brief contention
+       into waits. 60 seconds is not a fix; it converts lock contention into thread-pool
+       exhaustion.
+    6. **Reduce write transactions.** Batch inserts into one transaction per request, use
+       `executemany`, and remove per-row commits. Fewer commits means fewer lock acquisitions and
+       fewer fsyncs.
+    7. **Verify the file is local.** Four workers on one host is fine. Four containers sharing a
+       volume over NFS is not, and WAL will corrupt the database there.
+    8. **If writes still saturate**, move to a single writer thread with a queue, or partition by
+       tenant. Four independent writers on one file is the workload SQLite is worst at.
+
+    The strong answer fixes the transaction shape and the journal mode first, and treats the
+    timeout as a cushion rather than a solution.
+  red_flags:
+    - Raising `busy_timeout` to 60 seconds and calling it fixed.
+    - Adding a retry decorator around individual statements inside an open transaction.
+    - Enabling WAL without checking whether the database lives on a network filesystem.
+    - Blaming SQLite for supporting only one writer, which is its documented model.
+    - Not distinguishing `SQLITE_BUSY` from `SQLITE_BUSY_SNAPSHOT`.
+
+- id: sqlite-scn-002
+  title: A query went from 40 ms to two seconds after a release
+  technologies: [sqlite]
+  difficulty: intermediate
+  prompt: |
+    An endpoint that lists a customer's recent orders uses:
+
+    ```sql
+    SELECT id, status, total_cents
+      FROM orders
+     WHERE customer_id = ?
+     ORDER BY created_at DESC
+     LIMIT 50;
+    ```
+
+    There is an index on `(customer_id, created_at)`. It ran in about 40 ms for two years. After a
+    release that added a `notes TEXT` column and a new index on `(status, created_at)`, p95 is two
+    seconds for every customer, and the plan shows `SCAN orders` plus `USE TEMP B-TREE FOR ORDER
+    BY`.
+
+    The release also ran a migration that rewrote the table to add the column.
+  approach: |
+    Treat it as a plan change, not a hardware problem, and confirm it with the plan rather than
+    guessing.
+
+    1. **Reproduce on a copy** with the real `customer_id`. Run `EXPLAIN QUERY PLAN` before and
+       after the migration; the difference should be visible in the first line.
+    2. **Check the index still exists and is valid.** `PRAGMA index_list(orders)` and
+       `PRAGMA index_info` confirm the index; a table rebuild that recreated the table but not its
+       indexes is a classic migration bug. Also check `sqlite_schema` for a duplicated or renamed
+       index.
+    3. **Check statistics.** The migration changed the row count and the distribution. `SELECT *
+       FROM sqlite_stat1` may be empty or stale. `PRAGMA optimize` or `ANALYZE orders` will
+       refresh it; if the plan flips back, that was the cause.
+    4. **Check the index is usable for the new query.** The `notes` column is not in the query, so
+       the index should still be covering-ish, but if the release changed `ORDER BY` to
+       `created_at DESC` with a different collation or expression, the index may no longer match.
+    5. **Look for a type change.** If the migration recreated `customer_id` as `TEXT` or lost
+       affinity, `WHERE customer_id = ?` with an integer parameter stops using the index. Check
+       `PRAGMA table_info` and `typeof(customer_id)`.
+    6. **Test the candidate fix on the copy.** Rebuilding the index (`REINDEX` or drop/create) or
+       re-running `ANALYZE` should restore `SEARCH orders USING INDEX ...` with no temp b-tree.
+       Measure the actual elapsed time rather than trusting the plan alone.
+    7. **Prevent recurrence.** Put `EXPLAIN QUERY PLAN` assertions for the top queries in CI
+       against a fixture database with realistic row counts; SQLite plans are data-dependent and a
+       three-row fixture will not catch this.
+
+    The answer should end with a measurement on the copy, not a theory about the planner.
+  red_flags:
+    - Adding an index on `created_at` without checking why the existing one stopped being used.
+    - Assuming SQLite "lost" the index and rebuilding the database from scratch.
+    - Blaming the new column for making rows wider when the plan shows a scan.
+    - Changing the query to `ORDER BY id DESC` and calling it equivalent — it is not, if ids are
+      not time-ordered.
+    - Never running `ANALYZE` after a migration.
+
+- id: sqlite-scn-003
+  title: Search stopped finding documents after a bulk import
+  technologies: [sqlite]
+  difficulty: intermediate
+  prompt: |
+    An internal document search uses an external-content FTS5 table:
+
+    ```sql
+    CREATE VIRTUAL TABLE docs_fts USING fts5(
+      title, body, content='documents', content_rowid='id', tokenize='porter unicode61'
+    );
+    ```
+
+    Triggers keep it in sync. After a migration that loaded 200,000 documents with the triggers
+    temporarily disabled, search returns nothing for the new documents, older documents still
+    match, and `SELECT count(*) FROM docs_fts` returns the old count. A re-run of the import
+    without disabling triggers took nine hours and still missed 4,000 rows.
+
+    Ranking also looks wrong: a document that mentions the term once outranks one that mentions it
+    twenty times.
+  approach: |
+    Two separate problems — index content and ranking — and the index one comes first.
+
+    1. **Confirm the index is out of sync.** `INSERT INTO docs_fts(docs_fts) VALUES('rebuild')`
+       re-reads the content table. Before running it, `SELECT count(*) FROM documents` vs
+       `SELECT count(*) FROM docs_fts` gives the gap; after it, `integrity-check` should pass.
+    2. **Explain the count.** With external content, FTS5's row count comes from the index, not the
+       content table. Rows inserted while triggers were absent were never indexed, so they are
+       invisible to `MATCH` and absent from the count. `rebuild` is the supported repair.
+    3. **Fix the import procedure.** Drop or disable the triggers, bulk insert, then `rebuild` once
+       — that is the documented pattern, not a workaround. Re-enabling triggers before the rebuild
+       is what makes the second import slow and still wrong.
+    4. **Check the tokenizer.** `porter unicode61` stems English; a search for `running` matches
+       `run`, but a search for a code identifier or a hyphenated SKU may not tokenize as the user
+       expects. `trigram` is the tokenizer for substring and identifier search.
+    5. **Investigate the ranking complaint separately.** `bm25()` returns a negative score where
+       more negative is better; `ORDER BY rank` ascending is correct. If single-occurrence
+       documents outrank repeated ones, check whether the query orders by `rank` at all, whether
+       column weights are reversed (`bm25(docs_fts, 10.0, 1.0)` weights title ten times body), and
+       whether the term appears in the title of the "wrong" document — title weight legitimately
+       beats body frequency.
+    6. **Run `'optimize'`** after the rebuild to merge segments, then re-measure latency.
+    7. **Add a post-import assertion** on `count(*)` and an `integrity-check` step to the pipeline,
+       so a silently skipped rebuild fails the job instead of the users.
+
+    The strong answer repairs with `rebuild`, changes the import to the documented sequence, and
+    treats ranking as a separate question about weights and ordering.
+  red_flags:
+    - Re-running the import a third time without a rebuild.
+    - Deleting and recreating the FTS table without checking what `content=` points at.
+    - Claiming FTS5 ranking is broken without checking whether `rank` is in the `ORDER BY`.
+    - Switching the tokenizer to `trigram` to fix recall, at the cost of index size, without
+      measuring.
+    - Forgetting that `count(*)` on an external-content FTS table reflects the index.
+
+- id: sqlite-scn-004
+  title: The backup was fine until it was needed
+  technologies: [sqlite]
+  difficulty: advanced
+  prompt: |
+    A nightly cron job runs `cp /srv/app/app.db /backups/app-$(date +%F).db` and keeps 14 days.
+    The application runs in WAL mode with `synchronous=NORMAL` and writes continuously.
+
+    During an incident, the on-call engineer restores yesterday's backup onto a new host, starts
+    the app, and finds that the last six hours of orders are missing. Worse, after the app writes
+    to the restored file, `PRAGMA integrity_check` reports b-tree errors and the application
+    crashes on startup.
+
+    There is also a `-wal` file from the old host on the shared volume.
+  approach: |
+    This is a backup-design failure with a restore-procedure failure layered on top.
+
+    1. **Explain the missing six hours.** In WAL mode the main database file lags behind; recent
+       commits live in `app.db-wal`. Copying only the `.db` produces a consistent but stale
+       snapshot, often hours old on a busy system. The backup was never a backup of "now".
+    2. **Explain the corruption.** The restore procedure copied the old `.db` next to an old
+       `-wal` from a different database generation. SQLite saw a WAL whose salts and page content
+       did not match the database and either applied frames that did not belong or failed
+       mid-recovery. Then the app wrote to the result. The fix is to remove `-wal` and `-shm`
+       before starting, always.
+    3. **Replace the copy with a snapshot.** `VACUUM INTO '/backups/app-$(date +%F).db'` produces a
+       consistent, compacted copy while the app runs. For continuous protection, run Litestream
+       against the WAL so the RPO is seconds rather than a day.
+    4. **Verify every backup, not just the restore.** `PRAGMA integrity_check` on the backup file,
+       `PRAGMA user_version` to confirm the schema version, and a row count plus
+       `max(created_at)` to confirm recency. Fail the job and alert if any check fails.
+    5. **Write the restore runbook.** Stop writers, verify the artifact, move the old file aside,
+       copy the backup in, delete stale `-wal`/`-shm`, start, check `integrity_check` and a write,
+       then keep the old file for a day.
+    6. **Rehearse it.** A quarterly restore into a staging host, driven by the runbook, is the only
+       proof that any of this works. Include the case where the backup host is unavailable.
+    7. **Retention and off-host.** Fourteen local copies on the same volume are not disaster
+       recovery; ship at least one generation to object storage with a lifecycle policy.
+
+    The strong answer separates "the backup was stale" from "the restore corrupted the database",
+    because they have different fixes and only one of them is about tooling.
+  red_flags:
+    - Blaming `synchronous=NORMAL` for the data loss — it loses at most the last commits on power
+      loss, not six hours.
+    - Copying the `.db`, `-wal` and `-shm` together and assuming that is a valid backup.
+    - Running `integrity_check` after starting the app and writing to it.
+    - Restoring over the live file instead of moving it aside.
+    - Adding a second cron job that copies the WAL separately.
+
+- id: sqlite-scn-005
+  title: The SQLite job queue is falling behind
+  technologies: [sqlite, python]
+  difficulty: advanced
+  prompt: |
+    A background job system stores work in a `jobs` table in the same SQLite file as the
+    application. Twenty worker processes poll every 200 ms:
+
+    ```sql
+    SELECT id FROM jobs WHERE status='queued' ORDER BY id LIMIT 1;
+    UPDATE jobs SET status='running' WHERE id=?;
+    ```
+
+    Throughput plateaued at about 40 jobs per second, workers spend most of their time in
+    `database is locked`, and the `-wal` file has grown to 3 GB. Some jobs are executed twice after
+    a worker is restarted, and a few rows are stuck in `running` forever.
+
+    The team's proposal is to increase the worker count to forty.
+  approach: |
+    Diagnose the queue as a database workload, then decide whether SQLite is still the right
+    substrate.
+
+    1. **Fix the claim first.** The `SELECT` then `UPDATE` is two transactions and a race: two
+       workers can select the same id, and one update silently overwrites the other. Wrap the claim
+       in `BEGIN IMMEDIATE` and do it in one statement with `UPDATE ... WHERE id = (SELECT ...
+       LIMIT 1) RETURNING ...`. That removes the duplicate execution and halves the round trips.
+    2. **Reduce polling.** Twenty processes polling five times a second is 100 write-lock
+       acquisitions per second before any work happens, all contending for the single writer.
+       Poll with backoff, or have one dispatcher hand work to workers over a pipe or queue.
+    3. **Batch the claims.** Claim ten jobs per transaction instead of one. Commit cost dominates,
+       so this is the largest single throughput lever.
+    4. **Explain the duplicate execution.** It is the race above, not at-least-once semantics
+       imposed by the queue. Even after the fix, make handlers idempotent, because a crash between
+       commit and execution still replays work.
+    5. **Add a lease and a reaper.** Record `started_at` and requeue rows in `running` older than a
+       lease. Handle clock skew by using the database's own time (`strftime`) rather than the
+       worker's.
+    6. **Investigate the 3 GB WAL.** A long-lived reader — likely a status page or a reporting
+       query — or a checkpoint that never runs. `PRAGMA wal_checkpoint(TRUNCATE)` shows busy
+       frames; `PRAGMA journal_size_limit` caps growth. Checkpointing is not optional background
+       noise.
+    7. **Decide the ceiling honestly.** With one writer, 40–200 jobs per second is the realistic
+       band depending on commit cost and batching. Forty workers will make it worse, not better.
+       If the requirement is thousands per second, move the queue to PostgreSQL with
+       `FOR UPDATE SKIP LOCKED`, or to a dedicated broker, and keep SQLite for the application
+       data.
+
+    The strong answer fixes the claim statement and batching, explains why more workers cannot
+    help, and names the throughput ceiling.
+  red_flags:
+    - Doubling the worker count as the first move.
+    - Claiming SQLite cannot do queues without looking at the claim query.
+    - Setting `synchronous=OFF` to make the queue faster on a system that must not lose jobs.
+    - Ignoring the 3 GB WAL because disk is cheap.
+    - Treating duplicate execution as unavoidable and not making handlers idempotent.
+
+- id: sqlite-scn-006
+  title: A dashboard is slowing down the application database
+  technologies: [sqlite, duckdb]
+  difficulty: advanced
+  prompt: |
+    A BI tool connects directly to the production SQLite file and runs twelve dashboard queries
+    every five minutes. Each scans `events` (about 40 million rows) and takes 20–40 seconds. The
+    application's p99 write latency has climbed from 15 ms to 400 ms, and the `-wal` file grows by
+    roughly 1 GB per hour and is only truncated when the app restarts.
+
+    The dashboard queries are read-only. The team suggests adding indexes until the queries are
+    fast, and moving the database to a bigger disk.
+  approach: |
+    Separate the read workload from the write workload; indexing is not the first move, and a
+    bigger disk does not address the mechanism.
+
+    1. **Explain the latency.** In WAL mode readers do not block the writer, but a long read
+       transaction holds a snapshot. A checkpoint cannot recycle WAL frames newer than the oldest
+       reader's snapshot, so a 40-second scan every five minutes can prevent checkpointing almost
+       continuously. The WAL grows, the next checkpoint has more work to do, and write latency
+       rises as the WAL and page cache are churned.
+    2. **Confirm it.** `PRAGMA wal_checkpoint(PASSIVE)` returns a non-zero busy count and a large
+       log-frame count while the dashboard runs. Check the dashboard's connection for an open read
+       transaction (`BEGIN` without `COMMIT`, or an autocommit cursor held open).
+    3. **Get analytics off the OLTP file.** Take a snapshot with `VACUUM INTO` on a schedule and
+       point the BI tool at the copy, or replicate with Litestream and query the replica. For 40
+       million rows of aggregation, point DuckDB at the snapshot: it reads SQLite files directly
+       and is columnar, which is the right engine for scans.
+    4. **If the dashboard must query live data**, give it a read-only connection with
+       `file:app.db?mode=ro`, a short `busy_timeout`, and a hard statement limit so a runaway query
+       cannot pin a snapshot indefinitely. Even then, isolate it by time of day.
+    5. **Index only for the queries that remain.** A dashboard scan over 40 million rows is not an
+       indexing problem; an index helps a selective filter, not `GROUP BY` over most of the table.
+       Adding five indexes will slow writes further.
+    6. **Bound the WAL.** `PRAGMA journal_size_limit=67108864` caps the file after checkpoint;
+       `PRAGMA wal_autocheckpoint` controls when checkpoints run. These are containment, not a fix
+       for a blocked checkpoint.
+    7. **Measure after each change**: write p99, WAL size over an hour, and checkpoint busy count.
+       The target is a checkpoint that completes between dashboard runs, not a faster dashboard.
+
+    The strong answer identifies the snapshot/checkpoint interaction, moves analytics to a copy or
+    DuckDB, and explicitly rejects "add indexes" as the remedy for scan-heavy queries.
+  red_flags:
+    - Adding indexes on `events` to speed up full-table aggregations.
+    - Putting the database on a bigger disk and calling it capacity planning.
+    - Enabling `PRAGMA read_uncommitted` as a fix.
+    - Running `VACUUM` while the dashboard is connected, which needs even more space and locks.
+    - Ignoring the WAL growth because "WAL mode handles concurrency".

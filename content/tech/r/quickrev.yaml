@@ -1,0 +1,90 @@
+concepts:
+  - title: The vector is the atom
+    detail: R has no scalars. `1` is a length-one vector, every operator is vectorised, and `if` requires a length-one logical — which is why `if (x > 5)` fails on a column.
+  - title: Coercion ladder
+    detail: Upward coercion through logical, integer, double, complex and character is silent and lossless, so a single character value turns a whole `c()` vector or `rbind()` result into text.
+  - title: Subset versus extract
+    detail: "`[` returns a subset of the same type and keeps attributes; `[[` returns one element unwrapped; `$` is `[[` with a literal name plus partial matching, and gives `NULL` when absent."
+  - title: NA is logical, NaN is a number
+    detail: "`NA` is a missing value coerced to the vector's type; `NaN` is an undefined numeric result. `is.na(NaN)` is TRUE, `is.nan(NA_real_)` is FALSE, and `x == NA` is always `NA`."
+  - title: Recycling
+    detail: Shorter vectors repeat to the length of the longest — silent in `c()` and arithmetic, an error in data frames unless the length is 1 or n.
+  - title: A factor is an integer plus levels
+    detail: Codes are positions in `levels()`. `as.numeric()` returns codes, while `as.numeric(levels(x))[x]` returns the values. Level order drives sorting, table order and the model reference level.
+  - title: A data frame is a list of columns
+    detail: Equal-length vectors with names and row-name metadata. `length(df)` is the column count, `[` drops to a vector by default, and column-wise work is contiguous and fast.
+  - title: Tibbles are stricter
+    detail: No row names, no partial matching, `[` never drops, list-columns are first class, and printing shows column types and truncates. dplyr returns tibbles regardless of input.
+  - title: Tidy evaluation
+    detail: dplyr arguments are evaluated inside the data. Wrap a user's column with `{{ var }}`, index a string with `.data[[name]]`, and build a name on the left with `"{name}" := value`.
+  - title: Per-operation grouping
+    detail: "`.by =` (dplyr 1.1) groups one verb and returns an ungrouped result; `group_by()` persists until `ungroup()`. Leaked grouping silently turns global summaries into group summaries."
+  - title: Join fan-out
+    detail: A mutating join either preserves the left row count or multiplies it — there is no third option. Duplicate keys on the right are the cause, and `relationship = "many-to-one"` makes it an error.
+  - title: Tidy data
+    detail: One row per observation, one column per variable, one cell per value. Wide data encodes a variable in the column name, which breaks grouping, ggplot aesthetics and model formulas.
+  - title: Copy-on-modify
+    detail: "`b <- a` shares the object; the first write to either name duplicates it. That is why assigning a column inside a function allocates, and why growing a vector in a loop is quadratic."
+  - title: Vectorise arithmetic, loop units of work
+    detail: A vectorised call pays interpreter overhead once instead of per element. For real work per item — a model, a file, an API call — that overhead is noise and `map()` or a `for` loop is fine.
+  - title: The formula is a language
+    detail: "`y ~ x` is not arithmetic. `+` adds terms, `:` is interaction only, `*` expands to main effects plus interaction, `I()` protects arithmetic, and `-1` drops the intercept."
+  - title: ts has implicit, regular time
+    detail: A `ts` object is values plus a `tsp` attribute — start, end, frequency — with no date column, so a missing month must be inserted as `NA` or the series silently shifts. Irregular data belongs in `xts` or `tsibble`.
+
+traps:
+  - Calling `as.numeric()` on a factor and reporting level codes as if they were measurements. Go through `levels(x)[x]`.
+  - Expecting `filter(x > 5)` to keep rows where `x` is `NA`. It does not — `NA` is treated as `FALSE`, silently, exactly as SQL `WHERE` does.
+  - Writing `for (i in 1:n)` and getting two iterations when `n` is zero, because `1:0` counts down. Use `seq_len(n)`.
+  - Using `sapply()` where the return type matters. It returns a vector, a matrix or a list depending on the data, and promotes everything to character if one result is a string.
+  - Treating `merge()` as equivalent to `left_join()`. It sorts by the key by default and coerces mismatched key types instead of erroring.
+  - Reporting `interval = "confidence"` as the range a future observation will fall in. The prediction interval is the one that covers a single new point.
+
+advanced:
+  - ALTREP stores `1:1e8` as start, step and length, so it costs a few hundred bytes until something forces materialisation — which is why `object.size()` can understate the real cost.
+  - A data.table's `:=` modifies by reference, so a function that takes a table and adds a column changes the caller's object. `copy()` restores value semantics.
+  - Four `future` workers each inheriting a four-thread BLAS give sixteen threads on four cores, which is slower than one worker. Set `blas_set_num_threads(1)` in workers.
+  - With treatment contrasts, a main effect in a model containing an interaction is the effect at the reference level of the other factor — not an average effect.
+  - Rolling-origin evaluation via `tsCV()` exists because a random split on time-ordered data trains on the future. The forecast horizon must also match how the forecast will be used.
+  - "Caching keys on the source, never on the data. `cache: true` and `freeze: auto` will happily re-render last month's numbers; declare the dependency or delete the cache when a render disagrees with reality."
+
+comparisons:
+  - a: data.frame
+    b: tibble
+    difference: Base frames drop to a vector on `[`, partially match `$`, print every row and support row names; tibbles never drop, never partially match, and print types with truncation.
+  - a: dplyr
+    b: data.table
+    difference: dplyr is value-semantic, composable and readable; data.table is reference-semantic, terser, and much faster for large grouped operations and keyed joins.
+  - a: factor
+    b: character
+    difference: A factor stores integer codes plus levels — cheap for repeated strings and ordered for plots, but dangerous under `as.numeric()`; character is simpler and carries no level semantics.
+  - a: base graphics
+    b: ggplot2
+    difference: Base draws imperatively onto a device with `par()` state and wins for diagnostics and huge scatters; ggplot2 declares data, mapping and geoms as an object and wins for facets, legends and consistent theming.
+  - a: forecast
+    b: fable
+    difference: "`forecast` handles one series at a time with direct `ets` and `auto.arima` calls; `fable` keeps many series in one table, detects index gaps and supports hierarchical reconciliation."
+  - a: R Markdown
+    b: Quarto
+    difference: Same knitr engine underneath; Quarto adds `#|` chunk options, native cross-references, project config, `freeze`, non-R engines and Typst PDFs.
+  - a: renv
+    b: Docker
+    difference: "`renv` pins R package versions in a lockfile; a container pins the OS, R itself, system libraries and fonts. Production usually needs both."
+
+commands:
+  - label: Read CSVs with declared types
+    code: readr::read_csv(f, col_types = cols(id = col_character(), amount = col_double()), col_select = c(id, amount))
+  - label: Grouped summary without leaking grouping
+    code: df |> summarise(total = sum(revenue), n = n(), .by = c(customer_id, month))
+  - label: Join with a cardinality guard
+    code: orders |> left_join(prices, by = join_by(product_id, order_ts >= valid_from, order_ts < valid_to), relationship = "many-to-one")
+  - label: Wide to long with split names
+    code: df |> pivot_longer(cols = -id, names_to = c("quarter", "year"), names_sep = "_", values_to = "value")
+  - label: Read many files and keep provenance
+    code: files |> purrr::set_names(basename) |> purrr::map(readr::read_csv) |> purrr::list_rbind(names_to = "file")
+  - label: Save a plot at print resolution
+    code: ggsave("plot.png", p, width = 8, height = 5, dpi = 300, bg = "white")
+  - label: Profile a script
+    code: profvis::profvis({ source("job.R") })
+  - label: Pin and restore the environment
+    code: renv::snapshot(); renv::restore(); renv::status()

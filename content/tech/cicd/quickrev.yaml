@@ -1,0 +1,90 @@
+concepts:
+  - title: A pipeline is a DAG of isolated jobs
+    detail: "Edges are the only ordering guarantee. Jobs without `needs` run concurrently and share no workspace, so anything passed between them must be an artefact, a cache entry or a job output."
+  - title: Build once, deploy many
+    detail: "One artefact per commit, promoted by identity. A rebuild for production is a different artefact and invalidates every test that ran before it."
+  - title: Digests name, tags point
+    detail: "A tag is a mutable label; a digest is the manifest's SHA-256. Deploy `repo@sha256:…` and use tags only to find releases."
+  - title: Cache is an optimisation, artefact is output
+    detail: "A pipeline that fails with an empty cache is broken. Caches are branch-scoped and evictable; artefacts are the retained product."
+  - title: Cache keys must hash content
+    detail: "Entries are immutable, so a key that never changes freezes dependencies at the first run. Hash the lockfile, toolchain and flags."
+  - title: Fan-in is where the gate lives
+    detail: "Fan-out buys wall-clock time. A single `publish` job with `needs: [build, test, scan]` is where the release decision is enforced."
+  - title: Concurrency groups serialise or cancel
+    detail: "Cancel superseded pull-request runs; never cancel a deploy. Two deploys to one environment will interleave, and the older one can finish last."
+  - title: Queue time is not execution time
+    detail: "Pipeline latency is queue plus critical path. A six-minute pipeline waiting twenty-five minutes needs capacity, not caching."
+  - title: Readiness gates traffic, liveness restarts
+    detail: "A readiness probe that checks downstream dependencies takes the fleet out of rotation on one blip; a liveness probe that checks them causes restart storms."
+  - title: Rolling updates run two versions at once
+    detail: "For the duration of the rollout, old and new code share one schema and one API. Backward compatibility is a deployment requirement, not a preference."
+  - title: Expand before you contract
+    detail: "Add the new structure, dual-write, backfill, switch reads, remove the old structure a release later. Destructive DDL never ships with the code that stops using it."
+  - title: Locks queue, so a fast ALTER can cause a long outage
+    detail: "`ACCESS EXCLUSIVE` waits behind a long transaction while every later query queues behind it. `SET lock_timeout` turns an outage into a failed migration."
+  - title: Notifications are not gates
+    detail: "A gate is binary, automatic, specific and owned. Coverage thresholds over whole repositories reward testing getters."
+  - title: OIDC replaces stored cloud keys with an identity claim
+    detail: "The job's token carries repository, ref and environment. The trust policy's `sub` condition is the actual control — `repo:org/app:*` accepts every branch."
+  - title: Pin third-party actions to a commit SHA
+    detail: "A tag is mutable in someone else's repository and the action runs with your token. Dependabot bumps the SHA so the change is reviewed."
+  - title: A flake is a real nondeterminism
+    detail: "Same commit, different outcome means timing, ordering or shared state. Quarantine it out of the gate, assign an owner, fix or delete within a deadline."
+
+traps:
+  - "Believing a retry makes a flaky suite acceptable. It converts a visible race into an intermittent production bug, and teaches the team that red means nothing."
+  - "Treating a 100% cache hit rate as success. It usually means the key never changes and dependencies have been frozen since the first run."
+  - "Assuming a code rollback also reverts the schema. It does not, which is why destructive migrations are one-way doors and belong in a later release."
+  - "Running `cosign verify` without `--certificate-identity`. A valid signature from any identity passes, including an attacker's own image with the same name."
+  - "Expecting `fail-fast` to give more information. It cancels the remaining matrix legs on the first failure, so you learn about one incompatibility per run."
+  - "Using `pull_request_target` with a checkout of the PR's code. Contributor-controlled code then runs with the base repository's secrets and write token."
+
+advanced:
+  - "`VALIDATE CONSTRAINT` takes `SHARE UPDATE EXCLUSIVE`, which does not block reads or writes; from PG 12 a validated `CHECK (col IS NOT NULL)` lets `SET NOT NULL` skip the full table scan."
+  - "`CREATE INDEX CONCURRENTLY` cannot run inside a transaction block and leaves an invalid index behind if it fails, so the migration tool needs a per-migration transaction opt-out."
+  - "`restore-keys` are prefix matches, not exact fallbacks: they restore the newest entry with that prefix, which is a warm start the install step must repair — not the same dependency set."
+  - "Cache scope is usually 'this branch plus the default branch', so a cache written by a feature branch can be restored on the default branch. Treat cache writes from untrusted branches as untrusted input."
+  - "A provenance attestation is only as strong as the builder that produced it; a self-hosted runner with network access and shared credentials cannot make a non-forgeable claim."
+  - "Two `GITHUB_TOKEN` facts explain most permission bugs: it is per job and expires with it, and a job attached to an environment can read that environment's secrets while one that is not cannot."
+
+comparisons:
+  - a: cache
+    b: artefact
+    difference: "Evictable optimisation versus retained product; losing a cache costs minutes, losing an artefact breaks the release."
+  - a: tag
+    b: digest
+    difference: "Mutable pointer that can be re-pushed versus content hash that cannot change; find by tag, deploy by digest."
+  - a: rolling update
+    b: blue/green
+    difference: "Batched replacement with two versions concurrent versus a full second stack and an atomic cutover; the latter verifies before exposure and costs double infrastructure."
+  - a: blue/green
+    b: canary
+    difference: "All-or-nothing cutover after full-stack verification versus a small traffic share promoted on measured comparison; canary bounds blast radius, blue/green bounds exposure."
+  - a: unit test
+    b: integration test
+    difference: "Logic in isolation, milliseconds, no network versus real dialect, transactions and serialisation in seconds to minutes."
+  - a: deploy
+    b: release
+    difference: "Code made available versus behaviour exposed; a feature flag turns one into the other and makes the risky step reversible in seconds."
+  - a: liveness probe
+    b: readiness probe
+    difference: "Failure restarts the container versus removes it from the endpoint list; checking dependencies in liveness causes fleet-wide restart storms."
+
+commands:
+  - label: Find flaky jobs by commit
+    code: gh run list --limit 200 --json headSha,workflowName,conclusion,createdAt,updatedAt
+  - label: Resolve a release tag to its digest
+    code: crane digest ghcr.io/acme/api:1.4.2
+  - label: Build with a registry-backed layer cache
+    code: docker buildx build --cache-from type=registry,ref=ghcr.io/acme/api:buildcache --cache-to type=registry,ref=ghcr.io/acme/api:buildcache,mode=max --push -t ghcr.io/acme/api:1.4.2 .
+  - label: Verify a signature against the expected workflow identity
+    code: cosign verify ghcr.io/acme/api@sha256:4b1e… --certificate-identity-regexp '^https://github.com/acme/api/\.github/workflows/release\.yml@refs/tags/v.*$' --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  - label: Deploy a specific digest
+    code: kubectl set image deploy/api api=ghcr.io/acme/api@sha256:4b1e… -n production
+  - label: Watch and reverse a rollout
+    code: kubectl rollout status deploy/api -n production && kubectl rollout undo deploy/api -n production
+  - label: Generate an SBOM for a published image
+    code: syft ghcr.io/acme/api@sha256:4b1e… -o cyclonedx-json > sbom.cdx.json
+  - label: Find what is blocking a table
+    code: psql -c "select pid, pg_blocking_pids(pid) as blockers, state, left(query, 80) from pg_stat_activity where state <> 'idle' order by query_start"

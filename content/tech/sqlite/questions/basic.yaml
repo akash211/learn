@@ -1,0 +1,500 @@
+- id: sqlite-basic-001
+  topic: overview
+  difficulty: beginner
+  question: What is SQLite, and how does it differ from a client-server database?
+  answer: |
+    SQLite is a C library that implements a relational database inside the calling process. There
+    is no server, no port and no daemon: the database is a single file, and queries are function
+    calls against it. The file contains pages, a b-tree catalogue and the data itself; a `-journal`
+    or `-wal` file exists beside it only while transactions are in flight.
+
+    The consequences follow from that boundary. Access control is filesystem permissions rather
+    than `GRANT`, there is no network protocol and therefore no connection pool, and every process
+    that opens the file is a peer with its own page cache. Concurrency is many readers and exactly
+    one writer, coordinated with file locks rather than a lock manager. Backups are file copies
+    taken through a snapshot API, and high availability is something you add outside the engine.
+
+    It is the right choice when the data and the application live on the same machine and one
+    writer is enough — mobile apps, desktop software, internal tools, per-tenant services, CI
+    systems. It is the wrong choice when several machines must write concurrently or when clients
+    need to connect over a network, which is where PostgreSQL takes over.
+  tags: [architecture, embedded, overview]
+
+- id: sqlite-basic-002
+  topic: storage
+  difficulty: beginner
+  question: What is a rowid, and what makes INTEGER PRIMARY KEY special?
+  answer: |
+    Every ordinary SQLite table is a b-tree keyed by a signed 64-bit integer called the rowid.
+    If you do not declare one, SQLite assigns the next value automatically; the rowid is hidden
+    unless you select it explicitly or declare a column as `INTEGER PRIMARY KEY`, which makes that
+    column an alias for it.
+
+    The alias matters for performance. In a rowid table, the row is stored directly in the b-tree
+    keyed by that integer, so `WHERE id = ?` is one descent to the leaf and the row is right there.
+    Any other primary key — a UUID, a text code, even `INTEGER PRIMARY KEY DESC` — needs a separate
+    unique index whose entries point back at a rowid, so lookups cost two b-trees and every insert
+    maintains an extra structure. A `WITHOUT ROWID` table removes the indirection by making the
+    declared primary key the table key, which is attractive for composite keys and small rows.
+
+    The rowid is not guaranteed to be unique forever: without `AUTOINCREMENT`, SQLite may reuse the
+    largest rowid after the row holding it is deleted.
+  tags: [rowid, primary-key, b-tree]
+
+- id: sqlite-basic-003
+  topic: types
+  difficulty: beginner
+  question: How does SQLite's type system differ from a static SQL database?
+  answer: |
+    SQLite has five storage classes — NULL, INTEGER, REAL, TEXT and BLOB — and a value's class
+    travels with the value in the record. The declared column type does not constrain storage; it
+    selects one of five *affinities* that influence how values are coerced on write and compared.
+
+    So `CREATE TABLE t(x VARCHAR(20))` does not create a 20-character limit, and `BOOLEAN`,
+    `DATETIME` and `DECIMAL` are not types at all. `BOOLEAN` gets NUMERIC affinity and stores 0 or
+    1; `DATETIME` gets NUMERIC affinity and will happily store the string `'2024-01-01'`; `DECIMAL`
+    may convert `'500.0'` to the integer `500` because that conversion is lossless. There is no
+    date type, no decimal type and no length enforcement.
+
+    Since 3.37, `CREATE TABLE ... STRICT` opts into a real check: only `INT`, `INTEGER`, `REAL`,
+    `TEXT`, `BLOB` and `ANY` are allowed, and writes that would lose information are rejected. New
+    schemas should use it. Existing ones cannot be converted in place because `ALTER TABLE` cannot
+    add `STRICT`; that requires the table-rebuild procedure.
+  tags: [types, affinity, strict]
+
+- id: sqlite-basic-004
+  topic: types
+  difficulty: intermediate
+  question: Why is SELECT '1' = 1 false when WHERE id = '1' matches an INTEGER column?
+  answer: |
+    Comparisons order values by storage class first: NULL sorts before numbers, numbers before
+    text, text before blobs. Two literals have no affinity to apply, so `'1' = 1` compares a TEXT
+    value with an INTEGER value and is false — they are not equal and text sorts after numbers.
+    `'1' < 1` is also false, and `'10' < '9'` is true because both operands are text and the
+    comparison is lexicographic.
+
+    When a column is involved, its affinity is applied to the other operand before comparing. An
+    `INTEGER` column compared with `'1'` converts the string to the integer 1, so the row matches;
+    a `TEXT` column compared with `1` converts the number to `'1'`. This is why `WHERE id = '42'`
+    works against an integer primary key and why the same predicate on a `TEXT` column may not use
+    a numeric index effectively.
+
+    The dangerous case is a join between columns with different affinities, such as a text country
+    code and an integer country id: every row fails to match, and nothing warns you. Check with
+    `typeof()` on both sides when a join returns fewer rows than expected.
+  tags: [affinity, comparisons, joins]
+
+- id: sqlite-basic-005
+  topic: strict tables
+  difficulty: intermediate
+  question: What is a STRICT table, and what does it actually enforce?
+  answer: |
+    `CREATE TABLE ... STRICT` (3.37+) restricts declared types to `INT`, `INTEGER`, `REAL`, `TEXT`,
+    `BLOB` and `ANY`, and checks every written value against the column's type. It also makes
+    `PRIMARY KEY` imply `NOT NULL`, which is not true of ordinary tables for historical reasons.
+
+    It is not "no coercion". A lossless conversion is still allowed: writing the integer 1 into a
+    `TEXT` column stores `'1'`. What it rejects is storage that changes meaning — a blob in a
+    `TEXT` column, the string `'abc'` in an `INTEGER` column, a real in an `INTEGER` column. `ANY`
+    is the escape hatch that behaves like a pre-STRICT column.
+
+    The practical value is that a typo in a migration or an ORM passing the wrong Python type
+    fails at the write instead of quietly producing a database where half the rows have a different
+    storage class. The costs: `VARCHAR(20)` and `DATETIME` are rejected at `CREATE TABLE`, and you
+    cannot add `STRICT` to an existing table with `ALTER TABLE` — it requires the twelve-step
+    rebuild.
+  tags: [strict, constraints, types]
+
+- id: sqlite-basic-006
+  topic: schema
+  difficulty: advanced
+  question: When should a table be WITHOUT ROWID?
+  answer: |
+    A `WITHOUT ROWID` table stores rows directly in a b-tree keyed by the declared primary key,
+    instead of storing them in a rowid b-tree and maintaining a separate unique index for the key.
+    That removes one b-tree lookup per primary-key access and one index per table.
+
+    It wins when the primary key is composite, the rows are small, and access is by key prefix or
+    in key order. A join table `(order_id, line_no)`, a settings table keyed by `(tenant, key)`, or
+    a cache keyed by a short string are typical. It loses when the table is wide, because interior
+    pages hold whole key records and the tree becomes shallower but fatter; when inserts are random
+    with respect to key order, because pages split more; and when anything relies on a rowid,
+    including `AUTOINCREMENT` and some ORMs.
+
+    Requirements: the table must have a `PRIMARY KEY`, every primary-key column must be `NOT NULL`,
+    and there is no rowid column to select. Converting a table whose only key is a single
+    `INTEGER` to `WITHOUT ROWID` rarely pays: you remove one index and add key-storage overhead to
+    every page, without changing the number of b-trees a lookup touches.
+  tags: [without-rowid, primary-key, schema]
+
+- id: sqlite-basic-007
+  topic: schema
+  difficulty: intermediate
+  question: Do you really need AUTOINCREMENT?
+  answer: |
+    Usually not. `INTEGER PRIMARY KEY` already auto-assigns a rowid — by default one more than the
+    current largest — so `INSERT` without the column works. The difference is that plain rowids can
+    be reused after the highest row is deleted, and the assigned value is not guaranteed to be
+    monotonically increasing across deletes.
+
+    `AUTOINCREMENT` adds a `sqlite_sequence` table that records the largest value ever used and
+    refuses to go backwards, so identifiers are never reused. It costs one extra table write per
+    insert and adds a small amount of bookkeeping. Use it when an identifier leaks into the world
+    and reuse would be a correctness or compliance problem: invoice numbers, receipt ids, audit
+    references, public-facing permalinks.
+
+    What it does not give you is gap-free numbering. A rolled-back transaction still burns the
+    sequence value, and concurrent writers can interleave. If you need gapless invoice numbers,
+    that is a business process with a counter row and a transaction, not a column attribute.
+  tags: [autoincrement, rowid, identifiers]
+
+- id: sqlite-basic-008
+  topic: types
+  difficulty: beginner
+  question: How should dates, booleans and money be stored?
+  answer: |
+    There is no date, boolean or decimal type, so the answer is convention plus constraints.
+
+    Timestamps: store ISO-8601 text in UTC, `strftime('%Y-%m-%dT%H:%M:%fZ','now')`, or Unix epoch
+    seconds as an integer from `unixepoch()`. ISO text is readable in a dump, sorts correctly as
+    text because it is fixed-width, and survives JSON round-trips; integers are smaller and cheaper
+    to index. Pick one and never mix formats in a column — `datetime('now')` returns
+    `YYYY-MM-DD HH:MM:SS`, which sorts differently from the ISO form with `T`.
+
+    Booleans: `INTEGER NOT NULL CHECK (x IN (0,1))`, with `TRUE`/`FALSE` as readable aliases for 1
+    and 0.
+
+    Money: integer minor units — cents, paise, fils — never `REAL`, and never `NUMERIC`/`DECIMAL`
+    expecting fixed-point behaviour. NUMERIC affinity converts `'500.0'` to the integer 500, and
+    floats do not sum exactly. Format at the presentation layer, and remember `7/2` is `3` in
+    integer arithmetic.
+  tags: [dates, money, booleans]
+
+- id: sqlite-basic-009
+  topic: journaling
+  difficulty: intermediate
+  question: What are the journal modes, and what changes with WAL?
+  answer: |
+    `PRAGMA journal_mode` accepts `DELETE` (default), `TRUNCATE`, `PERSIST`, `MEMORY`, `OFF` and
+    `WAL`. The first four are variations on the rollback journal: original page images are written
+    to a `-journal` file before the database is modified, and commit means deleting, truncating or
+    zeroing that file. `MEMORY` and `OFF` give up crash recovery and are only for temporary data.
+
+    WAL replaces the journal with an append-only log of page frames. A commit appends frames and
+    marks the last one as a commit; readers use a snapshot recorded in the `-shm` wal-index, so
+    they never block the writer and the writer never blocks them. A checkpoint copies frames back
+    into the main file when no reader needs them. The setting is persistent — it is stored in the
+    database header and survives reopening — unlike almost every other pragma.
+
+    The tradeoffs: WAL needs the `-shm` file and therefore shared memory, so it does not work on
+    network filesystems; the `.db` file lags behind the truth, so file copies are not backups; and
+    a long-lived reader prevents checkpointing, so the `-wal` can grow without bound.
+  tags: [wal, journal-mode, checkpoint]
+
+- id: sqlite-basic-010
+  topic: concurrency
+  difficulty: intermediate
+  question: Why do I get "database is locked", and how do I fix it?
+  answer: |
+    `SQLITE_BUSY` means another connection holds a conflicting lock. SQLite allows many readers and
+    exactly one writer, so the usual causes are a second writer, a writer waiting for readers to
+    finish at commit time in rollback mode, or a read transaction trying to upgrade to a write after
+    another connection has committed (`SQLITE_BUSY_SNAPSHOT`).
+
+    Fix in this order. Enable WAL so readers stop blocking the writer. Set `PRAGMA busy_timeout` on
+    every connection so contention becomes a wait rather than an error. Use `BEGIN IMMEDIATE` for
+    any read-then-write sequence so the write lock is taken before the read. Keep transactions
+    short and free of network I/O, and batch writes into one transaction per logical operation.
+
+    Then look at architecture: one writer process, a single writer queue, or one database file per
+    tenant. If the workload genuinely needs concurrent writers on one dataset, SQLite is the wrong
+    engine and PostgreSQL is the answer. Note that `busy_timeout` does not help for
+    `SQLITE_BUSY_SNAPSHOT` or for lock-upgrade deadlocks — those must be retried from the start of
+    the transaction.
+  tags: [locking, busy-timeout, concurrency]
+
+- id: sqlite-basic-011
+  topic: transactions
+  difficulty: advanced
+  question: What is the difference between BEGIN, BEGIN IMMEDIATE and BEGIN EXCLUSIVE?
+  answer: |
+    All three start a transaction; they differ in when and how strongly they take locks.
+
+    `BEGIN` (deferred, the default) takes no lock until the first statement. A `SELECT` acquires a
+    read lock or snapshot; a write acquires the write lock. The gap between the two is the upgrade
+    window: if another connection commits in between, this transaction can no longer write and gets
+    `SQLITE_BUSY_SNAPSHOT` immediately, with no busy-handler retry.
+
+    `BEGIN IMMEDIATE` takes the write lock at the start. Other writers wait (up to `busy_timeout`)
+    at the `BEGIN` instead of failing later, and the read that follows is guaranteed to still be
+    writable. This is the correct form for counters, queue claims, balance updates and any
+    `SELECT`-then-`UPDATE` logic.
+
+    `BEGIN EXCLUSIVE` additionally prevents new readers in rollback-journal mode. In WAL mode it is
+    effectively the same as `IMMEDIATE`, because WAL readers never take a lock that conflicts with
+    the writer. It is mostly useful for maintenance operations that must not see concurrent
+    readers.
+  tags: [transactions, begin-immediate, locking]
+
+- id: sqlite-basic-012
+  topic: transactions
+  difficulty: advanced
+  question: What isolation level does SQLite provide?
+  answer: |
+    Serializable. There is one writer, and readers either hold a lock that prevents a concurrent
+    commit (rollback mode) or read a stable snapshot taken at their first read (WAL). A transaction
+    can never observe a partially committed state, and two write transactions cannot interleave.
+
+    There is no `READ COMMITTED` mode where each statement sees newer data, and no way to opt into
+    weaker isolation except `PRAGMA read_uncommitted`, which only affects deprecated shared-cache
+    mode. Applications that expect "read committed" semantics — re-reading a row mid-transaction to
+    see another session's update — will not get them.
+
+    Two practical consequences. First, since writes are serialized, the correct strategy is to keep
+    write transactions short and batch work, not to add more writers. Second, a read transaction
+    holds its snapshot until it ends, so a long-running read in WAL mode pins the WAL and prevents
+    checkpointing; keeping it open across user think-time is how the `-wal` file grows to gigabytes.
+  tags: [isolation, serializable, snapshots]
+
+- id: sqlite-basic-013
+  topic: vacuum
+  difficulty: intermediate
+  question: What does VACUUM do, and why does deleting rows not shrink the file?
+  answer: |
+    Deleted rows free pages inside the file, but the pages stay allocated: they go on a freelist
+    (a linked list of trunk pages pointing at free leaf pages) and are reused by later inserts. The
+    file only grows when the freelist is empty. `PRAGMA freelist_count` tells you how many pages are
+    waiting, and `PRAGMA page_count` gives the total.
+
+    `VACUUM` rebuilds the entire database into a new file: it copies live content into a fresh
+    b-tree, drops free pages, defragments pages and can change the page size if you set
+    `PRAGMA page_size` first. It needs free disk roughly equal to the database size and holds a
+    write lock for the whole rebuild, so on a large file it is a maintenance-window operation.
+
+    Alternatives: `VACUUM INTO 'copy.db'` builds the compacted copy without touching the original;
+    `PRAGMA auto_vacuum = INCREMENTAL` plus `PRAGMA incremental_vacuum(N)` releases pages a few at
+    a time, but `auto_vacuum` must be set before the first table is created or enabled by a full
+    `VACUUM`. In WAL mode, `VACUUM` also needs checkpoint space, so run it when the WAL is small.
+  tags: [vacuum, freelist, space]
+
+- id: sqlite-basic-014
+  topic: query planning
+  difficulty: intermediate
+  question: How do you read EXPLAIN QUERY PLAN, and what do SEARCH and SCAN mean?
+  answer: |
+    `EXPLAIN QUERY PLAN` returns four columns — node id, parent id, an unused field, and a detail
+    string — and no cost estimates. Unlike PostgreSQL, there are no row counts or startup costs to
+    compare; you are reading the chosen access path, not a cost model.
+
+    `SEARCH` is a b-tree seek: the engine descends to a key and walks matching entries. `SCAN` is
+    a full pass over a table or index. The detail text says what was used: `USING INDEX x
+    (a=? AND b>?)` lists the constraints satisfied, `USING COVERING INDEX` means no table lookup
+    was needed, `USING INTEGER PRIMARY KEY (rowid=?)` is the fastest path, and `USE TEMP B-TREE FOR
+    ORDER BY` means the index did not supply the order. `MULTI-INDEX OR` combines two indexes;
+    `AUTOMATIC COVERING INDEX` means SQLite built a throwaway index because one was missing.
+
+    The bad signature is `SCAN` on a large table, often with a temp b-tree sort. The subtly bad one
+    is `SCAN ... USING INDEX`, which reads the entire index and then fetches rows. Use bare
+    `EXPLAIN` only when you need to inspect VDBE opcodes; `.eqp on` in the CLI prints the plan for
+    every query while you work.
+  tags: [explain, query-plan, indexes]
+
+- id: sqlite-basic-015
+  topic: indexing
+  difficulty: intermediate
+  question: When will SQLite not use an index?
+  answer: |
+    The planner ignores an index when using it would not narrow the search, or when the query is
+    not in a form the index can answer:
+
+    - A function wraps the column: `WHERE substr(ts,1,7) = '2024-05'` scans unless an expression
+      index exists. Rewrite as a range: `ts >= '2024-05' AND ts < '2024-06'`.
+    - A leading wildcard: `LIKE '%abc'` cannot use a b-tree. `LIKE 'abc%'` can, but only if the
+      index uses `COLLATE NOCASE`, because default `LIKE` is case-insensitive. `GLOB 'abc*'` is
+      case-sensitive and does use a plain index.
+    - A type or collation mismatch: comparing text to an integer column across a join, or querying
+      a `BINARY` index with `COLLATE NOCASE`.
+    - Deliberate suppression: `WHERE +col = ?` disqualifies any index on `col`.
+    - Low selectivity: if the predicate matches a large fraction of the table, a scan is cheaper
+      than thousands of random row lookups, and the planner will choose it.
+    - Wrong prefix: an index on `(a, b)` cannot serve `WHERE b = ?` alone.
+
+    Run `EXPLAIN QUERY PLAN` on the real query with realistic data. A three-row test table will
+    often scan when the same query on a million rows would seek.
+  tags: [indexes, like, query-plan]
+
+- id: sqlite-basic-016
+  topic: indexing
+  difficulty: intermediate
+  question: What is a covering index, and how do you get one?
+  answer: |
+    A covering index contains every column the query needs, so SQLite answers the query from the
+    index b-tree without visiting the table row. In SQLite that means the indexed columns plus the
+    rowid, which is appended to every index entry implicitly.
+
+    ```sql
+    CREATE INDEX ord_cust_ts ON ord (cust_id, ts);
+    SELECT count(*) FROM ord WHERE cust_id = 17;   -- SEARCH ... USING COVERING INDEX
+    ```
+
+    `EXPLAIN QUERY PLAN` says `USING COVERING INDEX` when it applies. There is no `INCLUDE` clause
+    as in PostgreSQL: to cover a query you add the payload columns to the index key, and accept
+    that they enlarge every entry and every write.
+
+    Covering indexes are most valuable for counts, existence checks and list queries that read two
+    or three columns. They are a poor fit when the payload is wide (a text body), because the index
+    becomes a second copy of the data. Since SQLite has no visibility map and no heap fetch
+    statistics, a covering index is a pure win at read time with no hidden second lookup — the cost
+    is entirely on writes and disk.
+  tags: [covering-index, indexes, query-plan]
+
+- id: sqlite-basic-017
+  topic: indexing
+  difficulty: intermediate
+  question: What are partial and expression indexes?
+  answer: |
+    A partial index indexes only the rows matching a `WHERE` clause:
+
+    ```sql
+    CREATE INDEX ord_pending ON ord (created_at) WHERE status = 'pending';
+    ```
+
+    It is smaller and cheaper to maintain, and the planner uses it only when the query's predicate
+    provably implies the index's `WHERE`. `status = 'pending'` qualifies; `status IN
+    ('pending','paid')` does not, and neither does a parameterised `status = ?` unless the value is
+    known at plan time. This is the right tool for a queue or an outbox where only a small fraction
+    of rows is ever queried.
+
+    An expression index indexes a computed value:
+
+    ```sql
+    CREATE INDEX ord_month ON ord (substr(ts, 1, 7));
+    CREATE INDEX docs_status ON docs (json_extract(payload, '$.status'));
+    ```
+
+    The expression must be deterministic — no `now()`, no `random()` — and the query must use the
+    same expression text to match. Expression indexes are how JSON fields and computed keys get
+    indexed without adding columns, though a generated column is usually more readable and easier
+    for the planner to reason about.
+  tags: [partial-index, expression-index, json]
+
+- id: sqlite-basic-018
+  topic: statistics
+  difficulty: advanced
+  question: What does ANALYZE do, and what is in sqlite_stat1?
+  answer: |
+    `ANALYZE` samples each index and records how many rows the table has and how many rows an
+    average key value matches. It writes the result into `sqlite_stat1`, one row per index, in a
+    compact string:
+
+    ```
+    ord|ord_cust_ts|50000 25 1
+    ord|ord_status|50000 16667
+    ```
+
+    The first number is the table row count; the following numbers are the average number of rows
+    per distinct value for each successive prefix of the index. So there are 50,000 orders, an
+    average `cust_id` matches 25 of them, and within a customer an average `ts` matches 1.
+
+    That is all the planner gets: averages, no histograms and no most-common-value list. It cannot
+    know that one customer holds 40% of the table, so a skewed value can produce a bad plan with no
+    warning. `PRAGMA optimize` is the modern way to keep statistics fresh — it runs `ANALYZE` only
+    where needed, and `PRAGMA analysis_limit = 400` bounds the sampling cost. Run it periodically
+    and on connection close rather than calling `ANALYZE` on every startup.
+  tags: [analyze, statistics, planner]
+
+- id: sqlite-basic-019
+  topic: foreign keys
+  difficulty: beginner
+  question: Why do foreign keys seem not to be enforced?
+  answer: |
+    Because enforcement is off by default. `PRAGMA foreign_keys = ON` must be set on **every
+    connection**, and it cannot be changed inside a transaction. It is per-connection, not stored
+    in the file, so an ORM that opens its own connections, a migration tool, or a `sqlite3` CLI
+    session will not enforce anything unless it sets the pragma itself.
+
+    Once enabled, three more conditions apply. The parent key must be the primary key or have a
+    `UNIQUE` index with a matching collation. The child column should have its own index, because
+    SQLite does not create one, and a parent delete otherwise scans the child table while holding a
+    write lock. And existing violations are not detected — `PRAGMA foreign_key_check` reports them
+    and should be run after any bulk import.
+
+    Two subtleties: `INSERT OR IGNORE` does not ignore foreign-key violations, only uniqueness,
+    NOT NULL and CHECK; and `INSERT OR REPLACE` deletes the conflicting row, which fires `ON DELETE
+    CASCADE` on children. Use `ON CONFLICT ... DO UPDATE` when you mean upsert.
+  tags: [foreign-keys, pragma, cascades]
+
+- id: sqlite-basic-020
+  topic: fts5
+  difficulty: intermediate
+  question: How does FTS5 work, and how should results be ranked?
+  answer: |
+    FTS5 is a virtual table that maintains an inverted index from tokens to rowids, plus a shadow
+    table holding the original text unless you opt out. You query it with `MATCH`, not `LIKE`:
+
+    ```sql
+    SELECT rowid, title FROM docs WHERE docs MATCH 'checkpoint NEAR(wal, 5)';
+    ```
+
+    The query language supports phrases, `AND`/`OR`/`NOT`, `NEAR`, column filters (`title:sqlite`)
+    and prefix terms (`wal*`). Tokenizers control what a token is: `unicode61` for general text,
+    `porter` for English stemming, `trigram` for substring search over identifiers and SKUs.
+
+    Ranking uses `bm25()`, which returns a negative score — more negative is better — and the
+    pseudo-column `rank` is that score, so `ORDER BY rank` ascending puts the best match first.
+    Column weights are positional: `bm25(docs, 10.0, 1.0)` weights the title ten times the body.
+    `snippet()` and `highlight()` render matched text.
+
+    To avoid storing the text twice, use an external-content table (`content='docs',
+    content_rowid='id'`) with triggers to mirror inserts and deletes, then `'rebuild'` after a bulk
+    load and `'integrity-check'` to confirm index and content agree.
+  tags: [fts5, bm25, search]
+
+- id: sqlite-basic-021
+  topic: json
+  difficulty: intermediate
+  question: How do you query and index JSON documents?
+  answer: |
+    Store the document in a `TEXT` column, validate it with `CHECK (json_valid(payload))`, and
+    query with `json_extract(payload, '$.status')`. The `->` operator returns JSON text, `->>`
+    returns a SQL value, and `json_each` / `json_tree` turn arrays and objects into rows for joins
+    and aggregates. `json_group_array` and `json_group_object` build documents back up.
+
+    Filtering with `json_extract` alone is a full scan. There are two ways to index it. An
+    expression index on the exact expression works but requires every query to use that same text.
+    A generated column is better:
+
+    ```sql
+    ALTER TABLE docs ADD COLUMN status TEXT
+      GENERATED ALWAYS AS (json_extract(payload, '$.status')) VIRTUAL;
+    CREATE INDEX docs_status ON docs(status);
+    ```
+
+    Now `WHERE status = 'open'` is an ordinary indexed predicate and the expression lives in the
+    schema. Since 3.45, `jsonb()` stores the parsed form as a blob — often smaller, faster to
+    traverse, and still queryable; `json(x)` converts it back to text. The path language is a small
+    subset of JSONPath: `$`, `.key`, `[n]`, `[#-1]` — there are no wildcards or recursive descent,
+    so "find this key anywhere" is a scan with `json_tree`.
+  tags: [json, generated-columns, indexing]
+
+- id: sqlite-basic-022
+  topic: backup and recovery
+  difficulty: advanced
+  question: How do you back up a live database, and how do you verify the backup?
+  answer: |
+    Use a snapshot mechanism, not `cp`. `VACUUM INTO '/backups/app.db'` writes a transactionally
+    consistent, compacted copy while the database is in use; it refuses to overwrite an existing
+    file and holds a read lock for the duration. The backup API — `Connection.backup()` in Python —
+    copies pages in bounded steps and restarts if the source changes, which suits a long backup on
+    a busy file. For continuous protection, ship the WAL with Litestream or LiteFS.
+
+    Copying files by hand is only safe with every writer stopped, and even then the `.db`, `-wal`
+    and `-shm` must be taken together. A `.db` copied while writers are active is either stale or
+    torn.
+
+    Verify the copy, not the original: `PRAGMA integrity_check` (full b-tree and index-content
+    check), `PRAGMA quick_check` (structure only, much faster), `PRAGMA foreign_key_check`, then
+    `PRAGMA user_version` and a row count to confirm it is the database you think it is. Finally,
+    start the application against it. On restore, delete any stale `-wal` and `-shm` beside the
+    restored file — applying an old WAL to a new database is a corruption event.
+  tags: [backup, integrity-check, restore]

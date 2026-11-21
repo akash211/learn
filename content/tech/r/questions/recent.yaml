@@ -1,0 +1,377 @@
+- id: r-recent-001
+  topic: dplyr
+  difficulty: intermediate
+  question: What did `.by` change about grouped operations, and why do interviewers ask about it?
+  answer: |
+    `.by` (dplyr 1.1, 2023) groups for a single operation instead of setting persistent grouping.
+
+    ```r
+    df |> summarise(total = sum(revenue), .by = customer_id)
+    df |> mutate(share = revenue / sum(revenue), .by = c(customer_id, month))
+    ```
+
+    Before it, every grouped operation needed `group_by()` … `ungroup()`, and forgetting the
+    `ungroup()` leaked grouping into later verbs. That leak is a real production bug: a
+    `mutate(share = revenue / sum(revenue))` after an ungrouped-looking pipeline computes a
+    within-group share, and the numbers look plausible.
+
+    Interviewers ask because it separates people who have written pipelines from people who have
+    read about them. The expected answer covers three points: `.by` accepts tidy-select (so
+    `c(a, b)`, `starts_with()`, `where()` work), it always returns an ungrouped result, and
+    `group_by()` is still correct when several consecutive verbs share the grouping or when you use
+    `nest()`, `group_split()` or `group_map()`, which read the persistent grouping.
+
+    `summarise()` also drops the last grouping level by default and messages about it; `.groups =
+    "drop"` silences the message and returns an ungrouped frame.
+  tags: [dplyr, grouping, versioning]
+  period: "2024-2026"
+  type: representative
+
+- id: r-recent-002
+  topic: joins
+  difficulty: advanced
+  question: How do you write an as-of join in R today, and what guards would you add?
+  answer: |
+    `join_by()` (dplyr 1.1) supports inequality conditions, so an as-of lookup — "the price that was
+    valid at the moment of the order" — is a single join rather than a `findInterval()` or a
+    `data.table` rolling join.
+
+    ```r
+    orders |>
+      left_join(
+        prices,
+        by = join_by(product_id, order_ts >= valid_from, order_ts < valid_to),
+        relationship = "many-to-one"
+      )
+    ```
+
+    Equality conditions must come first; inequalities are applied within each equality group. Use a
+    half-open interval (`>=` lower, `<` upper) so a boundary timestamp matches exactly one version
+    instead of two.
+
+    The guards matter as much as the join. `relationship = "many-to-one"` errors if a single order
+    matches more than one price row, which is exactly the failure a missing `valid_to` produces.
+    `na_matches = "never"` stops `NA` product IDs from matching each other. And an
+    `anti_join(prices, by = "product_id")` beforehand tells you which products have no price at all,
+    which is a coverage question the join cannot answer.
+
+    `data.table`'s rolling join (`DT[orders, on = .(product_id, order_ts), roll = TRUE]`) is the
+    older, faster equivalent, and remains the right answer on very large tables.
+  tags: [joins, join-by, as-of]
+  period: "2024-2026"
+  type: representative
+
+- id: r-recent-003
+  topic: joins
+  difficulty: intermediate
+  question: What do `relationship` and `multiple` do in a dplyr join, and what does the default warning mean?
+  answer: |
+    They declare what you believe about the cardinality, and dplyr checks it.
+
+    ```r
+    left_join(orders, customers, by = "customer_id", relationship = "many-to-one")
+    ```
+
+    `relationship` accepts `"one-to-one"`, `"one-to-many"`, `"many-to-one"` and `"many-to-many"`. If
+    the data disagrees, the join **errors** — which is the point. `"many-to-one"` is the assertion
+    you want on almost every fact-to-dimension join: many orders, one customer.
+
+    `multiple` controls what happens when a row does match several rows: the default warns on an
+    unexpected match and expands the rows, `"all"` accepts the expansion silently, `"first"`/`"last"`
+    keep one, `"any"` keeps an arbitrary one. `"first"` and `"last"` are how a wrong price gets
+    chosen without anyone noticing.
+
+    The default warning you see — "Detected an unexpected many-to-many relationship" — is dplyr
+    telling you the join is not the one you described. The fix is not to silence it with
+    `multiple = "all"`; it is to find out why the right-hand table has duplicate keys, usually a
+    slowly changing dimension without a version column or a key with trailing whitespace.
+  tags: [joins, cardinality, data-quality]
+  period: "2024-2026"
+  type: representative
+
+- id: r-recent-004
+  topic: language
+  difficulty: intermediate
+  question: What is the difference between the native pipe `|>` and magrittr's `%>%`?
+  answer: |
+    Both pipe a value into a function, with three practical differences.
+
+    **Placeholder.** `%>%` accepts `.` anywhere in the call, so `x %>% lm(y ~ ., data = .)` works on
+    any version. `|>` only pipes into the first argument; for other positions you need the `_`
+    placeholder, which requires R ≥ 4.2 and can appear once, as a named argument:
+
+    ```r
+    x |> lm(y ~ ., data = _)      # legal from R 4.2
+    x |> (\(d) lm(y ~ ., data = d))()   # the older workaround
+    ```
+
+    **Implementation.** `|>` is parsed by the engine, has no dependency, no overhead, and cannot be
+    redefined. `%>%` is a function call, so it adds a frame to the call stack and can be masked —
+    which is why `%>%` inside a package needs an import.
+
+    **Semantics.** `%>%` supports `%$%`, `%T>%` and brace-wrapped blocks; `|>` does not. `|>`
+    requires the right-hand side to be a call, so `x |> y` is an error unless `y` is a function.
+
+    In new code, use `|>`. Keep `%>%` where the placeholder is genuinely needed or where the code
+    must run on R < 4.1. Mixing them in one pipeline is legal and confusing.
+  tags: [pipe, syntax, r-4.1]
+  period: "2024-2026"
+  type: representative
+
+- id: r-recent-005
+  topic: iteration
+  difficulty: intermediate
+  question: Why are `map_dfr()` and `map_dfc()` no longer recommended, and what replaced them?
+  answer: |
+    purrr 1.0 (2022) superseded them in favour of composing `map()` with an explicit binder:
+
+    ```r
+    files |> map(read_csv) |> list_rbind()
+    files |> map(read_csv) |> list_cbind()
+    ```
+
+    The reasons are practical. `map_dfr()` hard-codes row-binding semantics with no way to name the
+    source list, while `list_rbind(names_to = "file")` adds a provenance column — the thing you
+    almost always want when reading many files. `list_rbind()` also handles columns that appear in
+    some elements and not others by filling `NA`, where the `_dfr` variants were stricter and
+    harder to reason about. And `list_cbind()` names its output columns from the list names, which
+    `map_dfc()` did silently and often wrongly.
+
+    Structurally, `map()` returning a plain list is easier to inspect: you can `map_lgl()` over it to
+    find failures, subset it with `keep()`, or `walk()` it to log progress, before deciding how to
+    combine it. `map_dfr()` collapsed those two steps into one, so a partial failure produced a
+    half-built data frame.
+
+    This is a good "have you read the changelog" question; the answer should mention `names_to` and
+    the inspect-then-combine structure, not just the new function name.
+  tags: [purrr, list-rbind, superseded]
+  period: "2024-2026"
+  type: representative
+
+- id: r-recent-006
+  topic: reporting
+  difficulty: intermediate
+  question: Quarto or R Markdown for a new analysis report in 2026, and what actually changed?
+  answer: |
+    Quarto, unless the environment cannot install the CLI. It is the same authoring model (Markdown,
+    code chunks, knitted output) with a better project story.
+
+    What changed in practice:
+
+    - Chunk options moved inside the chunk as `#|` comments (`#| label:`, `#| echo: false`,
+      `#| fig-cap:`), which keeps the code block valid R.
+    - Cross-references are native: `@fig-revenue` and `@tbl-costs` resolve to numbered references,
+      where R Markdown needed `bookdown` or manual numbering.
+    - Multi-document projects (books, websites) are a `_quarto.yml` instead of a `bookdown` setup.
+    - `freeze: auto` re-executes only documents whose source changed — the sane version of
+      `cache: TRUE`.
+    - The engine is configurable: the same `.qmd` renders with `knitr` (R) or `jupyter` (Python),
+      which matters for mixed teams.
+    - Output targets beyond HTML/PDF/Word: RevealJS, Typst (a much smaller dependency than LaTeX for
+      PDF), dashboards.
+
+    The case for staying on R Markdown: existing `bookdown` books, `flexdashboard` and
+    `xaringan` decks already in production, and locked-down images with `rmarkdown` but no Quarto
+    binary. Both call the same `knitr` engine under the hood for R, so the R code does not change.
+  tags: [quarto, rmarkdown, reporting]
+  period: "2024-2026"
+  type: representative
+
+- id: r-recent-007
+  topic: reshaping
+  difficulty: beginner
+  question: What replaced `separate()` and `extract()`, and why?
+  answer: |
+    tidyr 1.3 (2023) introduced `separate_wider_delim()`, `separate_wider_position()`,
+    `separate_wider_regex()` and `separate_longer_delim()`, and superseded `separate()` and
+    `extract()`.
+
+    ```r
+    df |> separate_wider_delim(id, delim = "-", names = c("site", "year"))
+    df |> separate_longer_delim(tags, delim = ";")   # one row per tag
+    ```
+
+    The redesign fixed the old function's worst behaviour: `separate()` silently dropped the
+    remainder of a string unless you counted fields exactly right, and `extra = "warn"` produced
+    rows with `NA`s you might not notice. The `_wider_` family errors with a clear message when the
+    number of pieces does not match `names`, and `too_many`/`too_few` arguments let you choose
+    between `"warn"`, `"error"` and `"debug"` explicitly.
+
+    `separate_longer_delim()` covers the case people used `strsplit()` plus `unnest()` for — a
+    delimited list inside one cell — without leaving the tidyverse.
+
+    `extract()` became `separate_wider_regex()` with named capture groups, which is safer than a
+    positional regex and reports unmatched rows instead of quietly producing `NA`.
+  tags: [tidyr, separate, strings]
+  period: "2024-2026"
+  type: representative
+
+- id: r-recent-008
+  topic: graphics
+  difficulty: beginner
+  question: What changed in ggplot2 3.4 that breaks older chart code?
+  answer: |
+    Two things, both visible in existing scripts:
+
+    **`size` split into `linewidth`.** For line-based geoms (`geom_line`, `geom_path`,
+    `geom_smooth`, `geom_segment`, `geom_rect` borders), the width is now `linewidth`, and `size`
+    produces a deprecation warning (and applies to point size only). `geom_line(size = 1)` should
+    become `geom_line(linewidth = 1)`.
+
+    **`coord_flip()` is superseded.** It still works, but the modern way is to map the categorical
+    variable to `y` directly, or to set `orientation`:
+
+    ```r
+    ggplot(df, aes(x = revenue, y = fct_reorder(category, revenue))) + geom_col()
+    ```
+
+    Horizontal bars now need `y = category, x = value` plus `geom_col()`, and boxplots/violins use
+    `orientation = "y"` when the mapping is ambiguous.
+
+    Other changes worth knowing: the default `theme_grey()` grid and palettes were adjusted in 3.4,
+    so pixel-comparison tests (`vdiffr`) needed new snapshots; `aes_string()` was deprecated in
+    favour of `.data[[var]]`; and `size` for text remains `size`, so a search-and-replace across all
+    `size =` arguments will break labels.
+
+    The interview point is that you know deprecated-but-working is different from removed, and that
+    a warning in a rendering pipeline should be fixed rather than suppressed.
+  tags: [ggplot2, linewidth, deprecation]
+  period: "2024-2026"
+  type: representative
+
+- id: r-recent-009
+  topic: time series
+  difficulty: advanced
+  question: Would you use `forecast` or the tidyverts (`tsibble`/`fable`) for forecasting 300 SKUs?
+  answer: |
+    tidyverts, because the problem is many series, not one model.
+
+    ```r
+    library(tsibble); library(fable); library(feasts)
+
+    fit <- sales |> as_tsibble(key = sku, index = week) |>
+      model(ets = ETS(units), arima = ARIMA(units), snaive = SNAIVE(units))
+
+    fit |> accuracy() |> arrange(sku, RMSE)
+    fit |> forecast(h = 12) |> autoplot()
+    ```
+
+    `fable` keeps every series in one mable, so model selection, accuracy comparison and forecasting
+    are table operations rather than a `for` loop with a list of model objects. It detects gaps in
+    the index instead of silently shifting the series, as `ts` does when a week is missing. And it
+    has `reconcile()` for hierarchical forecasts (SKU → category → total), which `forecast` does not
+    do natively.
+
+    `forecast` remains better when the question is one series and the answer needs explanation:
+    `auto.arima()`'s output, `checkresiduals()` and `forecast::accuracy()` are more direct, and the
+    package is far more widely documented. `ets()`/`auto.arima()` are the same underlying methods
+    in both.
+
+    The honest answer for an interview: either works for 300 series; what matters is that you fit a
+    `SNAIVE` baseline, evaluate on a rolling origin, and report accuracy per series rather than one
+    aggregate number that hides the twenty SKUs the model cannot forecast.
+  tags: [time-series, fable, tsibble, forecasting]
+  period: "2024-2026"
+  type: representative
+
+- id: r-recent-010
+  topic: performance
+  difficulty: advanced
+  question: How would you analyse a 40 GB Parquet dataset when the machine has 16 GB of RAM?
+  answer: |
+    Do not load it. Push the work down to a query engine that reads Parquet lazily.
+
+    ```r
+    library(arrow); library(dplyr)
+
+    ds <- open_dataset("s3://bucket/orders/", partitioning = c("year", "month"))
+
+    ds |>
+      filter(year == 2024, status == "paid") |>
+      select(customer_id, order_ts, revenue) |>
+      summarise(revenue = sum(revenue), n = n(), .by = customer_id) |>
+      collect()
+    ```
+
+    `open_dataset()` reads only the columns and row groups the query needs — Parquet is columnar, so
+    `select()` and `filter()` on partition columns skip most of the bytes. `collect()` materialises
+    only the (small) aggregated result.
+
+    `duckdb` is the alternative and often faster for complex joins:
+
+    ```r
+    con <- DBI::dbConnect(duckdb::duckdb())
+    orders <- dplyr::tbl(con, "read_parquet('orders/*.parquet')")
+    ```
+
+    `duckplyr` goes further and runs ordinary dplyr verbs through DuckDB, falling back to dplyr for
+    anything it cannot translate.
+
+    The judgement part: if this is a recurring pipeline rather than an analysis, the right answer is
+    to aggregate in the warehouse (SQL) and pull a small result into R — R is a poor place to hold
+    40 GB, and the platform team already has a system that does it well.
+  tags: [arrow, duckdb, parquet, memory]
+  period: "2024-2026"
+  type: representative
+
+- id: r-recent-011
+  topic: reproducibility
+  difficulty: intermediate
+  question: A reviewer must reproduce an analysis from 18 months ago. What do you hand them?
+  answer: |
+    Four artefacts, in this order:
+
+    1. **The source** — the `.qmd`/`.Rmd` and any scripts, in version control, at the commit that
+       produced the report.
+    2. **The environment** — `renv.lock`, which pins every package version, plus the R version
+       itself. Without it, a `dplyr` or `ggplot2` upgrade can change output.
+    3. **The data**, or a content hash plus the query that produced it. A report that cannot be
+       re-run on its inputs is a document, not an analysis.
+    4. **`sessionInfo()`** — a sidecar file recording R version, platform and package versions
+       actually loaded at render time.
+
+    ```r
+    renv::snapshot()      # writes renv.lock
+    renv::restore()       # reproduces the library
+    ```
+
+    The container image is the fuller answer: `rocker/r-ver` pinned to the minor version, packages
+    restored from the lockfile, system libraries in the Dockerfile. That covers what `renv` cannot —
+    R itself, `libcurl`, fonts, the pandoc/Quarto version.
+
+    In CI, `renv::restore()` with a persistent cache makes this cheap. The failure mode to avoid is
+    the common one: source in git, packages installed globally on one machine, and a lockfile that
+    was never committed.
+  tags: [renv, reproducibility, containers]
+  period: "2024-2026"
+  type: representative
+
+- id: r-recent-012
+  topic: positioning
+  difficulty: advanced
+  question: When would you choose R over Python for a data team in 2026, and when the other way?
+  answer: |
+    By deliverable and by who maintains it, not by benchmark.
+
+    **Choose R** when the output is statistical inference, a model with diagnostics, or a document
+    that explains both. The formula interface, `lme4`, `survival`, `emmeans`, `forecast`, `fixest`,
+    `marginaleffects` and the Bioconductor stack have no equally mature Python equivalents, and
+    Quarto makes "analysis + narrative + reproducible code" one artefact. Teams of statisticians,
+    epidemiologists, pharma, academic and quant-research groups are productive in R in a way they
+    are not in pandas.
+
+    **Choose Python** when the output is a service or a pipeline that other engineers maintain. Job
+    orchestration, typed interfaces, packaging, deployment, CI and the ML infrastructure ecosystem
+    are all stronger, and the hiring pool is larger. `pandas`/`polars` plus `statsmodels` cover most
+    tabular and modelling needs.
+
+    **Both** is a legitimate and common answer: Python for ingestion, orchestration and serving; R
+    for analysis and reporting, exchanging Parquet, with `reticulate` for the occasional call across.
+    What does not work well is putting R in the serving path of a high-throughput service or making
+    a Python platform team own R batch jobs they cannot debug.
+
+    A strong answer names a real cost: two languages means two dependency systems, two CI setups and
+    a split review culture — so the reason to add R must be a capability gap, not preference.
+  tags: [positioning, python, strategy]
+  period: "2024-2026"
+  type: representative

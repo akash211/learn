@@ -1,0 +1,651 @@
+- id: r-basic-001
+  topic: vectors
+  difficulty: beginner
+  question: Why does R have no scalars, and what does that change about how you write code?
+  answer: |
+    Every value in R is a vector; `1` is a vector of length one. `length(1)` is `1`, not `NULL` or
+    an error, and there is no separate scalar type to unwrap. Operators are vectorised, so
+    `c(1, 2, 3) * 2` is `2 4 6` with no loop.
+
+    Three consequences follow. Functions must be written to accept length-n input, so `if (x > 5)`
+    is wrong the moment `x` has length greater than one — `if` requires a length-one logical and
+    errors otherwise; `ifelse()` or `dplyr::case_when()` is the vectorised form. Second, scalars in
+    a data frame are recycled to the column length, which is convenient (`mutate(df, rate = 0.2)`)
+    and dangerous when the recycling is accidental. Third, there is no "iterate over rows" idiom at
+    the language level: the natural unit of work is the whole column, and row-wise work needs an
+    explicit tool (`rowSums()`, `rowwise()`, `pmap()`).
+
+    This is why R feels clumsy when you port a loop from another language and elegant when you
+    express the transformation over the column instead.
+  tags: [vectors, vectorisation, recycling]
+
+- id: r-basic-002
+  topic: subsetting
+  difficulty: beginner
+  question: What is the difference between `[`, `[[` and `$` in R?
+  answer: |
+    `[` subsets and returns **the same type**: a list slice is a list, a vector slice is a vector.
+    `[[` extracts **one element, unwrapped**: a list slice of one element becomes the element itself.
+    `$` is shorthand for `[[` with a literal name, plus partial matching.
+
+    ```r
+    x <- list(a = 1:3, b = "text")
+    x[1]      # list of length 1
+    x[[1]]    # integer vector 1 2 3
+    x$b       # "text"
+    x[["b"]]  # identical, but never partially matches
+    ```
+
+    For a data frame, `df["col"]` is a one-column data frame and `df[, "col"]` is a vector because
+    `[` defaults to `drop = TRUE`; tibbles never drop. `df$col` returns `NULL` for a name that does
+    not exist, which then propagates silently, while `df[["col"]]` errors — prefer the latter in
+    code that must fail loudly.
+
+    `$` partial matching is the trap: if a list has `$revenue` and not `$rev`, `x$rev` returns
+    `NULL`, but with both `$revenue` and `$revenue_net` present, `$rev` is ambiguous and returns
+    `NULL` too. Tibbles disable partial matching entirely.
+  tags: [subsetting, lists, data-frames]
+
+- id: r-basic-003
+  topic: vectors
+  difficulty: beginner
+  question: Why is `for (i in 1:n)` dangerous, and what should you write instead?
+  answer: |
+    `:` counts in either direction. When `n` is `0`, `1:0` is `c(1, 0)` — two iterations — and when
+    `n` is negative it counts down over a range of negative indices. So a loop that "works" on a
+    non-empty input silently processes a phantom row on empty input, which is exactly the case that
+    reaches production at 2 a.m.
+
+    ```r
+    n <- 0
+    1:n          # 1 0
+    seq_len(n)   # integer(0)
+    seq_along(x) # always the valid indices of x
+    ```
+
+    Use `seq_len(n)` for "n things" and `seq_along(x)` for "each element of x". The same bug appears
+    in `x[1:length(x)]`, which on an empty vector selects elements 1 and 0.
+
+    Related: `x[-1]` drops the first element but `x[0]` is empty, and `x[length(x)]` on an empty
+    vector returns `NA` rather than erroring, so the failure surfaces later as a missing value.
+  tags: [loops, off-by-one, sequences]
+
+- id: r-basic-004
+  topic: coercion
+  difficulty: beginner
+  question: How does R decide the type of `c(1, "a", TRUE)`, and why does it matter?
+  answer: |
+    `c()` coerces to the highest type present in the fixed order
+    `logical < integer < double < complex < character`. So `c(1, "a", TRUE)` is the character vector
+    `"1" "a" "TRUE"` — silently, with no warning.
+
+    ```r
+    c(1L, 2.5)      # double
+    c(TRUE, 1L)     # integer
+    c(1L, "a")      # character
+    ```
+
+    It matters because upward coercion is lossless and invisible, so a single character value in one
+    column of a `c()` or `rbind()` turns the whole vector into text, and the next `mean()` returns
+    `NA` with only a warning. The same thing happens to a data frame column when one row contains
+    `"N/A"` instead of `NA`: `read.csv()` with a character column, then `as.numeric()` on it, is the
+    classic route to a numeric column that is entirely `NA`.
+
+    Downward coercion is the opposite: `as.integer(2.9)` truncates to `2` without complaint, and
+    `as.integer("3.9")` parses then truncates. If truncation is not what you mean, `round()` first.
+  tags: [coercion, types, debugging]
+
+- id: r-basic-005
+  topic: missing data
+  difficulty: beginner
+  question: What is the difference between `NA` and `NaN`, and why does `x == NA` never work?
+  answer: |
+    `NA` is a missing value of unknown type — it is logical by default and is coerced into whatever
+    vector it enters. `NaN` ("not a number") is the result of an undefined numeric operation, such
+    as `0/0` or `log(-1)`.
+
+    ```r
+    is.na(NaN)        # TRUE  — NaN is a kind of missing value
+    is.nan(NA_real_)  # FALSE — NA is missing but not NaN
+    NA == NA          # NA, not TRUE
+    ```
+
+    Comparison with `NA` propagates `NA` because the answer genuinely is unknown: is an unknown
+    value equal to another unknown value? Hence `x == NA` is `NA` for every element, and inside
+    `if()` it raises *"missing value where TRUE/FALSE needed"*. `is.na()` is the only safe test, and
+    it is vectorised.
+
+    The consequence people miss is that `NA` also breaks `ifelse()`, `%in%` behaves differently by
+    design (`NA %in% c(1, NA)` is `TRUE`), and `which()` drops `NA`s, so `which(x > 5)` is the
+    length-safe form of "rows that match".
+  tags: [na, nan, comparisons]
+
+- id: r-basic-006
+  topic: missing data
+  difficulty: beginner
+  question: What does `na.rm = TRUE` actually do, and when does it give a misleading answer?
+  answer: |
+    It removes `NA`s before the aggregation, so `sum(c(1, NA, 3), na.rm = TRUE)` is `4` and
+    `mean(c(1, NA, 3), na.rm = TRUE)` is `2`. Without it, both return `NA`.
+
+    The misleading case is an all-missing group: `sum()` of an empty vector is `0`, but `mean()` of
+    one is `NaN`. So a summarise step reports zero revenue for a customer whose revenue is simply
+    unknown — a real zero and a missing value become indistinguishable, and downstream totals are
+    wrong rather than absent.
+
+    ```r
+    mean(NA_real_, na.rm = TRUE)   # NaN
+    sum(NA_real_, na.rm = TRUE)    # 0
+    ```
+
+    Guard it explicitly when the distinction matters: `if (all(is.na(x))) NA_real_ else
+    mean(x, na.rm = TRUE)`, or count missingness alongside the aggregate
+    (`sum(is.na(x))` as a column) so the report can show coverage.
+
+    `na.rm` is an argument of the aggregate, not a property of the data — `dplyr::summarise()` does
+    not apply it for you, so every `mean()`/`sum()` in a pipeline needs the decision made once,
+    deliberately.
+  tags: [na, aggregation, reporting]
+
+- id: r-basic-007
+  topic: factors
+  difficulty: beginner
+  question: Why is `as.numeric()` on a factor almost always a bug?
+  answer: |
+    A factor is an integer vector plus a `levels` attribute. `as.numeric()` returns the **codes**,
+    not the labels.
+
+    ```r
+    x <- factor(c("2", "10", "2"))
+    levels(x)                     # "2" "10"  — sorted as text
+    as.numeric(x)                 # 1 2 1     — codes
+    as.numeric(as.character(x))   # 2 10 2    — the values
+    as.numeric(levels(x))[x]      # 2 10 2    — same, faster
+    ```
+
+    So a score column stored as a factor reports a mean of 1.6 instead of 15, and nothing errors.
+    The `levels(x)[x]` form is the idiomatic fast version because it indexes once instead of parsing
+    every element.
+
+    Two related symptoms of the same design: `ifelse()` on a factor returns codes rather than
+    labels, and assigning a value that is not a level produces `NA` with the warning *"invalid
+    factor level, NA generated"* — which is how a new product code becomes missing data after a
+    `factor()` call. If you need numbers, read them as numbers (`readr::read_csv()` will, and will
+    tell you which values failed to parse); only make a factor when you want levels.
+  tags: [factors, coercion, numeric]
+
+- id: r-basic-008
+  topic: factors
+  difficulty: beginner
+  question: How do factor levels affect sorting and comparison, and what changed in R 4.0?
+  answer: |
+    Level order is set when the factor is created — alphabetically for character input, numerically
+    for numeric input converted with `factor()`. That order drives `levels()`, `table()` row order,
+    `ggplot2` axis order, and the reference level in a regression.
+
+    Comparison on an **unordered** factor is not meaningful: `factor("b") > factor("a")` warns
+    *"not meaningful for factors"* and returns `NA`. Sorting a factor sorts by level order, not
+    alphabetically by label, so `factor(c("10", "9"))` sorts as `"10"`, `"9"` because that is the
+    textual level order.
+
+    R 4.0.0 changed the default of `stringsAsFactors` to `FALSE` in `data.frame()` and `read.csv()`,
+    so text now stays character. Scripts written before that assumed implicit factors; code that
+    relied on `df$col` being a factor now gets character, which changes `table()` output, model
+    matrices and any `as.numeric()` call that used to return codes.
+
+    Reorder deliberately with `forcats::fct_relevel()` (reference level), `fct_reorder()` (by a
+    statistic, for charts) and `fct_infreq()`; use `droplevels()` or `fct_drop()` after filtering so
+    empty categories stop appearing in tables.
+  tags: [factors, levels, r-4.0]
+
+- id: r-basic-009
+  topic: data frames
+  difficulty: beginner
+  question: What are the practical differences between a data frame and a tibble?
+  answer: |
+    A tibble is a data frame with stricter defaults. The differences that change behaviour:
+
+    - `df[, "x"]` on a data frame drops to a vector by default; on a tibble it always returns a
+      one-column tibble. `df[["x"]]` and `df$x` return the vector in both.
+    - `$` partial matching: data frames match prefixes (with a warning option), tibbles never do. A
+      typo is an error instead of a wrong column.
+    - Printing: a data frame prints every row and wraps; a tibble prints ten rows, the column types
+      (`dbl`, `chr`, `fct`, `date`) and truncates the rest. That header catches a text column you
+      thought was numeric.
+    - Row names are not supported in tibbles; list-columns are first class.
+    - Non-syntactic column names are preserved and printed with backticks, where `data.frame()`
+      renames them by default.
+
+    What does not differ: `length()` is still the number of columns, `nrow()` the number of rows, and
+    both are lists of equal-length vectors under the hood. `dplyr` returns tibbles regardless of what
+    you pass in, so code that indexes with `[` must not assume dropping.
+  tags: [tibble, data-frame, printing]
+
+- id: r-basic-010
+  topic: dplyr
+  difficulty: beginner
+  question: What does `filter()` do with `NA` conditions, and how do you keep those rows?
+  answer: |
+    `filter()` keeps rows where the condition is `TRUE`. `NA` is treated as `FALSE`, so rows with a
+    missing value in the tested column are silently dropped — no warning, no error, just fewer rows.
+
+    ```r
+    df |> filter(amount > 100)                     # drops NA amounts
+    df |> filter(is.na(amount) | amount > 100)     # keeps them
+    ```
+
+    This is deliberate: SQL `WHERE` has the same three-valued logic (`WHERE amount > 100` excludes
+    `NULL`), so `filter()` matches SQL. The practical risk is a pipeline that quietly loses rows
+    whenever an upstream join produced `NA`, which then looks like a data-quality problem rather
+    than a join problem.
+
+    Two habits: put a `count()` or `stopifnot(nrow(...) == expected)` after a filter that is meant to
+    preserve row count, and use `filter(!is.na(x), x > 100)` when `NA` in `x` is itself the bug you
+    want to surface. `tidyr::drop_na()` is the explicit version of "drop rows with missing values".
+  tags: [dplyr, filter, na]
+
+- id: r-basic-011
+  topic: dplyr
+  difficulty: beginner
+  question: When should you use `group_by()` and when `.by =`?
+  answer: |
+    `group_by()` sets grouping that persists across subsequent verbs until `ungroup()`; `.by =`
+    groups for exactly one operation. They compute the same thing inside that operation.
+
+    ```r
+    df |> group_by(customer_id) |> summarise(total = sum(revenue))   # still grouped after
+    df |> summarise(total = sum(revenue), .by = customer_id)         # grouping ends here
+    ```
+
+    Prefer `.by` for `mutate()`, `summarise()`, `filter()` and `slice_*()`. It cannot leak state, so
+    a later `mutate()` cannot accidentally compute group-level values, and there is no `ungroup()`
+    to forget. The leaked-grouping bug is common: a `group_by()` early in a long pipeline makes
+    every later `mutate()` grouped, so `mutate(share = revenue / sum(revenue))` silently computes a
+    within-group share when you meant the overall one.
+
+    `group_by()` is still correct when the grouping applies to several verbs in a row
+    (`group_by(g) |> mutate(...) |> filter(...) |> summarise(...)`), and some functions such as
+    `group_split()`, `group_map()` and `nest()` read the persistent grouping. Also note that
+    `summarise()` drops the last level of grouping by default and says so in a message; set
+    `.groups = "drop"` to silence it and keep the result ungrouped.
+  tags: [dplyr, grouping, pipelines]
+
+- id: r-basic-012
+  topic: dplyr
+  difficulty: beginner
+  question: What is the difference between `mutate()` and `summarise()`, and when is `reframe()` the answer?
+  answer: |
+    `mutate()` adds or overwrites columns and returns **the same number of rows**. `summarise()`
+    collapses each group to **one row** per group, and only the grouping columns and the computed
+    summaries survive.
+
+    ```r
+    df |> mutate(share = revenue / sum(revenue))              # n rows
+    df |> summarise(total = sum(revenue), .by = customer_id)  # one row per customer
+    ```
+
+    Choosing wrong is a shape error, not a value error, so it usually surfaces as a join that
+    suddenly matches many rows or a report with one row.
+
+    Since dplyr 1.1, `summarise()` may return more than one row per group (previously an error).
+    `reframe()` is the explicit spelling of that intent — "I am returning an arbitrary number of
+    rows per group" — and it is what to use for things like a fitted curve per group or the top three
+    rows per group where `slice_max()` does not fit.
+
+    ```r
+    df |> reframe(q = quantile(x, c(0.1, 0.5, 0.9)), level = c("p10", "p50", "p90"), .by = g)
+    ```
+  tags: [dplyr, mutate, summarise, reframe]
+
+- id: r-basic-013
+  topic: dplyr
+  difficulty: intermediate
+  question: What does `across()` do, and what did it replace?
+  answer: |
+    `across()` applies a function to a selection of columns inside `mutate()` or `summarise()`. It
+    replaced the `mutate_if()`, `mutate_at()`, `summarise_if()` and `summarise_at()` family, which
+    is now superseded.
+
+    ```r
+    df |> summarise(across(where(is.numeric), \(x) mean(x, na.rm = TRUE)))
+    df |> mutate(across(c(qty, price), \(x) coalesce(x, 0)))
+    df |> summarise(across(everything(), list(mean = mean, sd = sd), .names = "{.col}_{.fn}"))
+    ```
+
+    The first argument is a tidy-select, so `where(is.numeric)`, `starts_with("v")` and
+    `any_of(cols)` all work — including inside a function that takes the column set as an argument.
+    `\(x)` is the lambda syntax added in R 4.1.
+
+    `.names` builds output names from `{.col}` and `{.fn}` when you pass a named list of functions,
+    which is how you get `revenue_mean` and `revenue_sd` in one step. Without `.names` you get
+    `revenue_mean` style names automatically for a single function and `revenue_1` style when
+    unnamed.
+
+    The common mistake is reaching for `across()` when a single column would do: `across()` is for
+    "many columns, same treatment", not for one column, where a plain `mutate()` is clearer.
+  tags: [dplyr, across, tidy-select]
+
+- id: r-basic-014
+  topic: joins
+  difficulty: beginner
+  question: Explain `left_join()`, `inner_join()` and `full_join()` in terms of rows kept.
+  answer: |
+    They differ only in which rows survive:
+
+    - `inner_join(x, y)` keeps rows with a match in **both**. Unmatched rows on either side are
+      dropped.
+    - `left_join(x, y)` keeps **every row of x**, adding `NA` where `y` has no match. The left row
+      count is preserved as long as `y`'s keys are unique.
+    - `right_join(x, y)` is `left_join(y, x)` with the columns in x's order.
+    - `full_join(x, y)` keeps rows from **both** sides, with `NA` on the side that is missing.
+
+    ```r
+    orders |> left_join(customers, by = join_by(customer_id))
+    orders |> inner_join(products, by = join_by(product_id))
+    ```
+
+    The count of rows is the thing to reason about: `inner_join()` is a filter as well as a
+    lookup, so "we lost 200 orders" is usually an inner join against a reference table with missing
+    keys. `left_join()` then produces `NA` columns instead, which is safer for reconciliation but
+    pushes the problem downstream.
+
+    Use `anti_join()` to diagnose which rows would be dropped before you commit to an inner join —
+    it returns exactly the unmatched keys.
+  tags: [joins, dplyr, row-counts]
+
+- id: r-basic-015
+  topic: joins
+  difficulty: intermediate
+  question: A join tripled your row count. What happened, and how do you prevent it?
+  answer: |
+    A join multiplies rows whenever a key on the right side appears more than once for a key on the
+    left. Three orders join on `product_id`, `prices` has two rows per product because it is a slowly
+    changing dimension with `valid_from`/`valid_to` versions — so each order matches two prices and
+    the table doubles.
+
+    Diagnose before joining:
+
+    ```r
+    prices |> count(product_id) |> filter(n > 1)
+    ```
+
+    Prevent it structurally rather than by memory: state the cardinality and let dplyr check it.
+
+    ```r
+    orders |> left_join(prices, by = join_by(product_id), relationship = "many-to-one")
+    ```
+
+    `relationship = "many-to-one"` errors if a left row matches more than one right row.
+    `"one-to-one"`, `"one-to-many"` and `"many-to-many"` cover the rest. The companion argument is
+    `multiple =`: the default warns on an unexpected many-to-many match, `"all"` accepts the fan-out
+    explicitly, `"first"`/`"last"` pick one row — and `"first"` is how a silently wrong price gets
+    chosen.
+
+    Also check the key types match; an integer joined to a character errors in dplyr and returns
+    zero matches in base `merge()` after coercion.
+  tags: [joins, fan-out, data-quality]
+
+- id: r-basic-016
+  topic: joins
+  difficulty: beginner
+  question: What are `semi_join()` and `anti_join()` for?
+  answer: |
+    They are **filtering** joins: they return columns from `x` only, keeping rows based on whether a
+    match exists in `y`.
+
+    ```r
+    active |> semi_join(orders, by = "customer_id")   # customers who ordered
+    active |> anti_join(orders, by = "customer_id")   # customers who never ordered
+    ```
+
+    `semi_join()` is what people mean when they write `inner_join()` and then `distinct()`: it
+    filters without duplicating rows when `y` has multiple matches, and it does not add columns.
+    `anti_join()` is the set difference, and it is the single most useful reconciliation tool in R —
+    "which orders are missing from the fact table", "which product codes are in the source but not
+    the dimension".
+
+    They are also cheaper than a mutating join followed by a filter, because no columns are carried
+    through. `distinct()` on the key column of `y` achieves a similar effect for `semi_join()` but
+    not for `anti_join()`'s purpose of finding gaps.
+
+    Base R equivalents are `x[x$id %in% y$id, ]` and `x[!x$id %in% y$id, ]`; note `%in%` never
+    returns `NA`, which makes it the right primitive for both.
+  tags: [joins, semi-join, anti-join]
+
+- id: r-basic-017
+  topic: reshaping
+  difficulty: beginner
+  question: How do you reshape wide data to long, and what do `names_sep` and `.value` control?
+  answer: |
+    `tidyr::pivot_longer()` turns columns into rows: one column becomes a key, one becomes a value.
+
+    ```r
+    sales |>
+      pivot_longer(cols = starts_with("q"),
+                   names_to = c("quarter", "year"),
+                   names_sep = "_",
+                   values_to = "revenue",
+                   values_drop_na = TRUE)
+    ```
+
+    `names_to` with more than one name splits each column name into several key columns, and
+    `names_sep` (a literal separator) or `names_pattern` (a regex with capture groups) says how.
+    With column names like `q1_2023`, `names_sep = "_"` gives `quarter = "q1"`, `year = "2023"`;
+    `names_pattern = "(q\\d)_(\\d{4})"` does the same with validation, since a name that does not
+    match produces `NA` you can detect.
+
+    `.value` is the sentinel for a wide table with **several measures**:
+
+    ```r
+    wide |> pivot_longer(cols = matches("^(sales|cost)_"),
+                         names_to = c(".value", "year"), names_sep = "_")
+    ```
+
+    Here the first name segment identifies which measure a column is, so `sales_2023` and
+    `cost_2023` become two columns on one row. Without `.value` you get one `value` column and have
+    to pivot again.
+
+    `values_drop_na` removes rows created from empty wide cells, which is usually what you want for
+    ragged tables; the older `gather()`/`spread()` pair is superseded.
+  tags: [tidyr, pivot-longer, tidy-data]
+
+- id: r-basic-018
+  topic: reshaping
+  difficulty: intermediate
+  question: Why does `pivot_wider()` sometimes return list-columns?
+  answer: |
+    Because the combination of `id_cols` and `names_from` does not uniquely identify a row, so a
+    single output cell would need several values. Rather than dropping or averaging them,
+    `pivot_wider()` warns — *"Values from `value` are not uniquely identified; output will contain
+    list-cols"* — and puts a vector in each cell.
+
+    ```r
+    # two rows for (customer, metric): ambiguous
+    df |> pivot_wider(names_from = metric, values_from = value)
+    # explicit: one value per cell
+    df |> pivot_wider(names_from = metric, values_from = value, values_fn = sum)
+    ```
+
+    The warning is not cosmetic. A list-column silently breaks every later `mutate()` that expects a
+    number, and the "take the first" behaviour people assume is what turns a total revenue column
+    into 60% of the truth.
+
+    Decide deliberately: add the missing key to `id_cols` (a date, a version), aggregate with
+    `values_fn`, or accept the list-column on purpose then `unnest()` it. Check uniqueness first with
+    `count(df, customer_id, metric) |> filter(n > 1)`.
+
+    `values_fill = 0` is separate: it fills combinations that are **absent** from the data, not
+    duplicate cells. Use `complete()` if you also need the missing combinations to exist as rows
+    before pivoting.
+  tags: [tidyr, pivot-wider, list-columns]
+
+- id: r-basic-019
+  topic: iteration
+  difficulty: beginner
+  question: What is the difference between `apply()`, `lapply()` and `sapply()`?
+  answer: |
+    - `lapply(x, f)` applies `f` to each element and **always returns a list** of the same length.
+    - `sapply(x, f)` does the same, then tries to simplify the result to a vector or matrix.
+    - `apply(X, MARGIN, f)` works on a **matrix**, over rows (`1`) or columns (`2`).
+
+    The critical difference is that `apply()` coerces its input to a matrix first. On a data frame
+    with mixed types, everything becomes character:
+
+    ```r
+    df <- data.frame(x = 1:3, y = c("a", "b", "c"))
+    apply(df, 1, sum)     # error or nonsense: y is character
+    ```
+
+    So `apply(df, 1, ...)` is almost always a mistake; `rowSums()`, `rowwise()` or `pmap()` are the
+    row-wise tools for a data frame. `apply()` is for matrices.
+
+    `sapply()`'s simplification is where the bugs live: it returns a vector when every result is
+    length one and the same type, a matrix when results are equal-length vectors, and a list when
+    they are not. A function that returns `NULL` for one element changes the output type for the
+    whole call. `vapply()` and `purrr::map_*()` exist to remove the guess.
+  tags: [apply, lapply, sapply, iteration]
+
+- id: r-basic-020
+  topic: iteration
+  difficulty: intermediate
+  question: Why prefer `vapply()` over `sapply()`?
+  answer: |
+    `vapply(x, FUN, FUN.VALUE)` requires you to declare the type and length of each result, and it
+    errors if the function disagrees. `sapply()` guesses, and the guess changes with the data.
+
+    ```r
+    sapply(1:3, \(i) c(i, i^2))                  # 2 x 3 matrix, not a list
+    sapply(c(1, 2), \(i) if (i > 1) "big" else 1) # character: "1" "big"
+    vapply(1:3, \(i) i^2, numeric(1))            # double vector, guaranteed
+    vapply(models, \(m) summary(m)$r.squared, numeric(1))
+    ```
+
+    In the second line a single character result promotes the entire vector to character, so a
+    numeric column becomes text and the next `mean()` silently fails. That class of bug is
+    invisible in a console session on clean data and appears in production on the one row with an
+    edge case.
+
+    `FUN.VALUE` can be any prototype: `numeric(1)`, `character(1)`, `logical(1)`,
+    `numeric(length(x))`. Extra arguments to `FUN` go after `FUN.VALUE`, not before.
+
+    The tidyverse equivalents are `purrr::map_dbl()`, `map_chr()`, `map_lgl()` and `map_int()`,
+    which make the same contract with less punctuation. Between `vapply()` and `map_dbl()`, the
+    choice is dependency policy, not correctness.
+  tags: [vapply, sapply, type-safety]
+
+- id: r-basic-021
+  topic: iteration
+  difficulty: intermediate
+  question: How do you read 200 CSVs, keep track of which file each row came from, and survive one bad file?
+  answer: |
+    Compose `map()` with `list_rbind()` and `safely()`:
+
+    ```r
+    library(purrr); library(dplyr)
+
+    files <- list.files("data", pattern = "\\.csv$", full.names = TRUE)
+    out <- files |> set_names(basename) |> map(safely(readr::read_csv))
+
+    ok  <- out |> keep(\(r) is.null(r$error))
+    bad <- out |> discard(\(r) is.null(r$error))
+
+    data <- ok |> map("result") |> list_rbind(names_to = "file")
+    map_chr(bad, \(r) conditionMessage(r$error))
+    ```
+
+    Three things are doing the work. `set_names()` gives each list element its filename, so
+    `list_rbind(names_to = "file")` adds a provenance column instead of losing it. `safely()`
+    returns `list(result = , error = )` for every file, so one malformed CSV does not abort the run.
+    `list_rbind()` (purrr 1.0+) replaces the superseded `map_dfr()` and does not require identical
+    column names across files.
+
+    Then assert the shape: `stopifnot(nrow(data) > 0, !anyDuplicated(data$id))`. A job that reports
+    "398 of 400 parsed" is actionable; one that reports "done" is not.
+  tags: [purrr, safely, list-rbind]
+
+- id: r-basic-022
+  topic: graphics
+  difficulty: beginner
+  question: What are the components of a ggplot2 plot, and why does it need long data?
+  answer: |
+    A plot is declared from seven pieces: **data**, **mapping** (`aes`), **geom** (the mark),
+    **stat** (the transform), **scale** (value to visual encoding), **facet** (small multiples) and
+    **theme** (everything non-data).
+
+    ```r
+    ggplot(orders, aes(x = order_ts, y = revenue, colour = channel)) +
+      geom_line(linewidth = 0.8) +
+      scale_y_continuous(labels = scales::dollar) +
+      facet_wrap(~ region) +
+      labs(x = NULL, y = "Revenue") +
+      theme_minimal()
+    ```
+
+    It needs long data because `aes()` maps **columns** to visual roles. A wide table with
+    `revenue_2023` and `revenue_2024` has no single column to map to `colour`, so you would need one
+    `geom_line()` per year and a manual legend. `pivot_longer()` first gives you
+    `year` as a column, and one `geom_line()` draws both series with a correct legend.
+
+    Two behaviours worth knowing: `+` builds the object lazily, so a plot created inside a loop or a
+    function must be `print()`ed; and the `+` must end the line, or R parses the previous expression
+    as complete and the next line is a syntax error. Base graphics, by contrast, draws immediately
+    onto an imperative canvas of stacked calls.
+  tags: [ggplot2, grammar-of-graphics, tidy-data]
+
+- id: r-basic-023
+  topic: statistics
+  difficulty: intermediate
+  question: How do you read `summary(lm(y ~ x, data = df))`, and what do the coefficients actually mean?
+  answer: |
+    Five things, in order:
+
+    1. **Coefficients**: estimate, standard error, t value, p-value. For a numeric predictor the
+       estimate is the change in `y` per one-unit change in `x`, *holding the other predictors
+       fixed*. With `log(y)` as the response, it is approximately a proportional change.
+    2. **Residual standard error**: the typical residual size in response units — often more useful
+       than R² for judging whether the model is precise enough.
+    3. **R² / adjusted R²**: variance explained, in-sample. Adjusted R² penalises parameters.
+       Neither is out-of-sample accuracy.
+    4. **F statistic**: a joint test that all coefficients are zero. Almost always significant with
+       a decent sample, and rarely the question you care about.
+    5. **Degrees of freedom**: rows minus parameters. Forty parameters on fifty rows is curve
+       fitting.
+
+    For a categorical predictor, coefficients are differences from the **reference level** (the
+    first level), so "search is significant" means "search versus the reference", not "search in
+    isolation". `relevel()` changes the comparison, and `emmeans::emmeans(fit, ~ channel)` gives
+    level means with intervals, which is usually what a stakeholder wants.
+
+    With an interaction (`y ~ a * b`), the main effect of `a` is the effect *at the reference level
+    of b* — never report it without saying so.
+  tags: [lm, regression, interpretation]
+
+- id: r-basic-024
+  topic: time series
+  difficulty: intermediate
+  question: What does `ts(x, start = c(2019, 1), frequency = 12)` encode, and when is `ts` the wrong container?
+  answer: |
+    A `ts` object stores the values plus a `tsp` attribute: start, end and frequency. `frequency =
+    12` means twelve observations per cycle, so `start = c(2019, 1)` is January 2019 and time is
+    computed as `1 + (i - 1)/12`. The object has no date column — time is implicit and regular.
+
+    ```r
+    y <- ts(df$revenue, start = c(2019, 1), frequency = 12)
+    cycle(y)                    # 1..12 per observation
+    window(y, start = c(2022, 1))
+    stl(y, s.window = "periodic", robust = TRUE)
+    ```
+
+    It is the right container when the series is genuinely regular (monthly, quarterly, weekly) and
+    you are using `forecast`, `ets`, `auto.arima`, `stl` or `decompose`.
+
+    It is the wrong container when observations are irregular or missing: a month with no data must
+    be inserted as `NA` or the whole series shifts by one period. Financial data with holidays,
+    intraday timestamps, or multiple instruments belongs in `xts`/`zoo`, which index by real time and
+    subset with `x["2024-03"]`. Multiple related series are better in `tsibble`, where a key column
+    and an index column define the structure and gaps are detected rather than silently shifting the
+    series.
+
+    Also note `stats::lag()` shifts the time axis; `dplyr::lag()` shifts values. Loading dplyr after
+    forecast masks it and breaks ts code.
+  tags: [time-series, ts, frequency, xts]

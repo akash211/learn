@@ -1,0 +1,666 @@
+- id: bash-basic-001
+  topic: quoting
+  difficulty: beginner
+  question: Why should variables almost always be written as "$var" rather than $var?
+  answer: |
+    An unquoted expansion goes through word splitting and pathname expansion before the command
+    sees it, so `$var` is not "the value of var" — it is "whatever words that value can be broken
+    into".
+
+    ```bash
+    f="my report.txt"
+    rm $f          # removes "my" and "report.txt"
+    rm "$f"        # removes the one file
+    ```
+
+    Globbing applies too: a variable holding `*` expands to every entry in the directory, and a
+    value with `[` in it can become a character class. Under `set -u`, quoted and unquoted forms
+    behave the same for unset variables, but the splitting difference remains.
+
+    Quoting is also what preserves argument boundaries through nested calls — `"$@"` in a wrapper
+    function forwards the caller's arguments intact, whereas `$@` re-splits them and can turn one
+    argument into five.
+
+    The exceptions are narrow and deliberate: you want splitting (rare, and `read -r -a` or an
+    array is usually better), or the value is a number in arithmetic context. Inside `[[ ]]` and
+    in assignments, splitting does not happen at all, which is one reason `[[ ]]` is safer.
+  tags: [quoting, word-splitting, globbing]
+
+- id: bash-basic-002
+  topic: quoting
+  difficulty: beginner
+  question: What is the difference between single quotes, double quotes and $'...' quoting?
+  answer: |
+    Single quotes are fully literal: no `$`, no backticks, no backslash escapes. `'$HOME'` prints
+    the four characters `$HOME`. Use them for regexes, awk programs, JSON snippets and SQL where
+    you want the shell to keep its hands off.
+
+    Double quotes suppress splitting and globbing but still expand `$var`, `$(cmd)`, `$((...))`
+    and backticks. Inside double quotes a backslash is only special before `$`, `` ` ``, `"`, `\`
+    and newline, so `"C:\temp"` keeps its backslashes while `"$x\n"` also keeps the `\n` literally.
+
+    `$'...'` is ANSI-C quoting: like single quotes, except backslash escapes are interpreted.
+    `$'a\tb'` contains a real tab, `$'\n'` a newline, `$'\x41'` an `A`. This is how you set
+    `IFS=$'\n\t'` or build a string with a tab in a portable-in-bash way.
+
+    A missing quote is a syntax error at the next prompt rather than a wrong value — if bash
+    suddenly shows `>` continuation, you have an unclosed quote, and Ctrl-C aborts it.
+  tags: [quoting, ansi-c, escapes]
+
+- id: bash-basic-003
+  topic: quoting
+  difficulty: intermediate
+  question: Why does "$@" matter for forwarding arguments, and how does it differ from "$*"?
+  answer: |
+    `"$@"` expands to one word per positional parameter, preserving the original boundaries and
+    any embedded spaces. `"$*"` expands to a single word, joining the parameters with the first
+    character of `IFS` (a space by default).
+
+    ```bash
+    set -- "a b" c
+    printf '[%s]\n' "$@"    # [a b]  [c]
+    printf '[%s]\n' "$*"    # [a b c]
+    printf '[%s]\n' $@      # [a]  [b]  [c]  — boundaries destroyed
+    ```
+
+    That makes `"$@"` the only correct way to write a wrapper: `exec ssh "$@"` or
+    `retry 3 "$@"` passes exactly what the caller passed. Unquoted `$@` splits each argument
+    again, which silently corrupts any argument containing a space — a path, a commit message, a
+    SQL fragment.
+
+    `"$*"` has legitimate uses: building one human-readable string for a log line, or joining
+    arguments for `sh -c`. In those cases it is usually clearer to say so explicitly with a
+    loop and a separator than to rely on `IFS`.
+
+    For arrays the parallel rule holds: `"${arr[@]}"` is one word per element; `"${arr[*]}"` is a
+    single joined string.
+  tags: [positional-parameters, arrays, argument-forwarding]
+
+- id: bash-basic-004
+  topic: parameter expansion
+  difficulty: intermediate
+  question: Explain ${var:-default}, ${var-default}, ${var:?} and ${var:+alt}.
+  answer: |
+    These four forms cover defaulting, requiring and testing, and the colon is the whole
+    difference between the first two:
+
+    - `${var:-default}` substitutes `default` when `var` is unset **or empty**.
+    - `${var-default}` substitutes only when `var` is **unset**; an empty value is kept.
+    - `${var:?message}` prints `message` and exits non-zero when unset or empty. This is the
+      standard argument check: `: "${SRC:?usage: sync.sh SRC DST}"`.
+    - `${var:+alt}` yields `alt` only when `var` is set and non-empty — the "is it set" test in
+      expansion form.
+
+    Choosing between them matters: `${PORT:-8080}` treats `PORT=""` as "use the default", which is
+    usually what you want for config. `${PORT-8080}` treats an explicitly empty `PORT` as a
+    deliberate choice, which is what you want when empty means "disable".
+
+    The `:?` form is the only one that makes a missing value fatal, so it is the correct way to
+    validate required inputs under `set -u`. The `:` builtin before it is a no-op that gives the
+    expansion a command to live in.
+  tags: [parameter-expansion, defaults, argument-validation]
+
+- id: bash-basic-005
+  topic: arrays
+  difficulty: intermediate
+  question: How do you create, extend and iterate over a bash array correctly?
+  answer: |
+    ```bash
+    servers=(web1 "web 2" web3)      # create; quoting per element is preserved
+    servers+=(web4)                  # append
+    echo "${#servers[@]}"            # 4  — element count
+    echo "${servers[1]}"             # web 2
+    printf '%s\n' "${servers[@]}"    # one line per element
+    for s in "${servers[@]}"; do echo "$s"; done
+    echo "${servers[@]:1:2}"         # slice: web 2, web3
+    echo "${!servers[@]}"            # indices, not values
+    ```
+
+    The critical habit is quoting `"${servers[@]}"`. Unquoted, each element is split again, so
+    `"web 2"` becomes two iterations — the same bug as unquoted `$@`.
+
+    Arrays in bash are sparse: after `a[5]=x` on an empty array, `${#a[@]}` is 1, not 6, and
+    `${!a[@]}` gives you `5`. So iterating `0..$((${#a[@]}-1))` is wrong; iterate the values or the
+    indices.
+
+    Two practical notes: arrays cannot be exported to child processes, and bash 3.2 (macOS) has no
+    associative arrays. `${arr[*]}` joins into one string with the first `IFS` character — useful
+    for logging, wrong for iteration.
+  tags: [arrays, iteration, quoting]
+
+- id: bash-basic-006
+  topic: arrays
+  difficulty: advanced
+  question: What are associative arrays for, and what are their limits?
+  answer: |
+    Associative arrays give bash string-keyed maps, which is the difference between a script that
+    can count things by name and one that needs `awk` or Python for a two-line job:
+
+    ```bash
+    declare -A hits=()          # must be declared with -A
+    hits[404]=12
+    hits[500]=3
+    hits[404]=$(( hits[404] + 1 ))
+    [[ -v hits[500] ]] && echo seen      # bash 4.2+
+    for k in "${!hits[@]}"; do printf '%s=%s\n' "$k" "${hits[$k]}"; done
+    unset 'hits[500]'                    # quote the subscript, or the glob may expand
+    ```
+
+    Limits worth knowing: iteration order is unspecified and changes as the table grows, so never
+    rely on it — sort the keys when output must be stable. Keys cannot be empty, and the subscript
+    is subject to expansion, which is why `unset 'a[$k]'` needs quoting. Values are strings, so
+    arithmetic needs `$(( ))`. They cannot be exported, cannot be nested, and cannot be passed by
+    value to a child process.
+
+    `declare -A` needs bash 4, so macOS's stock bash 3.2 breaks. When you need nesting, ordering
+    or real types, that is the signal to switch to `jq`, Python or Go rather than inventing an
+    encoding.
+  tags: [associative-arrays, bash4, portability]
+
+- id: bash-basic-007
+  topic: exit codes
+  difficulty: beginner
+  question: What do $? and the exit status of a script actually mean, and which codes are special?
+  answer: |
+    Every process exits with an integer 0–255. `0` means success; anything else means failure, and
+    the meaning of specific non-zero values is up to the program. `$?` holds the status of the last
+    command, which is why checking it must happen *immediately* — any intervening command,
+    including `echo`, overwrites it.
+
+    A script's status is the status of its last command unless it calls `exit N`. That is how a
+    trailing `echo done` turns a failed run green.
+
+    Conventionally meaningful values:
+
+    | Code | Meaning |
+    |---|---|
+    | 1 | general failure (also "no match" for `grep`, `diff`, `cmp`) |
+    | 2 | shell misuse / bad arguments |
+    | 126 | found but not executable |
+    | 127 | command not found |
+    | 128+N | killed by signal N — 130 SIGINT, 143 SIGTERM, 141 SIGPIPE |
+
+    Shells report 128+N automatically when a child dies from a signal, and CI systems rely on it:
+    143 tells you the job was cancelled, not that the code returned 143.
+
+    Good scripts use distinct codes for distinct failures (2 usage, 3 config, 4 upstream) so
+    callers and alerting can branch without parsing logs.
+  tags: [exit-codes, signals, error-handling]
+
+- id: bash-basic-008
+  topic: tests
+  difficulty: intermediate
+  question: What is the practical difference between [ and [[ in bash?
+  answer: |
+    `[` is a POSIX command (an alias for `test`), so its arguments pass through normal expansion:
+    word splitting and globbing apply, and `]` must be an argument. `[[` is a bash keyword with its
+    own grammar: no splitting or globbing on the operands, and `&&`, `||`, `=~` and `<` work
+    inside it.
+
+    ```bash
+    [ -f "$f" ] && [ "$m" = fast ]        # POSIX, quote everything
+    [[ -f $f && $m == fast ]]             # bash, quotes optional
+    [[ $name == *.tar.gz ]]               # glob match
+    [[ $line =~ ^([0-9]{4})-([0-9]{2}) ]] # ERE, captures in BASH_REMATCH
+    ```
+
+    The failure mode of `[` is silent: with `x` unset, `[ $x = y ]` becomes `[ = y ]`, which
+    prints "unary operator expected" and returns 2 — an `if` reads that as false and the branch
+    quietly misbehaves. Quoting fixes it; `[[` avoids the class of bug entirely.
+
+    Note the asymmetry inside `[[`: `==` is a pattern match, so the right-hand side must be
+    unquoted for globs to work. `[[ $f == "*.log" ]]` compares the literal string and is a common
+    self-inflicted bug. Use `[[ ]]` in bash, `[ ]` only when you need `sh` portability.
+  tags: [test, conditional-expressions, regex]
+
+- id: bash-basic-009
+  topic: tests
+  difficulty: beginner
+  question: When do you use = versus -eq, and what happens if you mix them up?
+  answer: |
+    `=` (or `==` inside `[[ ]]`) compares strings; `-eq`, `-ne`, `-lt`, `-le`, `-gt`, `-ge` compare
+    integers. They are different operators on different types, and bash will not always stop you.
+
+    ```bash
+    [ "$a" = "$b" ]        # string equality
+    [ "$n" -gt 10 ]        # integer comparison
+    (( n > 10 ))           # arithmetic context — no $ needed, no external test
+    ```
+
+    Mixing them produces a specific, confusing failure: `[ "abc" -eq 5 ]` prints
+    `integer expression expected` and returns status 2. Inside an `if`, status 2 is non-zero, so the
+    condition is simply false — no error visible in the log, just a branch that never runs. The
+    reverse, `[ "007" = "7" ]`, is false because strings, not numbers, are compared.
+
+    Watch for leading zeros and empty values: `-eq` parses leading-zero numbers as decimal in bash,
+    but as octal in some contexts, and an empty operand errors. Arithmetic context `(( ))` treats an
+    unset variable as 0, which is convenient and also how typos hide.
+
+    Use `[[ ]]` with `=` for strings and `(( ))` for numbers in bash scripts; reserve `-eq` for
+    POSIX `[ ]` code where nothing else is available.
+  tags: [numeric-comparison, string-comparison, arithmetic]
+
+- id: bash-basic-010
+  topic: control flow
+  difficulty: beginner
+  question: When is case better than a chain of if/elif, and what are its syntax traps?
+  answer: |
+    `case` matches a word against glob patterns, so it is the right tool for subcommands, file
+    extensions, option values and any dispatch with three or more alternatives:
+
+    ```bash
+    case $1 in
+      start|up)   do_start ;;
+      stop|down)  do_stop ;;
+      --help|-h)  usage; exit 0 ;;
+      "")         usage >&2; exit 2 ;;
+      *)          echo "unknown: $1" >&2; exit 2 ;;
+    esac
+    ```
+
+    It reads as a table, needs no repeated variable, and patterns can be globs (`*.log`), character
+    classes (`[0-9]`) and alternations joined with `|`.
+
+    Traps: patterns must be **unquoted** — `"*.log")` matches the literal string. Every branch
+    needs a terminator: `;;` stops, `;&` falls through to the next branch's body (bash 4, rare),
+    `;;&` keeps testing later patterns. Omitting `;;` is a syntax error in bash, not a fall-through.
+
+    Arguments are expanded first, so `case $x` with an empty `x` matches the `""` pattern only if
+    you quote it. `case "$x" in` is the habit that avoids the empty-word edge case, and the `*)`
+    branch is your usage error.
+  tags: [case, dispatch, pattern-matching]
+
+- id: bash-basic-011
+  topic: loops
+  difficulty: intermediate
+  question: How do you read a file line by line without mangling whitespace or backslashes?
+  answer: |
+    The three flags you need are `IFS=`, `-r`, and a redirect on `done`:
+
+    ```bash
+    while IFS= read -r line; do
+      printf '%s\n' "$line"
+    done < "$file"
+    ```
+
+    `IFS=` stops leading and trailing whitespace being stripped, so indented config or fixed-width
+    data survives. `-r` stops backslash interpretation, so `C:\path` is not reduced to `C:path`.
+    The redirect belongs on `done`, not on `read`, and using `<` rather than a pipe keeps the loop
+    in the current shell so variables set inside it persist.
+
+    The last line can be lost when the file has no trailing newline; the portable guard is
+    `while IFS= read -r line || [[ -n $line ]]`.
+
+    For filenames or any data that may contain newlines, read NUL-delimited records:
+
+    ```bash
+    while IFS= read -r -d '' f; do ...; done < <(find . -type f -print0)
+    ```
+
+    And avoid `for line in $(cat file)` — it splits on every space, and `for f in $(ls)` adds
+    parsing `ls` output on top.
+  tags: [read, loops, filenames, ifs]
+
+- id: bash-basic-012
+  topic: functions
+  difficulty: intermediate
+  question: How does a bash function return values and status, and what does local do?
+  answer: |
+    A function has exactly one structured return channel: an exit status 0–255, set with
+    `return N`. `return` with no argument returns the status of the last command. Data comes back
+    through stdout, captured with command substitution:
+
+    ```bash
+    uppercase() { printf '%s\n' "${1^^}"; }
+    out=$(uppercase hello)      # out=HELLO, status is the function's
+    ```
+
+    `$(...)` strips trailing newlines, which matters for binary or whitespace-significant output.
+    For several values, print NUL- or newline-delimited and read into an array, or use a nameref
+    (`local -n ref=$1; ref=(...)`, bash 4.3+) to assign the caller's variable.
+
+    Inside a function, `exit` leaves the whole script — never use it in a sourced library; use
+    `return 1` and let the caller decide.
+
+    `local x=value` creates a variable in the function's frame, restored on return. It is dynamic,
+    not lexical: a function called by another can see the caller's locals, which is why every
+    variable you introduce should be `local`. One trap: `local x=$(cmd)` always reports success,
+    because the status is `local`'s — declare, then assign on the next line.
+  tags: [functions, return-status, local, nameref]
+
+- id: bash-basic-013
+  topic: functions
+  difficulty: advanced
+  question: What does it mean that bash local is dynamically scoped, and why does it bite?
+  answer: |
+    Bash resolves variable names at call time by walking the call stack, not by lexical position
+    in the source. So a function sees not only globals but any `local` declared by its caller:
+
+    ```bash
+    inner() { echo "$x"; }
+    outer() { local x=secret; inner; }   # prints: secret
+    ```
+
+    In a lexically scoped language `inner` could not see `outer`'s `x`. Here it can, and the
+    consequence is that a function's behaviour depends on who called it — the opposite of what
+    "local" suggests.
+
+    The bites are concrete: a helper that reads `$i` picks up the loop counter of whichever
+    function called it; a library function that forgets `local` on a temporary clobbers the
+    caller's variable of the same name and the bug appears three functions away. Debugging means
+    reading the whole call chain, not the function.
+
+    Defences: `local` every variable a function introduces, including loop counters; prefix
+    globals (`APP_`, `CFG_`) so a missing `local` is visible in review; and use namerefs when you
+    genuinely need to write to a caller's variable, which makes the intent explicit instead of
+    accidental.
+
+    Bash has no lexical scoping; treat every function as sharing one namespace.
+  tags: [scope, local, dynamic-scoping]
+
+- id: bash-basic-014
+  topic: sourcing
+  difficulty: intermediate
+  question: What is the difference between running a script and sourcing it?
+  answer: |
+    `./script.sh` (or `bash script.sh`) forks a child process: variables, functions and `cd` inside
+    it are invisible to your shell, and `exit` only ends the child. `source script.sh` (or
+    `. script.sh`) executes the file in the **current** shell, so every assignment, function
+    definition and directory change persists.
+
+    That makes sourcing the mechanism for libraries and config files — and the reason a stray
+    `set -e`, `IFS=` or `exit` in a sourced file can break or kill the caller's shell.
+
+    A library should therefore be safe to source: define functions and constants, no top-level side
+    effects, no `exit`, and a guard so the executable part runs only when the file is invoked
+    directly:
+
+    ```bash
+    if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi
+    ```
+
+    `${BASH_SOURCE[0]}` is the file being read, which stays correct when sourced, while `$0` is the
+    invoked script. Resolve include paths from it too:
+    `here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)` — otherwise relative `source`
+    paths break under cron, systemd and `sudo`.
+  tags: [sourcing, libraries, bash-source, entrypoints]
+
+- id: bash-basic-015
+  topic: pipes
+  difficulty: intermediate
+  question: Why does a variable set inside `cmd | while read` disappear afterwards?
+  answer: |
+    Because each stage of a pipeline runs in a subshell. The `while` loop executes in a child of
+    the shell that ran the pipeline, so assignments happen in a process that then exits; the parent
+    never sees them.
+
+    ```bash
+    count=0
+    printf 'a\nb\n' | while read -r _; do count=$((count+1)); done
+    echo "$count"      # 0, not 2
+    ```
+
+    Three correct alternatives:
+
+    1. Process substitution, which is a redirect rather than a pipe, so the loop stays in the
+       current shell:
+       ```bash
+       while IFS= read -r _; do count=$((count+1)); done < <(printf 'a\nb\n')
+       ```
+    2. Redirect from a file: `done < file`.
+    3. `shopt -s lastpipe` (bash 4.2+), which runs the last pipeline stage in the current shell —
+       non-interactive only, and it changes `PIPESTATUS` semantics, so it is a sharper tool.
+
+    The same subshell rule explains `echo x | read y` and why `cd` inside a pipeline does not move
+    you. It is one rule — pipes create processes — with several symptoms, and process substitution
+    is the general fix.
+  tags: [pipes, subshell, process-substitution]
+
+- id: bash-basic-016
+  topic: redirection
+  difficulty: intermediate
+  question: Why does `cmd > out.log 2>&1` work while `cmd 2>&1 > out.log` does not send stderr to the file?
+  answer: |
+    Redirections are applied left to right, and `2>&1` means "make fd 2 a duplicate of what fd 1
+    currently points at" — a snapshot, not a link.
+
+    In `cmd > out.log 2>&1`: fd 1 is first pointed at the file, then fd 2 is duplicated from fd 1,
+    so both go to the file. Correct.
+
+    In `cmd 2>&1 > out.log`: fd 2 is first duplicated from fd 1, which is still the terminal, then
+    fd 1 is repointed at the file. Errors keep going to the terminal while stdout goes to the file
+    — usually the opposite of the intent, and easy to miss because the file looks plausible.
+
+    `&> out.log` (bash) is the shorthand for the working order; `&>> out.log` appends. For separate
+    files, `cmd >out.log 2>err.log`. To discard only stderr, `2>/dev/null` — but think twice, since
+    that is also how real failures get hidden.
+
+    One more ordering fact: the file is truncated when the redirection is set up, before the
+    command runs. So `cmd > out.log 2>&1` truncates even if `cmd` does not exist, and `set -o
+    noclobber` (`>|` to override) exists for the case where that matters.
+  tags: [redirection, file-descriptors, stderr]
+
+- id: bash-basic-017
+  topic: error handling
+  difficulty: intermediate
+  question: What does set -o pipefail change, and what problem does it prevent?
+  answer: |
+    By default a pipeline's status is the status of its **last** command. Every earlier failure is
+    discarded:
+
+    ```bash
+    false | true; echo $?            # 0
+    set -o pipefail
+    false | true; echo $?            # 1
+    ```
+
+    With `pipefail`, the pipeline returns the status of the last command that failed (or 0 if none
+    did). The canonical disaster it prevents is a backup:
+
+    ```bash
+    mysqldump db | gzip > backup.sql.gz
+    ```
+
+    If `mysqldump` dies halfway, `gzip` still exits 0, so the script reports success and you have a
+    truncated dump that looks like a backup until the day you restore it. The same applies to
+    `curl | tar`, `aws s3 cp - | ...`, and any `producer | consumer` pipeline.
+
+    `pipefail` is bash/ksh/zsh, not POSIX — `dash` has no equivalent, so a `#!/bin/sh` script
+    cannot rely on it.
+
+    One side effect to expect: a writer killed by SIGPIPE (`seq 1 1e6 | head -1`) now reports 141
+    and, under `set -e`, aborts the script. Handle that specific pipeline rather than removing
+    `pipefail`.
+  tags: [pipefail, pipelines, backup, sigpipe]
+
+- id: bash-basic-018
+  topic: error handling
+  difficulty: advanced
+  question: Name cases where set -e fails to stop the script.
+  answer: |
+    `set -e` is a heuristic, not a guarantee. It does not fire when:
+
+    - The command is used as a **condition**: inside `if`/`while`/`until`, on the left of `&&` or
+      `||`, or negated with `!`. That is by design.
+    - A **function called as a condition** fails internally — `-e` is disabled for the whole body,
+      not just the test. `f() { false; echo alive; }; if f; then :; fi` prints `alive`.
+    - The status is masked by a declaration: `local x=$(false)` returns `local`'s status, 0.
+      `declare`, `export` and `readonly` do the same. Declare, then assign.
+    - The failure is in a **background job**: `cmd &` is never checked; you must `wait` and test.
+    - The failure is on the **left of a pipe** and `pipefail` is off.
+    - Arithmetic evaluates to zero: `(( count++ ))` returns 1 when the old value was 0.
+    - The failing command is inside a **command substitution** whose status is discarded — note
+      `out=$(false)` *is* caught, but `local out=$(false)` is not.
+
+    The practical conclusion: keep `set -e` as a net, and add `|| die` on the steps that matter —
+    a precise message, a chosen exit code, and none of the exceptions above.
+  tags: [errexit, error-handling, traps, edge-cases]
+
+- id: bash-basic-019
+  topic: error handling
+  difficulty: advanced
+  question: How do trap EXIT and trap ERR differ, and what must you be careful about in each?
+  answer: |
+    `trap 'handler' EXIT` runs when the shell exits for **any** reason: normal end, explicit
+    `exit N`, `set -e` abort, or a trapped signal that exits. It is the one correct place for
+    cleanup — removing temp directories, releasing locks, killing children.
+
+    `trap 'handler' ERR` runs when a command fails, subject to the same exemptions as `set -e`
+    (conditions, `&&`/`||` lists). It needs `set -E` to be inherited into functions, subshells and
+    command substitutions; without `-E` it silently does nothing inside functions. Use
+    `$LINENO` and `$BASH_COMMAND` in the message — that is what makes it useful rather than
+    decorative.
+
+    Care in `EXIT`:
+
+    - `$?` still holds the status the script was about to exit with, but any command you run
+      overwrites it. Save `rc=$?` first and `exit "$rc"` at the end.
+    - The handler runs on `exit` inside the handler too — avoid recursion.
+    - `trap - EXIT` removes it when cleanup must not run (e.g. keep the temp file on failure).
+
+    Care in `ERR`: an `ERR` trap does not imply exit unless `set -e` is also on. `$BASH_COMMAND`
+    can contain secrets — log it to stderr, not to a shared log.
+  tags: [trap, exit-trap, err-trap, cleanup]
+
+- id: bash-basic-020
+  topic: files
+  difficulty: intermediate
+  question: What is the difference between find -exec {} \; and find -exec {} +?
+  answer: |
+    Both run a command on each match; they differ in how many processes are started.
+
+    `-exec cmd {} \;` substitutes one path per invocation and starts a **new process for every
+    file**. Simple, and necessary when the command only accepts one argument, but for ten thousand
+    files it is ten thousand forks.
+
+    `-exec cmd {} +` appends as many paths as fit on one command line (like `xargs`) and starts a
+    **few processes**. This is the default choice: much faster, and it handles filenames with
+    spaces and newlines correctly because the paths are passed as separate arguments, never
+    re-parsed.
+
+    ```bash
+    find . -name '*.log' -exec gzip -- {} +        # batched
+    find . -name '*.log' -exec rm -- {} \;         # one at a time
+    ```
+
+    Note `+` must be the last thing before the end of the `-exec` expression, and `{}` must appear
+    right before it — a path appended after `+` is a syntax error.
+
+    Prefer `-exec ... +` over piping to `xargs`: no `-0`/`-n` tuning and no quoting pitfalls.
+    Either way, check `find`'s own exit status, not the child's.
+  tags: [find, exec, xargs, performance]
+
+- id: bash-basic-021
+  topic: files
+  difficulty: intermediate
+  question: Why does xargs need -0, and what else goes wrong with it by default?
+  answer: |
+    By default `xargs` splits its input on whitespace and treats quotes and backslashes as syntax.
+    That is fine for a list of words and wrong for filenames: `/tmp/my report.txt` becomes two
+    arguments, and a name containing an apostrophe can produce a quoting error or a corrupted
+    argument.
+
+    `-0` (`--null`) makes it read NUL-delimited records instead, which is the only separator that
+    cannot appear in a path. It pairs with the producer's NUL mode:
+
+    ```bash
+    find . -name '*.log' -print0 | xargs -0 rm -f
+    printf '%s\0' "${files[@]}" | xargs -0 gzip --
+    ```
+
+    Other defaults to know:
+
+    - With no input, GNU `xargs` still runs the command once with no arguments unless `-r` is
+      given — `xargs rm` becomes a bare `rm`. Always add `-r`, or use `find -exec ... +`.
+    - `-n N` bounds arguments per invocation; `-P N` runs N in parallel.
+    - `-I{}` implies `-L 1` and disables `-0` handling subtleties; it is convenient but slower.
+    - The exit status is 123 if any invocation failed, 124 if a command exited 255 — not the
+      child's status.
+
+    When the command accepts many operands, `find -exec ... +` is simpler.
+  tags: [xargs, filenames, find, nul-delimited]
+
+- id: bash-basic-022
+  topic: permissions
+  difficulty: intermediate
+  question: How do umask, chmod and the special permission bits interact?
+  answer: |
+    `chmod` sets permissions explicitly; `umask` subtracts from the default at creation time. A new
+    file starts as `666` and a new directory as `777`, then the umask clears bits: with `umask 022`
+    you get `644` files and `755` directories. With `002` — common on shared systems — group write
+    survives, which is what a collaborative directory needs.
+
+    ```bash
+    umask 077            # private: files 600, dirs 700
+    umask                # print current, e.g. 0022
+    chmod 750 deploy.sh  # owner rwx, group r-x, others none
+    chmod -R g+rX dir    # X: execute only on dirs and already-executable files
+    ```
+
+    The special bits: **setgid** (`2000`) on a *directory* makes new files inherit the directory's
+    group — the standard way to build a shared group-writable tree. **Sticky** (`1000`) on a
+    directory lets only the owner delete their files, which is why `/tmp` is `1777`. **setuid**
+    (`4000`) runs a binary as its owner; the Linux kernel ignores it on scripts, so a setuid shell
+    script is a design error.
+
+    Remember that directories need `x` to be traversed and that permission checks apply to the
+    *real* user — testing as root hides every failure. `stat -c '%a %U:%G %n'` is the quick audit.
+  tags: [permissions, umask, setgid, sticky-bit]
+
+- id: bash-basic-023
+  topic: pipes
+  difficulty: advanced
+  question: What is process substitution and when is it the right tool?
+  answer: |
+    `<(cmd)` runs `cmd` and gives you a path — `/dev/fd/63` on Linux — that reads its output;
+    `>(cmd)` gives a path that feeds its stdin. The shell substitutes a filename, so any command
+    that takes a file works with a process:
+
+    ```bash
+    diff <(sort a.txt) <(sort b.txt)
+    comm -23 <(sort a) <(sort b)
+    while IFS= read -r l; do ...; done < <(find . -type f -print0)
+    tee >(gzip > out.gz) >(wc -l > count.txt) < big.txt
+    ```
+
+    Its two real advantages: it avoids a temp file when a tool insists on a filename, and it keeps
+    a `while` loop in the current shell — `< <(...)` is a redirect, not a pipe, so variables set
+    inside persist (unlike `cmd | while`).
+
+    Limits: it requires bash/ksh/zsh, not POSIX `sh`. The path is valid only while the command
+    runs, so you cannot store it and use it later. The substituted process's exit status is
+    **not** propagated — `diff <(failing_cmd) file` can compare against empty output and look
+    fine — so check the producer separately if its failure matters. And `/dev/fd` is not
+    universal, though it exists on Linux and modern macOS.
+
+    When neither limitation is acceptable, use `mktemp` explicitly.
+  tags: [process-substitution, pipes, subshell, portability]
+
+- id: bash-basic-024
+  topic: processes
+  difficulty: advanced
+  question: Explain SIGTERM versus SIGKILL, and what a script should do when it receives SIGTERM.
+  answer: |
+    SIGTERM (15) is a request to terminate: the default action is to exit, but a process can catch
+    it, flush buffers, finish the current item and clean up. SIGKILL (9) is enforcement: the kernel
+    terminates the process immediately, no handler runs, no temp files are removed, no lock is
+    released. SIGSTOP similarly cannot be caught.
+
+    The correct sequence is always TERM, wait a bounded grace period, then KILL. `docker stop` and
+    Kubernetes do exactly that (10 s and 30 s by default); `systemd` uses `TimeoutStopSec`.
+
+    A script should:
+
+    ```bash
+    trap 'kill "$child" 2>/dev/null; exit 143' TERM INT
+    ```
+
+    `143` is 128 + 15, the conventional status for "terminated by SIGTERM", and CI systems read it
+    as cancellation rather than failure. An `EXIT` trap then handles cleanup, so it runs on both
+    paths.
+
+    The subtlety that breaks container shutdowns: bash runs a trap only after the current
+    **foreground** command completes. A script blocked in `sleep 600` ignores TERM for ten minutes.
+    The fix is to background the long task and `wait "$!"` — `wait` is interruptible — or `exec` the
+    real process so signals reach it directly.
+  tags: [signals, sigterm, graceful-shutdown, containers]

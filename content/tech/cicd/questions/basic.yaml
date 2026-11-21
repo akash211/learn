@@ -1,0 +1,554 @@
+- id: cicd-basic-001
+  topic: fundamentals
+  difficulty: beginner
+  question: What is the difference between continuous integration, continuous delivery and continuous deployment?
+  answer: |
+    **Continuous integration** is the practice of merging every change into a shared branch
+    frequently, with an automated build and test run on each merge. The point is to make
+    integration a routine event rather than a painful one: conflicts, broken interfaces and
+    dependency problems surface within minutes of being introduced.
+
+    **Continuous delivery** adds a stronger guarantee — every change that passes is a deployable
+    artefact, produced once, verified, and ready to ship. The decision to release remains human or
+    scheduled, but the *ability* to release is always there. That is what a pipeline with staging,
+    smoke tests and an approved artefact provides.
+
+    **Continuous deployment** removes the decision: every green change ships to production
+    automatically, with canary analysis or automated rollback replacing the human gate.
+
+    The distinction is about who decides, not how often you deploy. A team doing continuous
+    delivery may release five times a day; a team doing continuous deployment might release once a
+    week because change volume is low.
+  tags: [ci, cd, fundamentals]
+
+- id: cicd-basic-002
+  topic: artefacts
+  difficulty: beginner
+  question: Why should an artefact be built once and promoted, rather than rebuilt for each environment?
+  answer: |
+    Because "tested" and "shipped" must refer to the same bytes. If staging builds from commit
+    `4f2c1ab` at 10:00 and production rebuilds from the same commit at 14:00, the two builds can
+    differ — a dependency resolved to a newer patch version, a base image re-pulled, a timestamp
+    or random seed baked into a binary. The tests then cover a different artefact than the one
+    users run.
+
+    Building once also makes the identity auditable. The digest that passed the tests is the
+    digest recorded in the deployment, so "what is running" has a single answer. And it makes
+    rollback meaningful: going back means pointing at the previous digest, not reconstructing a
+    build from an old commit under a toolchain that has since changed.
+
+    What legitimately differs between environments is configuration, supplied at runtime —
+    environment variables, mounted files, a config service. Anything compiled in per environment
+    (`--build-arg ENV=prod`) is a second artefact pretending to be the same one.
+  tags: [artefacts, promotion, reproducibility]
+
+- id: cicd-basic-003
+  topic: github actions
+  difficulty: beginner
+  question: In GitHub Actions, what is the difference between a job and a step, and why does it matter?
+  answer: |
+    A **step** is one command or action inside a job; steps run in sequence on the same runner and
+    share a workspace, environment and process tree. A **job** is a unit of scheduling: it gets its
+    own runner (a fresh virtual machine on hosted runners), its own filesystem, its own copy of
+    `GITHUB_TOKEN`, and its own timeout.
+
+    The practical consequence is that nothing survives a job boundary by accident. A `cd`, an
+    `export`, a file written to `/tmp`, an installed package — all gone in the next job. To move
+    data between jobs you need an artefact (`upload-artifact` / `download-artifact`), a cache, a
+    job output (a string), or an external system such as a registry.
+
+    That isolation is a feature: parallel jobs cannot interfere, and a poisoned build cannot leak
+    into a test job. It also means the dependency graph is explicit — `needs` is the only ordering
+    guarantee, and jobs without it run concurrently.
+  tags: [jobs, steps, isolation]
+
+- id: cicd-basic-004
+  topic: artefacts and versioning
+  difficulty: beginner
+  question: Why deploy by image digest instead of a tag?
+  answer: |
+    A tag is a mutable pointer in a registry. Whoever can push to the repository can move
+    `api:1.4.2` to a different image, and many release scripts do exactly that by accident. A
+    digest is the SHA-256 of the manifest, so it names exactly one artefact and cannot be
+    re-pointed.
+
+    Deploying by tag creates three problems. Rollback becomes unreliable, because the "previous"
+    tag may no longer point at the previous image. Audit becomes impossible, because the
+    deployment record says `1.4.2` and cannot distinguish two different builds that carried that
+    tag. And pull behaviour becomes surprising, because nodes with a cached tag may not re-pull.
+
+    The workable convention is tags for humans and digests for machines: use `1.4.2` to find a
+    release, resolve it once at promotion time (`crane digest`, `docker inspect`), and put
+    `repo@sha256:…` in the deployment manifest. Environment tags such as `:prod` are worse still —
+    they carry no information and cannot be rolled back.
+  tags: [tags, digests, immutability]
+
+- id: cicd-basic-005
+  topic: caching
+  difficulty: beginner
+  question: What makes a good cache key in a CI pipeline?
+  answer: |
+    A cache key is a claim about content: it must change whenever the cached output would change,
+    and not otherwise. In practice that means hashing the inputs — lockfile, compiler version,
+    flags, OS, architecture — rather than naming the cache after the branch or the tool.
+
+    ```yaml
+    key: pip-${{ runner.os }}-${{ hashFiles('requirements*.txt') }}
+    restore-keys: pip-${{ runner.os }}-
+    ```
+
+    Two properties matter. Entries are usually immutable, so a key that already exists is never
+    updated — hence the content hash. And `restore-keys` provide a prefix fallback, giving a warm
+    start on a miss while the install step repairs the difference.
+
+    The failure mode to watch for is a key that never changes: the first run writes an entry and
+    every later run restores it, silently testing libraries that were upgraded months ago. If the
+    cache hit rate is near 100%, suspect the key rather than celebrating.
+  tags: [cache, keys, hashfiles]
+
+- id: cicd-basic-006
+  topic: deployment strategies
+  difficulty: beginner
+  question: What does a rollback actually involve, and what can make it impossible?
+  answer: |
+    A rollback is a deploy of the previous known-good artefact — same mechanism, opposite
+    direction. It requires three things to be true before the incident: the previous digest is
+    still pullable, the previous code still works against the current database schema, and
+    somebody has permission to trigger it.
+
+    Each of those fails routinely. Retention policies garbage-collect old images, so the rollback
+    target no longer exists. A migration ran in the same release, so the old code cannot read the
+    new schema. The deploy credential belongs to a bot whose approval flow requires a reviewer who
+    is asleep.
+
+    That is why the discipline is *forward compatible by design*: schema changes split into
+    expand and contract phases (chapter 8), destructive steps deferred a release, and the previous
+    digest recorded in the deployment record before the new one ships.
+
+    Rolling back code is usually fast. Rolling back data is a restore, which is a different and
+    much slower operation — so a change that mutates data irreversibly needs a gate, not a
+    rollback plan.
+  tags: [rollback, digests, schema]
+
+- id: cicd-basic-007
+  topic: deployment strategies
+  difficulty: beginner
+  question: When would you choose blue/green over a rolling update?
+  answer: |
+    A rolling update replaces instances in batches and runs two versions side by side for the
+    duration. It is cheap, needs no extra infrastructure, and is the right default.
+
+    Blue/green keeps two complete stacks and cuts traffic over at the router. You choose it when
+    you need to verify a whole stack before any user sees it — a major framework upgrade, a
+    payment-path change, a service with expensive warm-up — or when you need a rollback measured
+    in seconds rather than one rollout cycle.
+
+    The costs are real: double the infrastructure during the operation, a router that can actually
+    do an atomic switch, and handling for everything that is not atomic at the edge — in-flight
+    requests, websockets, sticky sessions, cached DNS. The database is still shared, so schema
+    compatibility is still required.
+
+    The failure mode is standing up green and immediately switching to it. That is a rolling
+    deploy with double the bill; the point is to run smoke tests or shadow traffic against green
+    while blue still serves.
+  tags: [blue-green, rolling, cutover]
+
+- id: cicd-basic-008
+  topic: deployment strategies
+  difficulty: beginner
+  question: How does a canary deployment limit blast radius, and what does it need to work?
+  answer: |
+    A canary sends a small share of traffic — typically 1–10% — to the new version, checks
+    behaviour against the stable version, then increases the share in steps or aborts. If the new
+    version is broken, only that share of requests is affected, and the abort is a weight change
+    rather than a rollout.
+
+    It needs four things to be more than a slow rolling update:
+
+    1. **Traffic control** that can split by weight — an ingress, service mesh or gateway.
+    2. **A metric that moves for the failure you fear** — error rate and p95 latency, plus a
+       domain metric where failures are silent.
+    3. **A baseline comparison**, not an absolute threshold: the canary's error rate relative to
+       stable over the same window.
+    4. **Enough volume for the sample to mean something.** At 1% of a low-traffic service, a
+       five-minute window sees a handful of requests and the analysis fires on noise.
+
+    Low traffic is the main reason canaries get abandoned. For those services, header-tagged or
+    synthetic traffic against the canary is a better use of the mechanism than a tiny real slice.
+  tags: [canary, progressive-delivery, metrics]
+
+- id: cicd-basic-009
+  topic: secrets
+  difficulty: beginner
+  question: Why is putting a secret in a workflow-level environment variable a bad idea?
+  answer: |
+    Because environment scope is job scope, and workflow-level `env` is visible to every job in the
+    file — including one that installs dependencies, runs a build script, or checks out
+    contributor code. A malicious or compromised dependency reads `os.environ` and exfiltrates
+    everything it finds.
+
+    The same logic applies across workflows: a secret stored at repository level and exposed
+    through `env` at the top of a workflow is readable by any step in any job of that workflow,
+    regardless of whether that step needs it.
+
+    The safer shape is to scope the secret to the step that uses it, and to the environment that
+    authorises it:
+
+    ```yaml
+        - name: Push
+          env:
+            TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          run: ./push.sh
+    ```
+
+    Better still, remove the static secret entirely. An OIDC exchange gives a job short-lived cloud
+    credentials scoped to a repository, ref and environment, so there is nothing reusable to steal.
+  tags: [secrets, env, least-privilege]
+
+- id: cicd-basic-010
+  topic: release gates
+  difficulty: beginner
+  question: What makes a release gate useful rather than bureaucratic?
+  answer: |
+    Four properties: it is automatic and binary, it is specific, it has an owner, and it is cheap
+    relative to what it prevents.
+
+    Automatic and binary means the outcome does not depend on who reviewed it. "Coverage above
+    80%" is a weak gate because it can be satisfied by testing getters; "no uncovered lines in this
+    diff" is a strong one because it is tied to the change. "Someone looked at it" is not a gate at
+    all — it is a conversation, and it belongs on the pull request where the diff is visible.
+
+    Ownership matters because an unowned gate becomes a queue. If a gate blocks releases for a
+    week, teams route around it, and the control is worse than absent: it creates the illusion of
+    review while shipping unreviewed changes.
+
+    The cheapest useful gates are the ones already computed by the pipeline — tests, type checks,
+    vulnerability scan against the baseline, signature verification, migration compatibility. Each
+    of those answers a question about *this artefact*, which is what a release gate should be
+    about.
+  tags: [gates, policy, release]
+
+- id: cicd-basic-011
+  topic: testing strategy
+  difficulty: beginner
+  question: Why is testing against SQLite when production runs Postgres a bad idea?
+  answer: |
+    Because the differences are exactly the ones that cause production bugs. SQLite does not
+    enforce the same type system, has different transaction and locking behaviour, lacks
+    `JSONB`/array types and `ON CONFLICT` semantics, treats `NULL` ordering and string comparison
+    differently, and does not implement the same constraint timing.
+
+    A test suite that passes on SQLite therefore produces false confidence about precisely the
+    layer where integration defects live: a migration that works in one dialect and not the other,
+    a query that relies on case-insensitive comparison, a unique constraint that fires at a
+    different point in the transaction.
+
+    The fix is cheap now that containers are standard: run the real engine as a CI service
+    container or via Testcontainers, apply the real migrations to build the schema, and use one
+    database (or schema) per parallel worker. The test suite becomes slower by seconds and starts
+    catching the class of bug it was supposed to catch.
+  tags: [integration-tests, postgres, testcontainers]
+
+- id: cicd-basic-012
+  topic: pipeline design
+  difficulty: beginner
+  question: Why should lint and type checks run before the test suite in a pipeline?
+  answer: |
+    Because they cost seconds and fail on a large share of the mistakes that would otherwise reach
+    the expensive stages. A pipeline ordered `lint → unit → build → integration` almost never runs
+    the four-minute build for a misspelled import or an unused variable.
+
+    This is the only form of cost control that also improves the developer experience: the
+    feedback arrives sooner, on the cheapest runner, with a message that points at a line of code
+    rather than a stack trace from a container that failed to start.
+
+    The ordering has a second effect, less obvious: it keeps the pipeline's *signal* meaningful.
+    When a build fails, it fails for a build reason. When a red run could be a typo, a flaky test
+    or a broken dependency, engineers learn to re-run rather than read.
+
+    The same principle applies inside the test suite: fast unit tests gate the slow integration
+    suite, and both gate the end-to-end run, so the expensive layers are reached only by changes
+    that have already survived the cheap ones.
+  tags: [ordering, lint, feedback]
+
+- id: cicd-basic-013
+  topic: github actions
+  difficulty: beginner
+  question: What does a build matrix do, and what are its failure modes?
+  answer: |
+    A matrix expands one job definition into several parallel jobs, one per combination of the
+    listed axes — Python 3.11 and 3.12 against Postgres 15 and 16, for example. Each combination
+    gets its own runner, so they run concurrently and report separately.
+
+    Three failure modes matter. **Fail-fast is on by default**, so the first red leg cancels the
+    rest and you learn about one incompatibility per run; set `fail-fast: false` for a matrix that
+    exists to find incompatibilities. **Artefact names collide**, because every leg tries to upload
+    to the same name and `upload-artifact@v4` refuses to overwrite — include `strategy.job-index`
+    or a matrix value in the name. And **the product grows silently**: adding a third axis
+    multiplies cost, not adds it.
+
+    `exclude` removes combinations that make no sense, and `include` either adds keys to a matching
+    combination or creates a new standalone job — which is how you add one experimental
+    configuration without expanding the whole grid.
+  tags: [matrix, parallelism, fail-fast]
+
+- id: cicd-basic-014
+  topic: concurrency
+  difficulty: beginner
+  question: What is a concurrency group for, and when should it cancel in-progress runs?
+  answer: |
+    A concurrency group serialises or cancels runs that share a key. It exists because the default
+    is "everything runs at once", which is wrong in two different directions.
+
+    For **tests on a pull request**, the only result that matters is the newest commit's. A push
+    that supersedes an in-flight run should cancel it — you save the runner minutes and get the
+    answer sooner:
+
+    ```yaml
+    concurrency:
+      group: ci-${{ github.ref }}
+      cancel-in-progress: true
+    ```
+
+    For **deploys**, cancellation is dangerous and serialisation is essential. Two deploys to the
+    same environment will interleave, and the older one may finish last and win, leaving a version
+    running that nobody intended. The group should be per environment, with
+    `cancel-in-progress: false` so a queued deploy waits rather than aborting mid-rollout.
+
+    The same primitive protects shared resources: one group per staging namespace, per database
+    migration job, per registry push.
+  tags: [concurrency, deploys, races]
+
+- id: cicd-basic-015
+  topic: caching and artefacts
+  difficulty: beginner
+  question: What is the difference between a CI cache and a CI artefact?
+  answer: |
+    An **artefact** is a product of the pipeline — a binary, an image, a test report, an SBOM. It
+    is the output, it is retained for a defined period, and downstream stages and humans consume
+    it. Losing it breaks the release.
+
+    A **cache** is an optimisation — downloaded packages, compiled objects, Docker layers. It
+    exists to make a later run faster, may be evicted at any time, and is scoped to branches. Losing
+    it costs minutes, not correctness.
+
+    The distinction has a practical test: a pipeline that cannot run with an empty cache is broken.
+    If clearing the cache produces a failure rather than a slower build, something is being smuggled
+    through the cache that should be rebuilt or published as an artefact.
+
+    In GitHub Actions the difference is visible in the actions: `actions/cache` restores by key with
+    fallbacks and shares across runs; `actions/upload-artifact` publishes named, immutable files for
+    a run, and `download-artifact` fetches them in a later job.
+  tags: [cache, artefacts, correctness]
+
+- id: cicd-basic-016
+  topic: environments
+  difficulty: beginner
+  question: What does environment promotion mean in practice?
+  answer: |
+    It means moving one artefact's identity from one environment to the next, unchanged, with a
+    record: staging runs digest `sha256:4b1e…`, production is then set to the same digest. Only
+    configuration differs, and configuration is supplied at runtime.
+
+    In practice the stages are: deploy to staging automatically on merge, run smoke and integration
+    checks there, then promote by digest to production — automatically, or behind an approval that
+    is tied to that digest rather than to a branch.
+
+    Two things make promotion meaningful. First, the artefact must not be rebuilt; a production
+    build is a different artefact and invalidates the testing. Second, the promotion must be
+    recorded with the previous digest, so the rollback target is known before anything goes wrong.
+
+    Environments that drift — one hotfixed by hand, one configured in a console — break the
+    prediction that a good staging deploy implies a good production one. Keeping every environment
+    defined in the same repository, applied by the same pipeline, is what preserves it.
+  tags: [promotion, environments, digest]
+
+- id: cicd-basic-017
+  topic: pipeline design
+  difficulty: beginner
+  question: What does it mean for a pipeline to be idempotent, and why does it matter?
+  answer: |
+    It means re-running the same pipeline for the same commit produces the same result without
+    duplicating side effects. Re-running is not an edge case — retried jobs, failed workflows,
+    duplicate webhooks and manual re-runs all happen routinely.
+
+    The failure modes are concrete. A build that embeds a timestamp produces a different digest on
+    every run, so the "same" artefact is never the same. A deploy script that appends a DNS record
+    instead of replacing it fails on the second run. A migration that runs unconditionally errors
+    because the column already exists. A publish that pushes a new image under an existing tag
+    silently overwrites the release.
+
+    The fixes follow from the definition: pin inputs so the build is a function of the commit,
+    make deploys declarative ("apply this state") rather than incremental, make migrations
+    guarded by a schema history table, and publish by digest so a repeat is a no-op.
+
+    A useful audit is to re-run the pipeline for a week-old commit and diff the output.
+  tags: [idempotency, re-runs, determinism]
+
+- id: cicd-basic-018
+  topic: database migrations
+  difficulty: beginner
+  question: What is the expand/contract pattern for database migrations?
+  answer: |
+    It is a way to change a schema without breaking any running version of the application, by
+    splitting each change into steps that are individually backward compatible.
+
+    **Expand**: add the new structure without touching the old — a nullable column, a new table, a
+    new index. Old code ignores it; new code writes both the old and new representations.
+
+    **Migrate**: backfill existing rows in batches, then switch reads to the new structure once the
+    backfill is verified.
+
+    **Contract**: in a *later* release, once no running version reads the old structure, remove it.
+
+    The point is that a rolling deploy runs old and new code simultaneously, so any change that
+    removes something the old code needs causes a window of failures — and destroys the rollback
+    path. Renaming a column is therefore not one change but four: add, dual-write, backfill and
+    switch reads, stop writing, drop.
+
+    The cost is time and a little extra code. The alternative is a deploy window where the service
+    is broken, and a rollback that cannot restore data.
+  tags: [migrations, expand-contract, zero-downtime]
+
+- id: cicd-basic-019
+  topic: supply chain
+  difficulty: beginner
+  question: What is an SBOM and what do you do with it?
+  answer: |
+    A software bill of materials is a machine-readable inventory of the components in an artefact:
+    packages, versions, licences, and often the relationships between them. CycloneDX and SPDX are
+    the two common formats.
+
+    Generating it is the easy half. The value comes from three uses:
+
+    - **Vulnerability response.** When a CVE is published, querying SBOMs answers "which of our
+      artefacts contain this package at an affected version" in minutes, instead of rebuilding and
+      rescanning every service.
+    - **Licence and policy.** A policy engine can reject an artefact containing a component with a
+      forbidden licence, before it ships.
+    - **Provenance.** The SBOM is evidence about what was in the build, and it is only meaningful
+      if it is attached to the artefact it describes — as an attestation or a signed companion
+      document — rather than generated later from a repository state.
+
+    The usual mistake is generating an SBOM after deployment, or not generating one at all, and
+    then treating a CVE as a rebuild-everything exercise.
+  tags: [sbom, cyclonedx, vulnerabilities]
+
+- id: cicd-basic-020
+  topic: secrets and oidc
+  difficulty: beginner
+  question: How does OIDC remove the need for long-lived cloud credentials in CI?
+  answer: |
+    The CI platform acts as an identity provider. A job that requests it — in GitHub Actions, a job
+    with `id-token: write` — receives a short-lived signed token describing the workload: which
+    repository, which ref, which environment, which workflow.
+
+    The cloud provider is configured to trust that issuer, validates the token's claims, and
+    returns temporary credentials scoped to a role. Nothing long-lived is stored, so there is
+    nothing to leak, rotate or find in a log.
+
+    ```yaml
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/gha-deploy-api
+          aws-region: eu-west-1
+    ```
+
+    The security now lives entirely in the trust policy's conditions. A policy accepting
+    `repo:acme/api:*` lets any branch assume the role; one requiring
+    `repo:acme/api:environment:production` limits it to jobs that passed the environment's
+    protection rules. That condition is the control — everything else is plumbing.
+  tags: [oidc, credentials, federation]
+
+- id: cicd-basic-021
+  topic: deployment and release
+  difficulty: beginner
+  question: What is the difference between deploying and releasing, and why does it matter?
+  answer: |
+    A deploy makes code available in an environment; a release exposes it to users. Feature flags
+    separate the two: ship the code dark, then enable it for internal users, then a percentage of
+    traffic, then everyone.
+
+    The separation changes what "deploy on Friday" means. If the code is behind a flag, a deploy is
+    low-risk — the new behaviour is not active, and the deploy can be verified with the flag off.
+    Enabling the flag becomes the risky moment, and it is reversible in seconds without a rollout.
+
+    It also improves the deploy itself: trunk-based development with short-lived branches needs the
+    ability to merge incomplete work without exposing it. Flags provide it, and they are what makes
+    continuous deployment compatible with features that take two weeks.
+
+    The failure mode is flag debt. A flag that outlives its rollout is an untested branch in
+    production, and the combination matrix grows faster than the test suite. Every flag needs an
+    owner and an expiry date, and should be deleted when the rollout completes.
+  tags: [feature-flags, deploy, release]
+
+- id: cicd-basic-022
+  topic: flaky tests
+  difficulty: beginner
+  question: What is a flaky test, and why is "just retry it" the wrong response?
+  answer: |
+    A flaky test is one whose outcome depends on something other than the code under test — timing,
+    ordering, shared state, the network, or the clock. It passes and fails on the same commit.
+
+    Retrying is the wrong response because the nondeterminism is real and still present in
+    production. A test that fails one run in twenty because it asserts on a timeout is describing a
+    race that users will eventually hit, usually at higher concurrency and worse timing. Retrying
+    converts a visible bug into an intermittent one, and the retry itself teaches the team that red
+    runs are noise.
+
+    The workable response: quarantine the test out of the gating suite so the main signal stays
+    trustworthy, assign an owner, and fix the cause — condition-based waits instead of sleeps,
+    per-test fixtures instead of shared state, injected clocks, isolated databases per worker. If
+    nobody will fix it within a defined window, delete it; a deleted test is honest, a quarantined
+    test with no owner is not.
+
+    Retry is defensible only for environmental failures, and only when the retry rate is reported.
+  tags: [flaky, quarantine, determinism]
+
+- id: cicd-basic-023
+  topic: observability
+  difficulty: beginner
+  question: Why measure pipeline queue time separately from execution time?
+  answer: |
+    Because they have different causes and different fixes, and the queue is invisible if you only
+    time the steps.
+
+    Execution time is the work: checkout, install, build, test. It responds to caching, sharding
+    and removing redundant stages. Queue time is the wait before the first step starts, and it is
+    caused by runner capacity, concurrency limits and a saturated pool — typically because a
+    nightly job, a large matrix or another team's pipeline is consuming the same capacity.
+
+    A pipeline that executes in six minutes but waits twenty-five is a twenty-five-minute feedback
+    loop, and optimising the six minutes changes nothing. Conversely, a pipeline with a two-minute
+    queue and a thirty-minute critical path needs the graph fixed, not more runners.
+
+    Measure both at p50 and p95. The tail is what developers actually remember, because the runs
+    that matter — the one before a release, the one during an incident — are the ones that get
+    unlucky.
+  tags: [metrics, queue-time, capacity]
+
+- id: cicd-basic-024
+  topic: pipeline design
+  difficulty: beginner
+  question: What is a required status check, and what should be in it?
+  answer: |
+    A required status check is a job whose failure blocks merging into a protected branch. It is the
+    mechanism that turns a pipeline from advice into a gate, and its content determines whether
+    that gate is useful.
+
+    A workable set: build succeeds from a clean checkout with locked dependencies, unit and
+    integration tests pass, static analysis and type checks pass, and the merge is up to date with
+    the base branch. The last one matters — a green run against a two-day-old base proves little.
+
+    Two design rules keep it honest. Required checks must be **stable**: a check that flakes is
+    worse than no check, because it teaches people to re-run rather than investigate. And there
+    should be **few of them**: every additional required job adds latency to every merge, and a
+    slow gate gets bypassed by administrators under deadline.
+
+    Expensive stages — multi-arch builds, end-to-end suites, deploys — belong after merge, where
+    they can fail without blocking every developer.
+  tags: [branch-protection, required-checks, merge]

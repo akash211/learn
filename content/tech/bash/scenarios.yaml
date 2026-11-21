@@ -1,0 +1,198 @@
+- id: bash-scn-001
+  title: Nightly backups are empty and the job reports success
+  technologies: [bash, linux, cicd]
+  difficulty: advanced
+  prompt: |
+    A nightly cron job runs `pg_dump "$DB" | gzip > /backups/db-$(date +%F).sql.gz` from a shell
+    script. Monitoring checks the script's exit status and has been green for three weeks. A
+    restore test finds that every archive from the last three weeks is a valid gzip of zero bytes.
+    The database credentials were rotated around the time the problem started, and the DBA's
+    password contains a `$`.
+  approach: |
+    Two independent bugs, and the second is why the first was invisible.
+
+    1. Explain the masking: a pipeline's status is the last command's, so `gzip` exits 0 while
+       compressing an empty stream. `pg_dump` failing with "authentication failed" was discarded.
+       The fix is `set -o pipefail` (plus `-e`), so the pipeline fails when any stage fails.
+    2. Explain the `$` in the password: with `PGPASSWORD=$DB_PASS` unquoted in the environment or
+       embedded in a URI, the shell expands `$...` inside the value. The credential must be quoted
+       (`export PGPASSWORD="$DB_PASS"`), and ideally passed via a `.pgpass` file with mode 600
+       rather than an environment variable.
+    3. Add verification, because exit status alone does not prove a usable backup: check that the
+       archive is non-empty and that `gzip -t` passes, ideally restore into a scratch database
+       weekly. "Exit 0" is not evidence.
+    4. Make the filename safe and unique: `$(date +%F)` is fine, but a failed earlier run should not
+       leave a truncated file in place — write to a temp file in `/backups` and `mv` it into place,
+       so a partial dump is never mistaken for a good one.
+    5. Alert on the content metric (bytes written, row count), not only on the exit code.
+  red_flags:
+    - Adding `|| true` or `2>/dev/null` to quiet the cron mail.
+    - Concluding the database is empty rather than that the dump failed.
+    - Retrying the job without checking whether `pg_dump` can authenticate at all.
+    - Removing the compression step and calling it a fix.
+
+- id: bash-scn-002
+  title: Container waits out the full grace period and leaves orphan processes
+  technologies: [bash, docker, linux]
+  difficulty: advanced
+  prompt: |
+    A service image uses a shell script as its entrypoint: it renders a config file, starts the
+    application in the background with `&`, and then runs `tail -f /dev/null` to keep the container
+    alive. `docker stop` always waits out the whole grace period (10 seconds by default) and the
+    logs show no shutdown sequence from the application. After a few days, `ps` inside the container shows dozens of
+    defunct processes.
+  approach: |
+    Diagnose the process tree first: the script is PID 1, the app is a child, and the shell has no
+    TERM trap. Docker sends SIGTERM to PID 1 only; the shell ignores it because it is blocked in
+    `tail -f`, and `tail` never sees the signal. After the grace period Docker sends SIGKILL, so
+    the app dies without flushing.
+
+    The fixes, in order:
+
+    1. Remove the shell from the process tree where possible: do the config rendering, then
+       `exec "$@"` so the application becomes PID 1 and receives signals directly. Exit status then
+       propagates unchanged, which also fixes "container exited 0 after crashing".
+    2. If the script must stay, install a forwarder and drop `tail -f`:
+       `trap 'kill -TERM "$child"; wait "$child"; exit 143' TERM INT`, start the app with `&`,
+       `child=$!`, then `wait "$child"`. `wait` is interruptible, so the trap fires immediately.
+    3. Address the zombies: PID 1 must reap. Either use `tini`/`dumb-init` as the entrypoint, or
+       `wait` on children explicitly. A shell script as PID 1 that never reaps accumulates defunct
+       entries until the PID table is full.
+    4. Verify with `docker stop -t 5` returning in about a second, and confirm the app's own
+       "shutting down" log line appears.
+  red_flags:
+    - Sending SIGKILL directly, or raising the grace period.
+    - Adding `sleep` or a longer `--time` flag instead of forwarding signals.
+    - Not recognising that PID 1 has special signal and reaping responsibilities.
+    - Blaming the application before reading the entrypoint.
+
+- id: bash-scn-003
+  title: Deploy script reports success but ships nothing
+  technologies: [bash, cicd, git]
+  difficulty: intermediate
+  prompt: |
+    A release script does `for f in $(ls "$BUILD_DIR"); do cp $f /srv/app/; done` and then
+    `rsync -a /srv/app/ "$DEPLOY_HOST:/srv/app/"`. It has worked for months. This week a build
+    artifact named `my service.tar.gz` appeared, the script logged 12 files copied and exit 0, and
+    the deploy target is missing that artifact. Nobody changed the script.
+  approach: |
+    The loop parses `ls` output and leaves `$f` unquoted, so the filename is split on the space into
+    `my` and `service.tar.gz`. `cp my /srv/app/` fails, but the loop's status is the last
+    iteration's and the script has no `set -e`, so the failure is invisible.
+
+    Points a strong answer covers:
+
+    1. Explain both defects: `$(ls)` is never the right way to enumerate files (use a glob or
+       `find -print0`), and unquoted `$f` splits and globs.
+    2. Rewrite: `for f in "$BUILD_DIR"/*; do [[ -e $f ]] || continue; cp -- "$f" /srv/app/ || exit 1; done`,
+       or better, `rsync -a --delete "$BUILD_DIR"/ /srv/app/` and drop the loop entirely — the
+       second `rsync` already copies the tree, so this loop duplicates work.
+    3. Fix the error handling: `set -euo pipefail` at the top, and `--` before operands that could
+       start with `-`.
+    4. Add a post-condition: compare file counts or a manifest hash between source and target and
+       fail if they differ. A deploy script should assert the outcome, not assume it.
+    5. Note the naming discipline: spaces in artifact names are legal but hostile; enforce
+       `[A-Za-z0-9._-]+` at build time.
+  red_flags:
+    - Quoting only one of the two places and calling it fixed.
+    - Adding `|| true` after the `cp`.
+    - Blaming rsync or the remote host.
+    - Not noticing that the loop is redundant with the rsync.
+
+- id: bash-scn-004
+  title: Hourly aggregation job overlaps itself and double-counts
+  technologies: [bash, linux, postgresql]
+  difficulty: advanced
+  prompt: |
+    An hourly cron job reads a queue table, aggregates rows into a summary table, and deletes the
+    processed rows. Normally it takes 20 minutes. Occasionally it takes 70, and on those hours the
+    summary counts are roughly doubled. The job is a bash script that logs "started" and "finished"
+    with timestamps but has no lock. A colleague suggests a PID file in `/tmp`.
+  approach: |
+    Fix the symptom with a kernel-held lock, then fix the duplicate-work logic.
+
+    1. Explain the race: cron starts a second instance while the first is still running; both read
+       the same unprocessed rows and both insert summaries. The `DELETE` at the end removes the
+       source rows, so the duplicate is not visible in the source table — only in the summary.
+    2. Use `flock` on a dedicated lock file, held for the life of an open descriptor:
+       `exec 9>/var/lock/agg.lock; flock -n 9 || exit 0`. It is released by the kernel on exit,
+       error or `kill -9`, so there is no stale lock to clean up. Exit 0 (not 1) when the previous
+       run is still going, so monitoring does not page for a skipped hour.
+    3. Reject the PID-file suggestion and say why: the file survives `kill -9`, and the PID can be
+       reused, so a liveness check can pass for the wrong process. If a PID file is unavoidable,
+       verify with `ps -p "$pid" -o cmd=`.
+    4. Fix the data path, not just the scheduling: make the aggregation transactional — select and
+       delete in one transaction, or mark rows processed with a batch id, so a crash mid-run does
+       not double-count on retry. Idempotency is the property; the lock is the band-aid.
+    5. Add duration and row-count metrics; a 20-minute job trending to 70 is the real signal.
+  red_flags:
+    - Only adding a PID file, or `mkdir /tmp/lock` style locking with no cleanup.
+    - Increasing the cron interval instead of making the job safe.
+    - Assuming the `DELETE` makes the operation idempotent.
+    - Silencing monitoring when the job exits non-zero because a lock was held.
+
+- id: bash-scn-005
+  title: Cleanup script removed a production directory
+  technologies: [bash, linux]
+  difficulty: advanced
+  prompt: |
+    A nightly script does `cd $BASE_DIR` then `rm -rf $OLD_RELEASES/*`. `BASE_DIR` comes from
+    `/etc/app/env` and `OLD_RELEASES` is normally `releases/old`. One night an upstream config
+    change renamed the variable, the script ran with `BASE_DIR` unset, `cd` failed, and the script
+    continued. The on-call engineer found `/home/deploy` emptied.
+  approach: |
+    Treat it as three separate failures: no guard on the `cd`, unquoted variables that expand to
+    nothing, and no verification of the target before a recursive delete.
+
+    1. `cd "$BASE_DIR"` with the variable unset expands to `cd ""`, which fails — and the script
+       had no `set -e`, so it continued in whatever directory it started in. Fix: `set -euo pipefail`,
+       plus `cd -- "$BASE_DIR" || exit 1`. With `-u`, an unset `BASE_DIR` aborts at the expansion
+       itself.
+    2. `rm -rf $OLD_RELEASES/*` unquoted with an empty variable becomes a glob in the current
+       directory. Quote and anchor:
+       `rm -rf -- "${BASE_DIR:?}/${OLD_RELEASES:?}/"*` — the `:?` makes an empty value fatal
+       rather than silently meaning "here".
+    3. Add a target assertion before any destructive step: absolute path, exists, not `/`, depth
+       check, and a prefix check (`[[ $target == /srv/app/releases/* ]]`). Defence in depth, not
+       paranoia.
+    4. Prefer a two-phase delete: run the `find ... -print` first, log the list, then delete with
+       `-delete` restricted by `-maxdepth` and `-type`.
+    5. Add `--dry-run` and require an explicit confirmation for destructive operations outside the
+       application root.
+  red_flags:
+    - Running `cd` unguarded and relying on the next command to fail.
+    - Using `rm -rf "$VAR"/` and considering quoting sufficient — `:?` is what makes it safe.
+    - Restoring from backup without fixing the script.
+    - Hard-coding the path and skipping the assertion.
+
+- id: bash-scn-006
+  title: Script passes locally, fails in CI on the first line
+  technologies: [bash, cicd, docker]
+  difficulty: intermediate
+  prompt: |
+    A developer's script runs fine on their Ubuntu laptop. In the CI container it fails immediately
+    with `./ci/deploy.sh: line 1: bash: not found`. After changing the shebang to `#!/bin/sh` it gets
+    further, then dies with `[[: not found` and `Syntax error: "(" unexpected`. A separate step that
+    uses `jq` also fails with 127, although it worked when run manually in the same image.
+  approach: |
+    Three distinct environment gaps, all explained by "CI is not your shell".
+
+    1. `bash: not found`: the image is Alpine (or busybox-based) and has no bash. `#!/usr/bin/env
+       bash` searches `PATH`, finds nothing, and the kernel reports the missing interpreter. Either
+       `apk add --no-cache bash`, or write POSIX `sh`.
+    2. `[[: not found` / `"(" unexpected`: the script is bash syntax running under `dash` or `ash`.
+       Arrays, `[[ ]]`, `local` assumptions, process substitution and `set -o pipefail` are all
+       unavailable. If the script needs them, install bash and keep `#!/usr/bin/env bash`; do not
+       half-port it.
+    3. `jq` exit 127: the manual run used a different image, or the interactive shell had a `PATH`
+       that CI's non-login shell does not. CI steps do not source `/etc/profile`. Fix by installing
+       the dependency in the image and checking at startup:
+       `command -v jq >/dev/null || { echo "missing jq" >&2; exit 127; }`.
+    4. Reproduce locally in the same image (`docker run --rm -v "$PWD":/w -w /w alpine:3 sh -c ...`)
+       so the difference is visible, and pin the CI image rather than using `latest`.
+    5. Add `shellcheck -s sh` (or `-s bash`) to CI so the dialect is checked automatically.
+  red_flags:
+    - Switching the shebang back and forth without deciding which dialect the script targets.
+    - Assuming CI uses the same image as the developer's machine.
+    - Installing every tool interactively instead of declaring them in the image.
+    - Blaming the runner's shell settings without inspecting `/bin/sh`.

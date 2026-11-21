@@ -1,0 +1,277 @@
+- id: sqlite-recent-001
+  topic: json
+  difficulty: advanced
+  question: SQLite 3.45 added JSONB. What changes for applications storing JSON, and what stays the same?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Before 3.45, a JSON document was TEXT and every `json_extract` re-parsed it. JSONB
+    (3.45.0, January 2024) adds an internal binary encoding: `jsonb(x)` converts text to the blob
+    form, and `json(x)` converts it back. The operators and functions — `->`, `->>`,
+    `json_extract`, `json_each`, `json_patch` — work on either representation, so existing queries
+    keep working.
+
+    What changes: parsing happens once at write time, so repeated traversal of a large document is
+    cheaper, and the binary form is often smaller than the text, especially with nested objects and
+    repeated keys. Inserts are slightly more expensive because the document is parsed on the way
+    in. It is the right default for a payload column that is read far more often than written.
+
+    What stays the same: JSON is still not a set of columns. Filtering on `jsonb_col ->> '$.status'`
+    without an expression index or a generated column is still a full scan, and the path language
+    is still the small `$`/`.key`/`[n]` subset with no wildcards. The JSONB encoding is also an
+    internal format, not an interchange format — do not ship it to another system expecting it to
+    be stable across SQLite versions. Store text at the boundary, JSONB in the column.
+  tags: [jsonb, json, storage-format]
+
+- id: sqlite-recent-002
+  topic: schema
+  difficulty: intermediate
+  question: Should new schemas use STRICT tables by default, and what does converting an existing one involve?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Yes for new schemas, with rare exceptions. STRICT tables (3.37, 2021) have become the
+    recommended default because they turn the most common SQLite data-quality problem — a column
+    holding a mix of integers, text and blobs because one code path passed the wrong Python type —
+    into an error at write time. They also make `PRIMARY KEY` imply `NOT NULL`, which ordinary
+    tables do not.
+
+    The cost is small: only six type names are allowed, so an ORM-generated `VARCHAR(255)` or
+    `DATETIME` declaration has to be mapped to `TEXT` (or the ORM's SQLite dialect configured to
+    emit plain types). Lossless coercion still happens, so a migration that inserts integers into a
+    text column will not fail — it will store `'1'`, which is usually what you wanted anyway.
+
+    Converting an existing table is not `ALTER TABLE`. SQLite has no way to add `STRICT`, so it is
+    the twelve-step rebuild: create a new strict table, `INSERT INTO new SELECT ...` with explicit
+    casts, drop the old one, rename, recreate indexes and triggers, then run `PRAGMA
+    foreign_key_check`. Do it in one transaction, with `PRAGMA foreign_keys=OFF` set before the
+    transaction starts, and test on a copy — the rebuild is where storage-class surprises surface.
+  tags: [strict, migrations, schema]
+
+- id: sqlite-recent-003
+  topic: statistics
+  difficulty: advanced
+  question: Is running ANALYZE on startup still the right habit, or should applications use PRAGMA optimize?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    `PRAGMA optimize` is the better habit now, and it has been the documented recommendation for
+    several years. The idea is that the application tells SQLite which tables it actually queried,
+    and on close the pragma runs `ANALYZE` only for those where statistics are missing or the data
+    has changed enough to matter.
+
+    The practical setup is `PRAGMA analysis_limit = 400` followed by `PRAGMA optimize` on
+    connection close (or at the end of a maintenance job). The limit bounds how many rows are
+    sampled per index, which keeps the operation fast even on large tables; the resulting
+    `sqlite_stat1` entries are approximate, which is fine because that is all the planner consumes
+    anyway.
+
+    Running a full `ANALYZE` on every startup is wasteful and, on a large database, slow enough to
+    affect boot time. Running it never is worse: without statistics the planner falls back to
+    guesses and join order on multi-table queries becomes unreliable. The middle ground is
+    `optimize` at close, plus a full `ANALYZE` after any bulk load that changes the distribution
+    substantially — for example a data migration that gives one tenant a large share of a table,
+    which averages in `sqlite_stat1` cannot represent.
+  tags: [analyze, optimize, statistics]
+
+- id: sqlite-recent-004
+  topic: architecture
+  difficulty: advanced
+  question: How are teams running SQLite at the edge in 2024-2026, given the single-writer model?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    The pattern is to make the single-writer constraint a design parameter rather than a bug. Three
+    approaches dominate.
+
+    **Database per tenant or per user.** Each tenant gets its own file, so writers never contend
+    across tenants, backups and deletion are per-tenant, and a hot tenant cannot slow down the
+    rest. The routing layer maps a request to a file; the cost is many small files and no
+    cross-tenant query without an aggregator.
+
+    **Single writer plus read replicas.** LiteFS presents the database as a FUSE filesystem and
+    ships WAL frames to replicas; the primary takes all writes, replicas serve reads. Litestream
+    does the durable-shipping version for disaster recovery rather than live read scaling. Both
+    keep SQLite's semantics and move the replication problem into infrastructure.
+
+    **Managed edge databases.** Cloudflare D1, Turso/libSQL (a fork with HTTP access, embedded
+    replicas and multi-db routing) and similar services put SQLite behind a network API. They solve
+    the "no network protocol" problem by adding one, and in exchange you inherit their consistency
+    model — usually asynchronous read replication with session or bookmarks to avoid stale reads.
+
+    None of these makes concurrent writers on one file safe. They partition, replicate or front the
+    single writer; they do not remove it. If a workload needs many writers on one dataset, the
+    answer is still a client-server engine.
+  tags: [edge, replication, multi-tenant]
+
+- id: sqlite-recent-005
+  topic: fts5
+  difficulty: advanced
+  question: How do you keep an FTS5 index in sync with a content table at scale, and what do contentless tables change?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    The default external-content pattern is three triggers (insert, delete, update) that mirror
+    changes into the FTS table, with the `'delete'` command receiving the **old** column values —
+    FTS5 needs them to remove the right tokens. That works, but it doubles write amplification on
+    the content table and makes bulk loads slow.
+
+    At scale the pattern is: load the content table with triggers absent, then
+    `INSERT INTO fts(fts) VALUES('rebuild')` once, and re-create the triggers. After large deletions
+    run `'optimize'` to merge segments, and run `'integrity-check'` after any suspicious event —
+    it compares the index against the content table and raises on divergence. If you cannot afford
+    triggers, a periodic incremental sync keyed on a monotonic `updated_at` plus a full `'rebuild'`
+    on a schedule is honest and simpler.
+
+    Contentless tables (`content=''`) store only the index, which halves the space but historically
+    made deletes impossible. `contentless_delete=1` (3.43) allows `DELETE` and `INSERT OR REPLACE`
+    on such a table by storing enough per-row token information to remove entries, at some space
+    cost. That makes contentless viable for logs and message stores where rows are appended and
+    later purged, and where the original text lives elsewhere. It does not let you `SELECT` the
+    column values back — the content is still gone.
+  tags: [fts5, triggers, contentless]
+
+- id: sqlite-recent-006
+  topic: concurrency
+  difficulty: advanced
+  question: Can SQLite be used as a job queue, given there is no SKIP LOCKED?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Yes, for a bounded number of workers, if you use the right statement and respect the
+    single-writer model. The pattern is a claim query inside `BEGIN IMMEDIATE`:
+
+    ```sql
+    BEGIN IMMEDIATE;
+    UPDATE jobs
+       SET status = 'running', started_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), attempts = attempts + 1
+     WHERE id = (SELECT id FROM jobs WHERE status = 'queued'
+                 ORDER BY priority DESC, id LIMIT 1)
+    RETURNING id, kind, payload;
+    COMMIT;
+    ```
+
+    `BEGIN IMMEDIATE` serializes claimers, the subquery picks one row, and `RETURNING` (3.35) hands
+    back the payload without a second `SELECT`. There is no `SKIP LOCKED` because there are no row
+    locks to skip — the write lock is database-wide, so a second claimer waits rather than skipping.
+
+    The limits are the point. Claim throughput is one commit at a time, so batch claims (claim ten
+    rows in one transaction) and keep transactions short. A crashed worker leaves rows `running`;
+    you need a reaper that requeues rows whose `started_at` is older than a lease, which is easy to
+    get wrong under clock skew. For thousands of jobs per second or dozens of workers, use
+    PostgreSQL with `FOR UPDATE SKIP LOCKED` or a dedicated queue. For a background worker pool in
+    a single-node app, SQLite is a perfectly good queue and one fewer service to operate.
+  tags: [queue, returning, begin-immediate]
+
+- id: sqlite-recent-007
+  topic: python
+  difficulty: intermediate
+  question: What changed in Python's sqlite3 module that affects transaction handling and thread safety?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Python 3.12 added the DB-API `autocommit` attribute, which finally gives explicit control over
+    the module's long-standing implicit transaction behaviour. The legacy mode (`isolation_level=""`,
+    the default) opens a transaction before DML but not before `SELECT` or DDL, so a `CREATE TABLE`
+    commits on its own and a read-modify-write can run outside any transaction. That asymmetry has
+    caused a generation of migration bugs. Setting `autocommit=False` makes the connection open a
+    transaction at the start of every block and commit at the end; `autocommit=True` is true
+    autocommit with no implicit `BEGIN`.
+
+    Also in 3.12, the default date/datetime adapters and converters are deprecated. Code that
+    relied on `detect_types=PARSE_DECLTYPES` to turn a `TIMESTAMP` column into a `datetime` should
+    convert explicitly, which is better anyway because SQLite has no timestamp type and the
+    adapter's format was never part of the file format.
+
+    Thread safety is unchanged in substance: `sqlite3.threadsafety` reports 3 when the underlying
+    library is serialized (the usual build), connections are not meant to be shared across threads,
+    and `check_same_thread=False` disables a guard without adding locking. The reliable pattern is
+    still one connection per thread, or one writer thread with a queue, plus `busy_timeout` and
+    `BEGIN IMMEDIATE`.
+  tags: [python, autocommit, threads]
+
+- id: sqlite-recent-008
+  topic: backup and recovery
+  difficulty: advanced
+  question: What does a credible disaster-recovery setup for a SQLite service look like now?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Three layers, because they fail differently.
+
+    **Continuous WAL shipping** for recovery point objective: Litestream tails the `-wal` and
+    uploads frames to object storage, giving restore to a point in time within seconds. It runs as
+    a sidecar, needs write access to the database directory, and must be monitored — a silently
+    stopped replication process is the classic failure.
+
+    **Periodic snapshots** for recovery time objective and for portability: `VACUUM INTO` a
+    timestamped file, verify it with `PRAGMA integrity_check`, and ship it off-host. Snapshots are
+    also what you restore from when the WAL chain is unusable.
+
+    **Page-level sync** for large files and replicas: `sqlite3_rsync` (3.43+) compares page hashes
+    and transfers only changed pages over SSH, restartably. It is the tool for seeding a replica or
+    moving a 50 GB database without copying it whole.
+
+    Then the part that is usually missing: a restore drill on a schedule, against a real
+    application instance, with the stale `-wal` and `-shm` removed, checking `user_version`, row
+    counts and recency before declaring success. And a check that the backup host can read the
+    bucket, the credentials have not expired, and the sidecar is actually running. Backups fail
+    quietly; drills are how you find out.
+  tags: [backup, litestream, disaster-recovery]
+
+- id: sqlite-recent-009
+  topic: architecture
+  difficulty: advanced
+  question: What signals tell you it is time to move from SQLite to PostgreSQL, and what does the migration actually cost?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    The signals are observable, not aspirational: more than one machine must write; sustained
+    write concurrency exceeds what one writer can commit; you need read replicas or automatic
+    failover rather than restore-from-backup; analytical queries compete with OLTP for the same
+    page cache; you need per-user permissions or row-level security; or you need types SQLite does
+    not have — arrays, ranges, `jsonb` with GIN indexes, vectors, `tsvector`.
+
+    "It might not scale" is not a signal. Nor is a dataset that fits comfortably in one file with
+    one writer; plenty of services serve millions of requests a day that way.
+
+    The migration cost is mostly dialect and semantics, not data volume. Identity columns
+    (`AUTOINCREMENT` to `GENERATED ... AS IDENTITY`), date functions (`strftime` to `to_char` and
+    `date_trunc`), aggregation (`group_concat` to `string_agg`), upserts (`INSERT OR IGNORE` to
+    `ON CONFLICT DO NOTHING`), JSON (`json_extract` to `->>`/`jsonb`), booleans as real booleans,
+    and transaction control (explicit `BEGIN`, no implicit DML transactions). `sqlite3 .dump` does
+    not load into `psql`.
+
+    The underestimated part is behavioural: queries that were fast because everything was in
+    process memory now cross a network, and code that relied on `BEGIN IMMEDIATE` serialization
+    needs real concurrency control. Run the same integration suite against both engines before
+    cutover, and keep SQLite as the test fixture — it is the fastest database to spin up in CI.
+  tags: [postgresql, migration, architecture]
+
+- id: sqlite-recent-010
+  topic: concurrency
+  difficulty: advanced
+  question: Is BEGIN CONCURRENT or WAL2 available in mainline SQLite, and what would it change?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    No. Mainline SQLite still allows exactly one writer per database, and `BEGIN CONCURRENT` and
+    WAL2 live on long-running experimental branches, not in release builds. It is worth
+    understanding what they propose because the misunderstanding is common in architecture
+    discussions.
+
+    `BEGIN CONCURRENT` would let several connections start write transactions at once and detect
+    conflicts at the page level, committing in order and failing a transaction whose pages were
+    changed by another. That would raise write throughput for workloads with disjoint write sets —
+    different tenants touching different tables — while keeping serializability. The hard parts are
+    conflict detection, fairness and the interaction with checkpoints, which is why it has never
+    landed.
+
+    WAL2 would allow a checkpoint to run concurrently with a writer by maintaining two WAL files,
+    reducing the stalls caused by checkpointing a large WAL. Also not mainline.
+
+    The practical stance: assume one writer, design around it (per-tenant files, a writer queue,
+    batched transactions), and do not plan on these features arriving. If concurrent writers on one
+    dataset are a hard requirement today, that is a PostgreSQL requirement — not a SQLite tuning
+    problem.
+  tags: [begin-concurrent, wal2, concurrency]

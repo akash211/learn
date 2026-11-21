@@ -1,0 +1,135 @@
+slug: sqlite
+title: SQLite
+category: databases
+summary: The database that lives inside your process — one file, a real B-tree, and no server to operate.
+level: core
+relations:
+  - to: sql
+    type: uses
+    note: SQLite executes ordinary SQL, but with its own dialect edges — affinity instead of strict types, no RIGHT/FULL JOIN before 3.39, and pragmas where other engines have server settings.
+  - to: duckdb
+    type: alternative
+    note: DuckDB is the other embedded engine worth knowing. SQLite is row-oriented and built for many small transactions; DuckDB is columnar and built for large analytical scans.
+  - to: postgresql
+    type: alternative
+    note: PostgreSQL is what SQLite becomes when the process boundary stops fitting — concurrent writers, network clients, replicas and real ALTER TABLE.
+intro:
+  what: |
+    SQLite is a C library that implements a relational database inside the calling process.
+    There is no server, no port, no daemon and no user account: the "database" is a single
+    file (plus a journal or WAL alongside it while transactions are open), and the API is a
+    function call. That one design decision explains almost everything else about it — the
+    locking model, the type system, the durability settings, and the fact that it is probably
+    already running on your phone, in your browser, and inside the tools you use to build
+    software.
+
+    This module is about the engine rather than the SQL. It assumes you can write a join and
+    a `GROUP BY`, and covers what is underneath: the page format, how a row becomes bytes,
+    what `PRAGMA journal_mode=WAL` actually changes, why "database is locked" appears under
+    load, how the planner chooses an index, and where the embedded model stops being an
+    advantage. Examples use a small schema of `orders`, `customers` and an FTS5 `documents`
+    table, and every pragma quoted is a real one with its shipped default.
+
+    The honest framing matters more here than for a server database. SQLite is not a small
+    PostgreSQL and should not be sold as one. It is an exceptionally well-tested file format
+    with a SQL engine attached, and the failure modes people hit in production are almost
+    always a mismatch between that model and the workload — several app servers writing to
+    one file over NFS, a dashboard running 30-second aggregations against the OLTP file, or
+    a long read transaction quietly preventing the WAL from being checkpointed.
+  why: |
+    Most applications do not need a database server. They need durable, transactional,
+    queryable local state, and they need it to start in microseconds and survive being
+    copied to another machine. SQLite gives that with no operational surface: no upgrade
+    window, no connection pool, no backup agent, no network latency, and no way for a
+    forgotten firewall rule to take the app down.
+
+    The economics are why it keeps spreading. A single SQLite file can hold hundreds of
+    gigabytes, serve thousands of reads per second from page cache, and be replicated by
+    shipping its WAL — which is what makes the current generation of edge databases
+    (Cloudflare D1, Turso/libSQL, LiteFS) possible. The same properties make it the default
+    storage for mobile apps, desktop applications, browsers through WebAssembly and OPFS,
+    and the internal catalogue of tools like Git, Fossil and much of the Python and
+    JavaScript ecosystem.
+
+    It is also the cheapest way to learn how a relational engine works. The file format is
+    documented byte by byte, the planner's decisions are visible in `EXPLAIN QUERY PLAN`,
+    and there is no background daemon hiding the mechanics.
+  problems:
+    - Storing relational state in an application without operating a database server.
+    - Getting ACID transactions and crash recovery in a single file, including on mobile and embedded devices.
+    - Answering ad-hoc SQL questions over local data without exporting it to a warehouse.
+    - Providing a stable, documented file format that outlives the application that wrote it.
+    - Shipping full-text search and JSON querying without a second service.
+  where_used:
+    - Mobile and desktop applications — Android, iOS, Windows, macOS, and most Electron or Tauri apps.
+    - Browsers and edge runtimes through the official WebAssembly build with OPFS persistence.
+    - Server-side "single-node" services: internal tools, CI systems, small SaaS backends and per-tenant databases.
+    - Analytics on local files through DuckDB's SQLite scanner, and ETL checkpoints and state stores in pipelines.
+    - Application file formats: Fossil, and many tools that need a queryable document store in one file.
+  ecosystem: |
+    SQLite sits inside the application tier rather than beside it. In Python it is the
+    `sqlite3` module in the standard library; in Go and Rust it is a linked C library; in
+    JavaScript it is `better-sqlite3` on the server and the WASM build in the browser. Above
+    it, ORMs (SQLAlchemy, Django, Prisma, Drizzle) treat it as a dialect — usually a
+    lowest-common-denominator one, which is why the pragmas and indexes in this module still
+    need to be set by hand. Around it, the replication layer is the active frontier:
+    Litestream streams WAL frames to object storage, LiteFS and rqlite add consensus,
+    libSQL/Turso forks the engine to add replication and HTTP access, and Cloudflare D1
+    exposes it as a managed service. On the analytical side, DuckDB can read a SQLite file
+    directly, which is often the right answer for reporting without touching the OLTP path.
+  alternatives:
+    - name: PostgreSQL
+      note: The default upgrade path once you have more than one writer, network clients, or a need for replicas and extensions.
+    - name: DuckDB
+      note: Embedded like SQLite but columnar — far faster for large scans and aggregations, far worse for many small point writes.
+    - name: MySQL / MariaDB
+      note: A server with a simpler operational story than PostgreSQL and weaker SQL; chosen for ecosystem reasons, not for embedded use.
+    - name: RocksDB / LMDB
+      note: Key-value stores with no SQL, no schema and no query planner; faster for pure KV access, much more application code.
+  related: [sql, postgresql, duckdb, python]
+chapters:
+  - id: file-format-pages-wal
+    title: File Format, Pages and the Write-Ahead Log
+    file: chapters/01-file-format-pages-wal.md
+    minutes: 14
+    level: advanced
+  - id: types-affinity
+    title: Types, Affinity and Dynamic Typing
+    file: chapters/02-types-affinity.md
+    minutes: 13
+    level: core
+  - id: transactions-locking
+    title: Transactions, Locking and WAL Concurrency
+    file: chapters/03-transactions-locking.md
+    minutes: 15
+    level: advanced
+  - id: indexes-query-planner
+    title: Indexes and the Query Planner
+    file: chapters/04-indexes-query-planner.md
+    minutes: 15
+    level: advanced
+  - id: schema-constraints-foreign-keys
+    title: Schema Design, Constraints and Foreign Keys
+    file: chapters/05-schema-constraints-foreign-keys.md
+    minutes: 13
+    level: core
+  - id: fts5-json-generated
+    title: FTS5, JSON1 and Generated Columns
+    file: chapters/06-fts5-json-generated.md
+    minutes: 14
+    level: core
+  - id: backups-integrity-durability
+    title: Backups, Integrity Checks and Durability
+    file: chapters/07-backups-integrity-durability.md
+    minutes: 13
+    level: core
+  - id: applications-python
+    title: SQLite in Applications, and When to Leave
+    file: chapters/08-applications-python.md
+    minutes: 15
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

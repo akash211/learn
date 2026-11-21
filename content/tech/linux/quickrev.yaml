@@ -1,0 +1,90 @@
+concepts:
+  - title: The boot chain
+    detail: "Firmware → bootloader → kernel + initramfs → systemd as PID 1 → default.target. The initramfs is a cpio archive with a small /init that loads storage, LUKS and network modules and mounts the real root; a 'VFS: Unable to mount root fs' panic is a missing driver or a wrong root=."
+  - title: Ordering is not requirement
+    detail: "`Wants=`/`Requires=` decide whether a unit is pulled in; `After=`/`Before=` decide when it starts. After= alone is vacuous if nothing pulls the other unit in."
+  - title: Drop-ins over edits
+    detail: "`systemctl edit` writes /etc/systemd/system/<unit>.d/*.conf, which survives package upgrades that overwrite /usr/lib/systemd/system. `daemon-reload` is mandatory after any change; `enable` writes the boot symlink and is separate from `start`."
+  - title: SIGTERM then SIGKILL
+    detail: "systemd sends SIGTERM, waits TimeoutStopSec (90 s default), then SIGKILLs the cgroup. SIGKILL cannot be caught, blocked or delivered to a process in D state."
+  - title: D state is not killable
+    detail: "Uninterruptible sleep inside a kernel call — storage, NFS, a failing device. The process counts in load average and ignores kill -9 until the call returns. Fix the storage."
+  - title: Zombies point at the parent
+    detail: "An exited child whose parent has not called wait(). It holds no memory and cannot be killed; a growing count means a parent leaks children — restart the parent, or give a container an init."
+  - title: Limits have four layers
+    detail: "Shell ulimit (session), /etc/security/limits.conf via PAM, `LimitNOFILE=` on the unit, and fs.file-max kernel-wide. systemd services never pass through PAM limits."
+  - title: cgroups v2 accounting
+    detail: "One hierarchy at /sys/fs/cgroup. `memory.max`/`memory.current`, `cpu.max` as quota-per-period, `cpu.weight` for contention, `pids.max`, `io.max`. Limits throttle and account; they do not isolate."
+  - title: fstab survives reboots
+    detail: "Use UUID= or an LVM path, `nofail` for anything not required to boot, `_netdev` for NFS, and pass=0 for XFS/btrfs. A typo without nofail is an emergency.target boot."
+  - title: df versus du
+    detail: "A gap means deleted-but-open files (lsof +L1), ext4 reserved blocks (tune2fs -m), or a mount hidden over a directory. `df -i` catches inode exhaustion, which reads as 'no space left'."
+  - title: LVM resize in the right order
+    detail: "`lvextend -r` grows the LV and the filesystem together. Doing resize2fs first fails; doing lvextend alone leaves df unchanged. XFS grows with xfs_growfs <mountpoint> and never shrinks."
+  - title: journald persistence
+    detail: "Without /var/log/journal (or Storage=persistent) the journal is volatile and a reboot erases the crash evidence. Cap it with SystemMaxUse and MaxRetentionSec at the same time."
+  - title: Load average counts D state
+    detail: "It is a queue length of runnable plus uninterruptible tasks, not normalised by cores. Divide by core count, then check `vmstat` r vs b to see whether the queue is CPU or I/O."
+  - title: PSI measures the consequence
+    detail: "/proc/pressure/{cpu,memory,io} reports the share of time tasks were stalled. `full avg10` above a few percent is a host that is already hurting, and there are per-cgroup variants."
+  - title: OOM kill versus exit 137
+    detail: "A real OOM leaves 'Killed process <pid> (<name>)' with an RSS figure in dmesg. Exit 137 without that line is a SIGKILL from systemd's timeout, a runtime, or a human."
+  - title: Backports mean versions lie
+    detail: "Distributions ship old version strings with security patches on top. Trust `apt changelog`, `dnf updateinfo` and the distro advisory, never a scanner's version comparison."
+
+traps:
+  - "Setting `After=` and expecting a dependency to start. Without Wants= or Requires= the ordering applies to a unit that may never be pulled in."
+  - "Editing a unit in /usr/lib/systemd/system and losing the change at the next package upgrade, or forgetting daemon-reload and testing the old definition."
+  - "Using `kill -9` first. It skips flush and lock release, and it does nothing at all to a process in D state."
+  - "Raising nofile in /etc/security/limits.conf for a systemd service. PAM limits do not reach units started by PID 1; use LimitNOFILE=."
+  - "Reading `df` as truth after `rm`-ing a log file that a process still holds open. The blocks are freed only when the last descriptor closes."
+  - "Treating a high load average as a CPU problem on a host with high `wa` and `b` in vmstat, where the queue is blocked on storage."
+
+advanced:
+  - "`systemd-analyze critical-chain` names the unit that delayed the boot; `blame` ranks by total time, which is usually a different answer."
+  - "`cpu.max` is a quota per 100 ms period. Sustained `nr_throttled` at modest average utilisation is the usual cause of p99 latency spikes in a container or unit."
+  - "`memory.current` includes page cache, so a value near `memory.max` is not a leak. `memory.stat` splits anon/file/slab, and `memory.high` throttles before the OOM killer runs."
+  - "`rd.break` drops to the initramfs with the real root at /sysroot — the documented password-reset path, and the reason an unencrypted disk is not a security boundary."
+  - "`dracut --hostonly` images contain only the current hardware's drivers, so a VM migrated to different storage panics on boot until the initramfs is regenerated."
+  - "ufw and firewalld do not see Docker's DNAT chains: a published port is reachable even with `ufw deny`, and only `DOCKER-USER` or a bind to 127.0.0.1 changes that."
+
+comparisons:
+  - a: systemctl restart
+    b: systemctl reload
+    difference: "restart stops the process (SIGTERM, then SIGKILL after TimeoutStopSec) and drops connections; reload sends SIGHUP and only works if the unit defines ExecReload=."
+  - a: ext4
+    b: XFS
+    difference: "ext4 can shrink offline and handles many small files; XFS scales better with large files and parallel I/O but can only grow, and fsck.xfs is a no-op stub."
+  - a: SIGTERM
+    b: SIGKILL
+    difference: "A request that a handler can catch and act on versus an uncatchable kill; SIGKILL is not delivered at all while the process is in uninterruptible sleep."
+  - a: journald
+    b: rsyslog
+    difference: "journald collects structured, indexed entries from units and the kernel; rsyslog is a transport that can filter and forward. Forwarding journald to syslog is one setting."
+  - a: ufw
+    b: nftables
+    difference: "ufw is a policy manager that generates rules from application profiles; nftables is the kernel filter and the source of truth. `nft list ruleset` shows what is really enforced."
+  - a: load average
+    b: PSI
+    difference: "Load is a queue length including D-state tasks, not normalised by cores; PSI reports the fraction of time tasks were actually stalled, per resource and per cgroup."
+  - a: setuid binary
+    b: file capability
+    difference: "Both elevate privilege, but setuid grants the whole UID 0; a capability such as cap_net_bind_service grants exactly one power and is auditable with getcap."
+
+commands:
+  - label: See which unit failed and why
+    code: systemctl --failed && journalctl -b -p err -u <unit> --no-pager
+  - label: Effective sshd settings, after includes
+    code: sshd -T | grep -E 'permitrootlogin|passwordauthentication|allowgroups|maxauthtries'
+  - label: Who is listening, as whom
+    code: ss -tulpen
+  - label: What the firewall actually enforces
+    code: nft list ruleset
+  - label: Grow an LV and its filesystem in one step
+    code: lvextend -r -L +50G /dev/vg_data/lv_app
+  - label: Find deleted files still holding disk
+    code: lsof +L1
+  - label: Per-cgroup resource use, live
+    code: systemd-cgtop -m --order=memory
+  - label: Was the kernel updated but not booted
+    code: dnf needs-restarting -r; test -f /var/run/reboot-required && cat /var/run/reboot-required

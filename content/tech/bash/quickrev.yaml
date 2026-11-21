@@ -1,0 +1,90 @@
+concepts:
+  - title: Expansion order
+    detail: "Brace, tilde, parameter/command/arithmetic expansion, then word splitting, then globbing, then quote removal. Bugs follow from the order, not from the individual steps."
+  - title: Word splitting
+    detail: "Unquoted expansion splits on IFS (space, tab, newline). Quoting is the only reliable defence; IFS=$'\\n\\t' is a seat belt, not a fix."
+  - title: '"$@" vs "$*"'
+    detail: '"$@" is one word per argument and is the only correct way to forward arguments; "$*" joins them into a single string with the first IFS character.'
+  - title: Expansion defaults
+    detail: "${v:-x} covers unset or empty; ${v-x} only unset; ${v:?msg} makes a missing value fatal — the standard required-argument check."
+  - title: Exit status
+    detail: "0 is success, 1–255 failure, 128+N means killed by signal N. A script's status is its last command's unless it calls exit."
+  - title: '[ vs [['
+    detail: "[ is a command whose arguments are split and globbed; [[ is a bash keyword with no splitting, plus &&, =~ and glob matching."
+  - title: Pipeline subshells
+    detail: "Each stage runs in its own process, so variables set in `cmd | while read` vanish. Process substitution or a redirect keeps the loop in the current shell."
+  - title: pipefail
+    detail: "Without it a pipeline returns the last command's status; with it, the last failing stage wins. It is bash/ksh/zsh, not POSIX."
+  - title: set -e exemptions
+    detail: "No exit for conditions, && / ||, !, functions called as conditions, background jobs, or local x=$(cmd). It is a net, not a guarantee."
+  - title: Traps
+    detail: "EXIT runs for any exit and is where cleanup belongs; ERR needs set -E to reach functions. $? inside EXIT is the pending status — save it first."
+  - title: Dynamic scoping
+    detail: "local creates a frame variable, but lookup walks the call stack, so callees see their caller's locals. local everything, and prefix globals."
+  - title: Source vs execute
+    detail: "source runs in the current shell, so variables, functions and cd persist. Libraries must have no top-level exit and no side effects."
+  - title: File descriptors
+    detail: "0 stdin, 1 stdout, 2 stderr. Redirections apply left to right, so `> f 2>&1` works and `2>&1 > f` sends errors to the terminal."
+  - title: Signals
+    detail: "SIGTERM is a request, SIGKILL is enforcement (uncatchable). Report 130/143 for INT/TERM, and let the EXIT trap clean up."
+  - title: NUL-delimited paths
+    detail: "Filenames may contain spaces and newlines. find -print0 | xargs -0, or find -exec ... +, is the only safe enumeration."
+  - title: flock
+    detail: "A lock held on an open descriptor is released by the kernel on exit, error or kill -9 — no stale file, unlike a PID file."
+
+traps:
+  - "Unquoted $var in rm, cp, [ or for: it splits on spaces and globs, and an empty value silently changes the target."
+  - "local x=$(cmd) always returns 0, so set -e never sees the failure. Declare on one line, assign on the next."
+  - "Writing 2>&1 > file: stderr is duplicated from the terminal before stdout is redirected, so errors never reach the file."
+  - "Trusting set -e inside a function called as a condition, or for a background job — both are unchecked by design."
+  - "uniq without a preceding sort only collapses adjacent duplicates; and for f in $(ls) re-parses filenames."
+  - "Assuming GNU flags everywhere: sed -i (needs an argument on BSD), grep -P, sort -h and readlink -f are not portable to macOS or busybox."
+
+advanced:
+  - "With pipefail, an early-closing reader (head -1, grep -q) kills the writer with SIGPIPE (141), and whether it happens depends on pipe buffer size — a genuinely flaky failure."
+  - "Bash runs a trap only after the current foreground command finishes; background the long task and wait, because wait is interruptible."
+  - "PID 1 in a container must reap or zombies accumulate, and it receives signals without forwarding them — hence exec or tini."
+  - "inherit_errexit (bash 4.4+) extends set -e into command substitutions; without it, a failing substitution inside a function body can pass unnoticed."
+  - "mv is atomic only within a filesystem, which is why the temp file must be created in the destination directory, not in /tmp."
+  - "A nameref (local -n) lets a function write a caller's variable, but it resolves by name at run time and collides with a caller local of the same name."
+
+comparisons:
+  - a: '[ ]'
+    b: '[[ ]]'
+    difference: "POSIX command with splitting and globbing on its operands, versus a bash keyword with safe operands plus ==, =~, && and ||."
+  - a: '"$@"'
+    b: '"$*"'
+    difference: "One word per argument versus one joined string; only \"$@\" survives a wrapper intact."
+  - a: pipeline
+    b: process substitution
+    difference: "A pipe forks a subshell per stage and loses variables; <(...) is a redirect from a file descriptor, so the current shell keeps its state."
+  - a: SIGTERM
+    b: SIGKILL
+    difference: "Catchable request that allows cleanup and exit 143, versus uncatchable immediate termination by the kernel."
+  - a: flock
+    b: PID file
+    difference: "Kernel-released on any death with no stale state, versus a file that survives kill -9 and can match a reused PID."
+  - a: bash
+    b: POSIX sh
+    difference: "Arrays, [[ ]], pipefail, process substitution and $'...' versus dash/busybox portability with none of them."
+  - a: ${v:-default}
+    b: ${v-default}
+    difference: "The colon form also substitutes on an empty value; without it only an unset variable is replaced."
+
+commands:
+  - label: Syntax-check without running
+    code: bash -n script.sh
+  - label: Static analysis, follow sourced files
+    code: shellcheck -x script.sh
+  - label: Trace with line numbers
+    code: "PS4='+$LINENO: ' bash -x script.sh"
+  - label: Bound a network call
+    code: timeout -s TERM -k 5 30 curl -fsS "$url"
+  - label: Temp dir with guaranteed cleanup
+    code: "tmp=$(mktemp -d) || exit 1; trap 'rm -rf -- \"$tmp\"' EXIT"
+  - label: Non-blocking lock for cron
+    code: "exec 9>/var/lock/job.lock; flock -n 9 || exit 0"
+  - label: Delete files with hostile names
+    code: find . -type f -name '*.tmp' -print0 | xargs -0 rm -f --
+  - label: See which pipeline stage failed
+    code: 'cmd1 | cmd2; echo "${PIPESTATUS[@]}"'

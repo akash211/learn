@@ -1,0 +1,379 @@
+- id: cicd-recent-001
+  topic: secrets and oidc
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: Your team moved to OIDC for cloud deploys. What would you audit in the trust policy before calling it safer than static keys?
+  answer: |
+    The token is only as constrained as the conditions on the role. I would read the trust policy
+    and check four claims:
+
+    1. **Subject.** `repo:acme/api:*` is the common mistake — it matches any branch, any pull
+       request, any tag, and any environment. The useful form is
+       `repo:acme/api:environment:production` or `repo:acme/api:ref:refs/heads/main`, so only jobs
+       that passed the environment's protection rules can assume the role.
+    2. **Audience.** It should be pinned to the cloud's STS audience, not left accepting tokens
+       minted for another service.
+    3. **Provider conditions.** GitHub's `sub` claim embeds immutable IDs for renamed repositories;
+       a policy keyed on a mutable name breaks or, worse, matches a repository that took the old
+       name.
+    4. **Role permissions.** The role should be able to deploy and nothing else — no IAM mutation,
+       no secret reads, no broad `*` actions.
+
+    Then the operational half: are the credentials actually short-lived in practice (a role
+    chained into a second role can extend the window), and is the deploy job the only one with
+    `id-token: write`? A workflow-wide `id-token: write` hands every step the ability to mint a
+    token, including a dependency install script.
+
+    The honest framing: OIDC removes the permanent credential, but a wildcard subject puts the
+    same capability behind a one-line workflow edit.
+  tags: [oidc, trust-policy, least-privilege]
+
+- id: cicd-recent-002
+  topic: supply chain
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: Why pin GitHub Actions to a commit SHA rather than a major version tag, and what does that cost you?
+  answer: |
+    A tag is a mutable reference in someone else's repository. `uses: some-org/action@v3` resolves
+    at run time to whatever commit that tag points at *now*, and the action executes with your
+    job's `GITHUB_TOKEN`, your secrets and your network position. If the action's repository is
+    compromised, or the maintainer's account is, the tag can be moved to a commit that exfiltrates
+    `GITHUB_TOKEN` and any secret in scope. This is not hypothetical: it is the standard
+    attack against CI supply chains, and it defeats the usual "we trust this vendor" reasoning
+    because the vendor's own credentials are the thing that gets stolen.
+
+    Pinning to a full SHA (`@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882`) makes the reference
+    immutable. The cost is maintenance: you no longer get patches automatically, including security
+    patches. The accepted answer is Dependabot or Renovate configured for the `github-actions`
+    ecosystem, which opens a PR to bump the SHA and shows the diff — so the update is reviewed
+    rather than silently applied.
+
+    Two details worth knowing: a SHA pin still runs the code, so review what the action does before
+    adopting it, and short SHAs are ambiguous — use the full forty characters. For actions in your
+    own organisation, pin to a tag only if you also control tag protection.
+  tags: [actions, pinning, supply-chain]
+
+- id: cicd-recent-003
+  topic: workflow security
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: A workflow uses pull_request_target to label incoming PRs, and also checks out the PR branch to run a build. What is the risk?
+  answer: |
+    That combination is remote code execution with your repository's secrets. `pull_request_target`
+    runs in the context of the *base* repository: it has a read-write `GITHUB_TOKEN` and access to
+    repository secrets, because the platform assumes the workflow file itself is trusted (it comes
+    from the base branch). Checking out `github.event.pull_request.head.sha` then places
+    contributor-controlled code in the workspace, and any subsequent `run:` step — `npm install`,
+    `make`, a test command — executes it with those credentials.
+
+    The exploitation path is trivial: a pull request from a fork whose `package.json` has a
+    `postinstall` script that reads `process.env` and posts it somewhere. The workflow file never
+    had to change, which is why reviewers miss it.
+
+    The fixes, in order of preference:
+
+    - Do not check out untrusted code in a `pull_request_target` workflow at all. Labelling and
+      commenting need the API, not the workspace.
+    - Split into two workflows: an unprivileged `pull_request` workflow that builds and uploads
+      artefacts, and a privileged `workflow_run` workflow that consumes the artefact — with the
+      understanding that artefacts are also attacker-controlled input and must be treated as data.
+    - Keep `permissions` minimal even in the privileged workflow, so the token can do only the one
+      thing required.
+
+    The general rule: privilege and untrusted code must never share a job.
+  tags: [pull-request-target, security, forks]
+
+- id: cicd-recent-004
+  topic: caching
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How can a CI cache become a security or correctness problem across branches?
+  answer: |
+    Caches are shared state with weaker isolation than people assume, and they carry two distinct
+    risks.
+
+    **Correctness.** Cache scope is usually "this branch plus the default branch". A feature branch
+    writes an entry for a key derived from a lockfile that it also modified; the default branch
+    then restores a prefix match (`restore-keys`) and gets a dependency tree that no commit on that
+    branch ever specified. The build succeeds and is wrong. The same mechanism lets a cache hold
+    stale compiled objects whose sources were deleted, which is why caching build directories
+    rather than download directories is risky without content-based invalidation.
+
+    **Security.** An attacker with write access to any branch can seed a cache entry that the
+    default branch will restore — a poisoned wheel, a tampered action bundle, a modified test
+    binary. Some platforms scope caches so a pull request cannot write to the base branch's scope;
+    others allow a branch to restore from the default branch, which is the direction that matters.
+    Treat cache writes from untrusted branches as untrusted input.
+
+    Mitigations: include a hash of everything that affects the output in the key (never a constant),
+    never cache secrets or credential files, prefer per-branch cache scopes for anything executable,
+    and run a periodic cold-cache build so a poisoned or stale entry cannot persist indefinitely.
+  tags: [cache, poisoning, isolation]
+
+- id: cicd-recent-005
+  topic: supply chain
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What does provenance actually prove, and how would you enforce it at deploy time?
+  answer: |
+    A signature proves *who signed* a digest and that the bytes are unchanged. Provenance proves
+    *how it was built*: which source repository and commit, which builder, which invocation, which
+    inputs — expressed as a signed attestation (in-toto format) attached to the artefact. SLSA
+    levels describe how tamper-evident that chain is; the useful target for most teams is a
+    hosted, isolated builder producing a non-forgeable provenance statement.
+
+    The chain is: build in CI → generate provenance attestation → sign it (keyless Sigstore, with
+    the certificate bound to the workflow's OIDC identity) → push signature and attestation to the
+    registry → verify at admission.
+
+    Enforcement is the part that gets skipped, and without it the rest is decoration. Two checks
+    belong at admission: the image digest has a valid signature from the expected *identity* (not
+    merely a valid signature — `cosign verify` without `--certificate-identity` accepts a
+    self-signed image with the right name), and the provenance shows the expected source repository
+    and builder.
+
+    ```yaml
+    verifyImages:
+      - imageReferences: ["ghcr.io/acme/*"]
+        attestors:
+          - entries:
+              - keyless:
+                  subject: "https://github.com/acme/api/.github/workflows/release.yml@refs/tags/*"
+                  issuer: "https://token.actions.githubusercontent.com"
+    ```
+
+    With that enforced, push access to the registry is no longer sufficient to run code — which is
+    the actual goal.
+  tags: [provenance, slsa, cosign, admission]
+
+- id: cicd-recent-006
+  topic: deployment strategies
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: Your service gets a few hundred requests an hour. How would you design canary analysis that is not noise?
+  answer: |
+    At that volume a 5% canary sees a handful of requests per analysis window, so error-rate
+    comparison has no statistical power — the analysis either never fires or fires on one 500. I
+    would change what the canary is for and how it is fed.
+
+    **Feed it deterministically first.** Send synthetic traffic — the smoke suite, a scripted
+    critical path — to the canary via a header or a direct service, before any user traffic. That
+    catches "does not start", "cannot reach the database", "the new config key is missing" without
+    needing volume.
+
+    **Widen the window, not the threshold.** Aggregate over hours rather than minutes, and compare
+    the canary against the stable version over the same period using a ratio with a confidence
+    interval rather than an absolute threshold. Where even that is too noisy, gate on a *binary*
+    signal that is volume-independent: crash loops, readiness failures, 5xx ratio above a floor,
+    p95 above a fixed budget.
+
+    **Use user-shaped traffic where it exists.** Header-tagged internal users, or a specific
+    tenant, give a stable cohort with real behaviour and a controllable size.
+
+    The honest alternative is to accept that canary analysis is not the right tool at this volume
+    and rely on a fast rolling deploy with strong readiness, smoke tests and a rehearsed rollback.
+  tags: [canary, low-traffic, analysis]
+
+- id: cicd-recent-007
+  topic: database migrations
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: A migration that takes 40 ms caused a two-minute outage. How?
+  answer: |
+    Lock queueing in Postgres. The `ALTER TABLE` needed an `ACCESS EXCLUSIVE` lock, which conflicts
+    with every read and write on the table. If a long-running query — a report, a vacuum, an idle
+    transaction in a connection pool — holds a conflicting lock, the `ALTER` waits. Crucially,
+    *every subsequent query that needs any lock on that table queues behind the waiting `ALTER`*,
+    because Postgres queues lock requests in order. The table is effectively unavailable while the
+    DDL waits, and the DDL itself may take milliseconds once it acquires the lock.
+
+    The diagnosis is `pg_locks` and `pg_stat_activity`: a grant-queue with one `ALTER TABLE` at the
+    head, dozens of `SELECT`s behind it, and the service timing out on connection acquisition
+    rather than on slow queries.
+
+    Prevention is two settings and a habit:
+
+    ```sql
+    SET lock_timeout = '3s';
+    SET statement_timeout = '30s';
+    ```
+
+    With `lock_timeout`, the migration fails fast and the queue never forms; the deploy retries or
+    halts, but the table stays available. The habit is to run DDL outside peak hours regardless,
+    and to avoid `ACCESS EXCLUSIVE` entirely where a concurrent alternative exists —
+    `CREATE INDEX CONCURRENTLY`, `ADD CONSTRAINT … NOT VALID` then `VALIDATE`.
+
+    The follow-up question in an interview is usually "how do you find the blocking session", and
+    the answer is `pg_blocking_pids()` in `pg_stat_activity`.
+  tags: [postgres, locks, migrations, outages]
+
+- id: cicd-recent-008
+  topic: testing strategy
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: A monorepo pipeline only tests projects affected by a change. What can go wrong, and how do you bound it?
+  answer: |
+    The optimisation is correct in principle — a change to one package should not run forty test
+    suites — and its failure mode is under-testing in a way that is invisible until production.
+
+    Three specific gaps:
+
+    1. **Implicit dependencies.** The affected graph is usually inferred from manifests
+       (`package.json`, `pyproject.toml`, Bazel's deps). Anything not declared — a shared fixture
+       loaded by path, a code-generated client, a Docker base image, a database schema — is
+       invisible to the selector, so consumers are not tested when it changes.
+    2. **Test-only coupling.** A change to a test helper in one project breaks another project's
+       tests, but the helper is not a runtime dependency and may not appear in the graph.
+    3. **Runtime coupling.** Two services sharing a database or a queue are not "dependent" in the
+       build graph but absolutely are in production; contract tests are the only cheap way to
+       cover that.
+
+    Bounding it: maintain the dependency graph explicitly rather than inferring from directories,
+    run the full suite on the merge to the default branch regardless of selection, run a nightly
+    full build, and make the selector's decision visible in the run summary so a reviewer can see
+    what it skipped. If the selector's output is invisible, nobody notices the day it stops
+    finding tests.
+  tags: [monorepo, test-selection, risk]
+
+- id: cicd-recent-009
+  topic: database migrations
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: You need to add a NOT NULL column with a default to a 200-million-row table with no downtime. Walk through it.
+  answer: |
+    I would not add `NOT NULL` in one statement, because on a large table the validation is a full
+    scan under a lock that blocks writes.
+
+    Phase 1, expand — cheap and metadata-only on modern Postgres:
+
+    ```sql
+    ALTER TABLE orders ADD COLUMN region text;
+    ```
+
+    Phase 2, backfill in batches, outside the deploy, throttled and idempotent:
+
+    ```sql
+    UPDATE orders SET region = 'unknown'
+    WHERE id IN (SELECT id FROM orders WHERE region IS NULL ORDER BY id LIMIT 5000);
+    ```
+
+    Phase 3, enforce without a long lock:
+
+    ```sql
+    ALTER TABLE orders ADD CONSTRAINT orders_region_nn
+      CHECK (region IS NOT NULL) NOT VALID;
+    ALTER TABLE orders VALIDATE CONSTRAINT orders_region_nn;
+    ```
+
+    `VALIDATE` takes a light lock (`SHARE UPDATE EXCLUSIVE`) and does not block reads or writes.
+    From PG 12 onwards the planner can use a validated `CHECK` to prove `NOT NULL`, and
+    `ALTER COLUMN … SET NOT NULL` then skips the scan. If a default is required, `ADD COLUMN …
+    DEFAULT` is metadata-only for non-volatile defaults since PG 11 — but I would still verify the
+    version and the default's volatility rather than assume.
+
+    The deploy ordering matters as much as the SQL: expand ships before the code that writes
+    values, the backfill runs after, and the constraint ships in a later release. After the run, a
+    `lock_timeout` on the migration session is the difference between a failed migration and a
+    two-minute outage.
+  tags: [postgres, not-null, backfill, zero-downtime]
+
+- id: cicd-recent-010
+  topic: observability
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: Your pipeline's p95 is 38 minutes but each stage is fast. Where do you look?
+  answer: |
+    If the sum of stage durations is small and the p95 is not, the time is outside the stages: in
+    queueing, in retries, or in a tail behaviour that only some runs hit.
+
+    Concretely, I would pull four measurements:
+
+    1. **Queue time per job** — trigger timestamp to first step. On hosted runners this is usually
+       the answer, driven by concurrency limits, a saturated plan, or a large matrix fanning out at
+       once. It shows up as p95 much worse than p50, because the median run finds a free runner.
+    2. **Job-level duration distribution**, not pipeline totals. One job with a heavy tail — a
+       build that sometimes misses cache and reinstalls everything — can dominate p95 while the
+       average looks fine.
+    3. **Retry and re-run rate.** A stage that retries twice on 5% of runs adds minutes to the tail
+       and nothing to the median.
+    4. **Dependency latency** — registry pulls, package index, artifact download. These are the
+       classic external tails, and they cluster in time when a provider has a bad hour.
+
+    The fix follows the finding: raise concurrency or split the workflow if queueing dominates;
+    fix the cache key or pre-warm if one job's tail dominates; add a timeout and a fallback mirror
+    if an external dependency dominates.
+
+    The trap is optimising the average. p95 is what developers experience on release day, which is
+    precisely when the pipeline matters most.
+  tags: [p95, queueing, tail-latency]
+
+- id: cicd-recent-011
+  topic: rollback
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: A release included a migration that dropped a column. An hour later you need to roll back. What are your options?
+  answer: |
+    The honest answer: you cannot roll back the code, because the previous version reads a column
+    that no longer exists, and you cannot roll back the schema, because the data is gone. This is
+    the situation the expand/contract rule exists to prevent, so the interview is really about
+    what you do now and what you change afterwards.
+
+    Immediate options, in order:
+
+    1. **Fix forward.** If the defect is understood and small, ship a patch on top of the current
+       version. This is usually the fastest path to recovery and the one to default to.
+    2. **Restore the column from a backup or a replica**, add it back nullable, and deploy code
+       that tolerates it. Feasible only if a recent backup exists, the table is manageable, and you
+       can reconcile writes that happened since — which is the expensive part.
+    3. **Disable the feature** behind a flag, if the changed path is flag-guarded. This buys time
+       without touching the schema, and it is the reason flags are worth having on risky changes.
+
+    What not to do: re-add the column with guessed values and declare the data recovered. That
+    silently corrupts history and is worse than a slow, documented restore.
+
+    Afterwards: destructive DDL moves to a separate release, gated and delayed; the deployment
+    record must contain the schema version so a rollback can be checked against it; and the
+    pipeline should refuse to promote a code rollback whose required schema no longer exists.
+  tags: [rollback, destructive-ddl, restore]
+
+- id: cicd-recent-012
+  topic: environments
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: You want an ephemeral environment per pull request. What does it take to keep that affordable and safe?
+  answer: |
+    The mechanics are straightforward — a namespace per PR, a database per PR, DNS, TLS, and a job
+    that creates on `opened`/`synchronize` and destroys on `closed`. The costs and risks are
+    elsewhere.
+
+    **Lifecycle.** The dominant failure is orphans: a PR closed without the teardown job running
+    (force push, deleted fork, cancelled workflow) leaves a namespace and a database billing
+    forever. The fix is a scheduled reaper that reconciles live environments against open PRs and
+    deletes anything without an owner, plus a TTL label on every resource.
+
+    **Data.** Each environment needs a database. Cloning production is expensive and a privacy
+    problem; seeding synthetic data is cheaper and usually better, but the seed must be maintained
+    or the environment stops resembling anything. For a few services, a shared database with a
+    schema per PR is a reasonable middle ground — until a migration is applied twice.
+
+    **Secrets and access.** Preview environments hold real credentials more often than anyone
+    admits. They should get scoped, short-lived credentials (OIDC again) and should not be
+    internet-reachable without auth — a preview URL indexed by a crawler is a disclosure.
+
+    **Cost control.** Ephemeral environments are cheap per hour and expensive in aggregate. Scale
+    to zero when idle, cap the number per repository, and make the teardown reliable rather than
+    best-effort. If previews are only needed for frontend review, a static deployment per PR is far
+    cheaper than a full stack.
+  tags: [preview-environments, lifecycle, cost]

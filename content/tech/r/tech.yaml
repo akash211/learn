@@ -1,0 +1,129 @@
+slug: r
+title: R for Data Analysis
+category: programming
+summary: The statistics-first language for analysis — vectors, the tidyverse, modelling, reporting, and an honest account of where it beats Python and where it does not.
+level: core
+relations:
+  - to: sql
+    type: complements
+    note: R is where the analysis happens after SQL has narrowed the data; dbplyr pushes dplyr verbs back into the database, and most R work starts with a query and ends with a report.
+  - to: python
+    type: alternative
+    note: The two overlap heavily on tabular analysis. R is stronger on statistical inference, publication graphics and analysis-as-document; Python is stronger on engineering, deployment and ML infrastructure.
+intro:
+  what: |
+    R is a vector-first, functional language built for statistics. There are no scalars — `1` is a
+    vector of length one — and almost every operation is vectorised, which is why a line of R can
+    express a transformation that takes a loop elsewhere. Its distinguishing feature is the formula:
+    `lm(y ~ x, data = df)` is both a model specification and a reusable object that `predict()`,
+    `anova()`, `emmeans()`, `lme4` and `fixest` all understand.
+
+    The ecosystem has two dialects that coexist. Base R supplies the data structures, the modelling
+    functions and a complete plotting system; the tidyverse (`dplyr`, `tidyr`, `ggplot2`, `purrr`,
+    `readr`) supplies a grammar for data manipulation, reshaping and graphics. Production R uses
+    both, plus `data.table` when memory and speed bind.
+
+    This module teaches the tidyverse-era idiom — `|>`, `.by`, `join_by()`, `pivot_longer()` — while
+    marking where base R is still the right answer and where older syntax appears in existing code.
+  why: |
+    R exists because its authors wanted a language in which statistical work was the primitive, not
+    a library bolted onto a general-purpose runtime. That choice still pays: the breadth of
+    statistical methods on CRAN, the correctness of the formula interface, and the maturity of
+    packages like `lme4`, `survival`, `forecast`, `emmeans` and the Bioconductor stack are not
+    matched elsewhere. When the deliverable is an inference, a model, or a document that explains
+    both, R shortens the path from question to defensible answer.
+
+    Its weaknesses are equally specific. R is single-threaded at the language level, everything
+    lives in RAM, there is no static typing, and it is a poor fit for long-running services. Knowing
+    where those limits bite is as much a part of using R well as knowing `dplyr`.
+  problems:
+    - Turn messy tabular data into a tidy shape and answer questions about it quickly.
+    - Fit and compare statistical models with correct inference and readable output.
+    - Produce publication-quality graphics without hand-placing every element.
+    - Keep analysis and its written interpretation in one reproducible document.
+    - Model time series, panels and financial data with methods that have decades of validation.
+    - Give statisticians a language where the statistics is the primitive, not a wrapper.
+  where_used:
+    - Analytics and BI teams producing recurring reports and KPI packs.
+    - Pharma, clinical trials and regulatory submissions (heavily R-based, with `tidymodels` and `gt`).
+    - Genomics and bioinformatics via Bioconductor.
+    - Academic research, econometrics, epidemiology and social science.
+    - Quantitative finance for research and backtesting (weaker for live trading infrastructure).
+    - Data science teams alongside Python, usually owning the statistics and reporting layer.
+  ecosystem: |
+    R sits at the analysis end of the stack. SQL and warehouses hold the data; `dbplyr` translates
+    dplyr verbs into SQL so the work happens where the data is; `data.table`, `arrow` and `duckdb`
+    handle the cases where it does not fit in memory; `ggplot2` and Quarto turn results into
+    documents; `plumber` and Shiny expose them as APIs and apps when that is genuinely needed.
+    `renv` and container images like `rocker/r-ver` make the environment reproducible.
+
+    The integration story with the rest of a data platform is thinner than Python's: `reticulate`
+    calls Python from R, `arrow` and Parquet are the usual interchange, and Airflow or cron
+    schedules `Rscript`. Teams that put R in a Python-first platform usually regret the operational
+    seam, and teams that keep R for analysis and reporting rarely do.
+  alternatives:
+    - name: Python (pandas, statsmodels, scikit-learn)
+      note: Better for engineering, deployment, deep learning and integration with the wider data platform; weaker on statistical inference, formula interfaces and analysis-as-document.
+    - name: Julia
+      note: Faster for numerical loops and a nicer type system, but a much smaller statistics ecosystem and a thinner package set for reporting.
+    - name: Stata / SAS
+      note: Entrenched in regulated and academic workflows with validated procedures; far less flexible, expensive, and closed to extension.
+    - name: SQL + a BI tool
+      note: Better when the question is already well defined and the answer is a dashboard; worse for exploratory analysis, modelling and anything requiring custom statistics.
+related: [sql, python]
+chapters:
+  - id: vectors-factors-coercion
+    title: Vectors, Factors and Coercion Traps
+    file: chapters/01-vectors-factors-coercion.md
+    minutes: 12
+    level: core
+  - id: data-frames-dplyr
+    title: Data Frames, Tibbles and dplyr Verbs
+    file: chapters/02-data-frames-dplyr.md
+    minutes: 12
+    level: core
+  - id: reshaping-joins
+    title: Reshaping and Joins
+    file: chapters/03-reshaping-joins.md
+    minutes: 12
+    level: core
+  - id: apply-purrr
+    title: The apply Family and purrr
+    file: chapters/04-apply-purrr.md
+    minutes: 12
+    level: core
+  - id: graphics-base-ggplot2
+    title: Base Graphics and the ggplot2 Grammar
+    file: chapters/05-graphics-base-ggplot2.md
+    minutes: 11
+    level: core
+  - id: statistics-modelling
+    title: Statistics Essentials in R
+    file: chapters/06-statistics-modelling.md
+    minutes: 13
+    level: core
+  - id: time-series-finance
+    title: Time Series and Financial Packages
+    file: chapters/07-time-series-finance.md
+    minutes: 13
+    level: advanced
+  - id: rmarkdown-quarto
+    title: R Markdown and Quarto Reporting
+    file: chapters/08-rmarkdown-quarto.md
+    minutes: 11
+    level: core
+  - id: performance-memory
+    title: Performance and Memory
+    file: chapters/09-performance-memory.md
+    minutes: 13
+    level: advanced
+  - id: packaging-renv-production
+    title: Packaging, renv and Production Caution
+    file: chapters/10-packaging-renv-production.md
+    minutes: 13
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

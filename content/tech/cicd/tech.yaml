@@ -1,0 +1,153 @@
+slug: cicd
+title: CI/CD
+category: cloud-infrastructure
+summary: Pipelines as a graph of stages, the artefact boundary, caching and parallelism, progressive delivery, and the supply-chain controls that make a deploy reversible.
+level: core
+relations:
+  - to: git
+    type: foundation
+    note: A pipeline is triggered by a ref and identified by a commit SHA; branching strategy, tag semantics and merge policy decide what can be built, what can be promoted and what can be rolled back to.
+  - to: docker
+    type: uses
+    note: Most pipelines end in an OCI image, and image design decides whether a build is cacheable, a deploy is reproducible and a rollback target still exists in the registry.
+  - to: kubernetes
+    type: uses
+    note: Rolling updates, readiness gates, PodDisruptionBudgets and `kubectl rollout undo` are the mechanics behind a deploy stage; progressive delivery controllers add canary analysis on top.
+  - to: terraform
+    type: uses
+    note: Infrastructure changes run through the same discipline — plan on pull request, apply on merge, state locking, and an approval before anything destructive reaches production.
+  - to: airflow
+    type: complements
+    note: Airflow orchestrates data over time; CI/CD ships the code, images and DAG bundles that Airflow runs. A DAG deploy is a pipeline problem — versioned bundles, atomic sync, and a rollback path.
+intro:
+  what: |
+    CI/CD is the machinery that turns a commit into a running, verified system. **Continuous
+    integration** means every change is merged into a shared branch only after it has been built
+    and tested automatically. **Continuous delivery** means every change that passes is a
+    deployable artefact, produced once and promoted by identity rather than rebuilt per
+    environment. **Continuous deployment** goes one step further and ships it without a human in
+    the loop. The pipeline is the specification of all three.
+
+    The mental model that makes the rest follow: a pipeline is a *directed acyclic graph of jobs
+    operating on an immutable artefact*. Jobs are isolated, so anything one job produces for
+    another must be explicitly published — as a cache entry, an artefact, or a registry image.
+    The artefact is built once, addressed by digest, and every later stage only moves that
+    identity forward. Stages are ordered so the cheapest signal arrives first and the
+    irreversible action happens last.
+
+    This module covers the anatomy of a pipeline and its stages, GitHub Actions as a concrete
+    implementation, artefact versioning and release gates, test strategy, build caching and
+    parallelism, environment promotion and approvals, deployment strategies, database migrations,
+    secrets and supply-chain security, and the observability and rollback discipline that keeps a
+    pipeline trustworthy over years.
+  why: |
+    The value of CI/CD is not that it runs commands you could run by hand; it is that it runs them
+    *the same way every time*, on a clean machine, with the result recorded. That removes the two
+    most expensive classes of engineering waste — changes that break in an environment nobody
+    tested, and releases nobody can reverse because the artefact was rebuilt from a different
+    commit than the one that was verified.
+
+    Pipelines also become load-bearing. Once deploys only happen through them, a broken pipeline
+    is a production outage in slow motion — no security fix ships, no rollback happens, and
+    engineers start working around the gate they built. Most pipeline incidents are ordinary
+    engineering failures — a cache key that never invalidates, a matrix leg that silently skips,
+    a migration that takes a lock at peak traffic, a secret that leaks into a log, an approval
+    that nobody owns. Each is visible in the design before it pages anyone.
+  problems:
+    - Making every merge buildable and tested on a clean machine, not just on the author's laptop.
+    - Producing one immutable artefact per commit and promoting that identity through environments.
+    - Keeping feedback fast enough that developers run the pipeline instead of avoiding it.
+    - Making a deploy reversible in minutes, including the database changes around it.
+    - Controlling who can reach production, with short-lived credentials instead of shared tokens.
+    - Proving what shipped — signed artefacts, SBOMs and provenance rather than a tag and a promise.
+  where_used:
+    - 'Application delivery — build, test, scan, publish and deploy services on every merge.'
+    - 'Infrastructure — terraform plan on pull requests, reviewed apply on merge.'
+    - 'Data platforms — versioned DAG bundles, dbt projects, Spark job images and warehouse migrations.'
+    - 'Libraries and internal packages — versioned, signed releases with changelogs and compatibility gates.'
+    - 'Machine-learning models — evaluated, packaged and promoted like any other artefact.'
+    - 'Regulated environments — an auditable trail of who approved what, and which digest ran.'
+  ecosystem: |
+    A CI/CD system is a scheduler with a workspace, a credential store and a log. GitHub Actions,
+    GitLab CI, CircleCI, Buildkite, Jenkins and Tekton differ in syntax and hosting model, not in
+    the concepts — triggers, jobs, steps, caches, artefacts, environments and secrets. Above the
+    scheduler sit the delivery tools: Argo CD and Flux for GitOps reconciliation, Argo Rollouts
+    and Flagger for canary analysis, Spinnaker for older multi-cloud flows. Below it are the
+    builders and registries — BuildKit, Kaniko, Buildah, and ECR, GHCR, Harbor or Artifact
+    Registry.
+
+    The adjacent disciplines matter as much as the tool. Supply-chain security (SBOM, Sigstore
+    signing, SLSA provenance) lives in the publish stage; observability decides whether a canary
+    is healthy; the database migration strategy decides whether a rollback is possible at all.
+    Learning one vendor's YAML is a week; learning the invariants — immutable artefacts, ordered
+    stages, least-privilege credentials, reversible deploys — transfers everywhere.
+  alternatives:
+    - name: GitLab CI/CD
+      note: Pipelines, registry, environments and security scanning in one product; strong for teams already on GitLab.
+    - name: Jenkins
+      note: Maximum flexibility and self-hosting, at the cost of plugin maintenance and a server to operate.
+    - name: Buildkite
+      note: Hybrid model — hosted orchestration, your own agents — which suits builds needing large or specialised hardware.
+    - name: Tekton and Argo Workflows
+      note: Kubernetes-native pipeline execution where the pipeline itself is a workload in the cluster.
+    - name: Argo CD and Flux
+      note: GitOps reconcilers that move the deploy stage into a controller watching a repository.
+    - name: Manual release process
+      note: Workable at very low change frequency; the cost is unrepeatable builds and slow, undocumented rollbacks.
+  related: [git, docker, kubernetes, terraform, airflow]
+chapters:
+  - id: pipeline-anatomy
+    title: Pipeline Anatomy and Stages
+    file: chapters/01-pipeline-anatomy.md
+    minutes: 15
+    level: core
+  - id: github-actions
+    title: GitHub Actions in Depth
+    file: chapters/02-github-actions.md
+    minutes: 16
+    level: core
+  - id: artifacts-versioning-release-gates
+    title: Artefacts, Versioning and Release Gates
+    file: chapters/03-artifacts-versioning-release-gates.md
+    minutes: 13
+    level: core
+  - id: testing-strategy
+    title: Test Strategy Inside a Pipeline
+    file: chapters/04-testing-strategy.md
+    minutes: 14
+    level: core
+  - id: build-cache-parallelism
+    title: Build Caching, Parallelism and Speed
+    file: chapters/05-build-cache-parallelism.md
+    minutes: 14
+    level: advanced
+  - id: environment-promotion-approvals
+    title: Environment Promotion and Approvals
+    file: chapters/06-environment-promotion-approvals.md
+    minutes: 13
+    level: core
+  - id: deploy-strategies
+    title: Rolling, Blue/Green and Canary Deployments
+    file: chapters/07-deploy-strategies.md
+    minutes: 15
+    level: advanced
+  - id: database-migrations
+    title: Database Migrations in Pipelines
+    file: chapters/08-database-migrations.md
+    minutes: 15
+    level: advanced
+  - id: secrets-supply-chain
+    title: Secrets Management and Supply-Chain Security
+    file: chapters/09-secrets-supply-chain.md
+    minutes: 16
+    level: advanced
+  - id: observability-flaky-rollback
+    title: Pipeline Observability, Flaky Builds and Rollback Drills
+    file: chapters/10-observability-flaky-rollback.md
+    minutes: 14
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

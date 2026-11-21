@@ -1,0 +1,740 @@
+- id: git-basic-001
+  topic: objects
+  difficulty: beginner
+  question: What are the four Git object types, and what does a commit actually store?
+  answer: |
+    Git stores four kinds of object, all named by the hash of their contents:
+
+    - **blob** — raw file bytes. No name, no mode, no history.
+    - **tree** — a sorted list of entries (`mode type hash name`), where entries point at blobs or
+      other trees. A tree is a directory.
+    - **commit** — one tree hash, zero or more parent commit hashes, author and committer with
+      timestamps, and the message.
+    - **tag** — an annotated tag object: target, tagger, message, optional signature.
+
+    A commit does **not** store a diff. It stores a complete snapshot of the tree plus a pointer
+    to its parents. Diffs are computed on demand by comparing two trees. That is why checking out
+    an old commit is instant and why storage stays manageable: unchanged files are the same blob
+    object, referenced again.
+
+    Because names are content hashes, identical content is stored once, corruption is detectable,
+    and two repositories can verify they exchanged the same bytes.
+
+    ```bash
+    git cat-file -t HEAD        # commit
+    git cat-file -p HEAD        # tree, parent, author, message
+    git cat-file -p HEAD^{tree} # modes, types, hashes, names
+    ```
+  tags: [object-model, blob, tree, commit]
+
+- id: git-basic-002
+  topic: refs
+  difficulty: beginner
+  question: What is the difference between HEAD, a branch and a tag?
+  answer: |
+    All three are refs — files containing a commit hash — but they have different update rules.
+
+    - A **branch** (`refs/heads/main`) is a movable pointer. Committing while on a branch moves it
+      to the new commit automatically.
+    - A **tag** (`refs/tags/v1.4.0`) is expected to be stable. Nothing moves it automatically;
+      moving a published tag requires a force-push and breaks anyone who recorded it.
+    - **HEAD** is normally a *symbolic* ref containing `ref: refs/heads/main`, not a hash. It
+      answers "where am I?" and follows the branch as it moves.
+
+    Checking out a commit hash instead of a branch writes the hash into `HEAD` directly, giving a
+    **detached HEAD**. Commits made there are reachable only through `HEAD` and the reflog, so
+    switching away appears to lose them. They are recoverable:
+
+    ```bash
+    git switch -c rescue <sha>    # attach a branch to the detached commits
+    git rev-parse --abbrev-ref HEAD   # prints HEAD when detached
+    ```
+
+    A tag can also be annotated, in which case the ref points at a tag object which in turn points
+    at the commit; `v1.4.0^{}` peels to the commit.
+  tags: [refs, head, detached-head, tags]
+
+- id: git-basic-003
+  topic: staging
+  difficulty: beginner
+  question: What is the staging area for, and why not commit the working tree directly?
+  answer: |
+    The index (staging area) is a binary file describing the exact tree the next commit will
+    contain. `git add` copies content into it; `git commit` turns it into a tree object.
+
+    It exists so you can compose a commit deliberately rather than snapshotting whatever happens
+    to be on disk. Three concrete uses:
+
+    - **Split unrelated changes.** One file often holds a bug fix and a refactor. `git add -p`
+      stages hunks separately, producing two reviewable, revertable commits.
+    - **Review before recording.** `git diff --cached` shows exactly what will be committed, which
+      is not the same as `git diff` (unstaged) or `git diff HEAD` (both).
+    - **Resolve conflicts in pieces.** During a merge you stage each resolved file, so the commit
+      is only created when every path is resolved.
+
+    ```bash
+    git add -p app.py            # hunk by hunk
+    git diff --cached            # index vs HEAD
+    git restore --staged app.py  # unstage, keep the edit
+    ```
+
+    Skipping the index (`git commit -a`) is fine for a one-line fix and a bad habit for anything
+    larger; it silently includes every tracked modification.
+  tags: [index, staging, commits]
+
+- id: git-basic-004
+  topic: merging
+  difficulty: intermediate
+  question: When would you rebase instead of merge, and what is the cost?
+  answer: |
+    Both integrate one line of history into another; they differ in what the graph records.
+
+    **Merge** creates a commit with two parents. History is preserved exactly, hashes never
+    change, and it is safe on shared branches. The cost is a non-linear log and merge commits that
+    add noise.
+
+    **Rebase** replays your commits onto a new base, creating new commits with new hashes. History
+    becomes linear and `git log` reads like a sequence of changes. The costs:
+
+    - Every replayed commit is rewritten, so signatures are lost and review comments keyed to
+      hashes go stale.
+    - Anyone who pulled the old commits now has a divergent branch and must reset to yours.
+    - Conflicts can resurface at each replayed commit, not once.
+
+    ```bash
+    git switch feature
+    git fetch origin
+    git rebase origin/main     # local branch, not yet shared
+    ```
+
+    The working rule: **rebase local, merge public.** Rebase a feature branch before opening or
+    updating a PR if the team squash-merges; never rebase `main` or a branch someone else is
+    building on. If you must force-push the result, use `--force-with-lease`.
+  tags: [merge, rebase, history]
+
+- id: git-basic-005
+  topic: merging
+  difficulty: intermediate
+  question: What is a fast-forward merge, and when is --no-ff worth it?
+  answer: |
+    A fast-forward happens when the target branch has no commits the source branch lacks. There is
+    nothing to merge, so Git just moves the branch pointer forward — no merge commit, no new
+    object.
+
+    ```
+    before:  A---B main
+                  \
+                   C---D feature
+    after:   A---B---C---D main, feature
+    ```
+
+    `git merge --ff-only feature` refuses to do anything else, which is a useful guard against
+    accidental merge commits. `git merge --no-ff feature` creates a merge commit even when a
+    fast-forward is possible, recording that C and D were one unit of work.
+
+    `--no-ff` pays off when you want:
+
+    - one revertable unit per feature (`git revert -m 1 <merge>`),
+    - `git log --first-parent` to show one line per integrated branch,
+    - the branch boundary visible for release notes or audit.
+
+    It costs an extra commit and a non-linear graph. On a repository that squash-merges PRs, the
+    question is moot: GitHub's squash merge always creates a new commit on the base branch.
+  tags: [fast-forward, merge-commits, first-parent]
+
+- id: git-basic-006
+  topic: merging
+  difficulty: intermediate
+  question: What is the difference between a squash merge and a merge commit?
+  answer: |
+    A **merge commit** keeps every commit from the branch and adds a commit with two parents. The
+    individual commits, their authors and their messages survive; the branch topology is visible.
+
+    A **squash merge** combines the branch's changes into one new commit on the base branch. The
+    original commits are not ancestors of the result, so they disappear from `main`'s history once
+    the branch is deleted.
+
+    | | Merge commit | Squash |
+    |---|---|---|
+    | History | Branch preserved | One commit |
+    | Revert | `git revert -m 1` | `git revert <sha>` |
+    | Bisect granularity | Per commit | Per PR |
+    | Attribution | Every author | One author, co-authors in trailer |
+
+    Squash suits small PRs and teams that want a linear, PR-per-commit log. It is a poor fit when
+    commits are meaningful units you need to bisect or cherry-pick, and it makes continuing work
+    on the same branch awkward: your local commits are not in `main`, so the next PR re-sends
+    them.
+
+    ```bash
+    git merge --squash feature   # stages the result, does not commit
+    git commit -m "feat: add retry budget (#482)"
+    ```
+  tags: [squash, merge-strategy, history]
+
+- id: git-basic-007
+  topic: undo
+  difficulty: intermediate
+  question: What is the difference between git reset and git revert?
+  answer: |
+    `git reset` **moves the branch pointer** to another commit. History is rewritten: the commits
+    that were only reachable from the old tip become unreachable (recoverable via reflog until
+    GC). It is a local operation and the right tool for unpushed work.
+
+    `git revert` **adds a new commit** whose diff is the inverse of the target commit. History is
+    preserved and extended, so it is safe on shared branches.
+
+    ```bash
+    # local, unpushed: drop the last two commits but keep the changes staged
+    git reset --soft HEAD~2
+
+    # already pushed: publish the undo
+    git revert --no-edit abc1234
+    ```
+
+    Decision rule: if anyone else may have the commit, revert. If it exists only on your machine,
+    reset (or rebase) to keep the history clean.
+
+    Reverting a merge needs a parent: `git revert -m 1 <merge-sha>` means "keep parent 1, undo
+    what parent 2 brought in". Git does not remember that choice, so re-merging the branch later
+    will not restore the changes — you must revert the revert.
+  tags: [reset, revert, shared-history]
+
+- id: git-basic-008
+  topic: undo
+  difficulty: intermediate
+  question: What do the soft, mixed and hard modes of git reset change?
+  answer: |
+    All three move the current branch (and `HEAD`) to the target commit. They differ in what they
+    do to the index and working tree:
+
+    | Mode | Index | Working tree |
+    |---|---|---|
+    | `--soft` | untouched | untouched |
+    | `--mixed` (default) | reset to target | untouched |
+    | `--hard` | reset to target | reset to target |
+    | `--keep` | reset to target | preserved where it does not conflict |
+
+    ```bash
+    git reset --soft HEAD~1   # uncommit, changes staged — good for re-committing as one
+    git reset HEAD~1          # uncommit, changes unstaged — good for re-staging selectively
+    git reset --hard HEAD~1   # discard commit and all uncommitted edits
+    ```
+
+    `--hard` is the only mode that destroys uncommitted work, and it does not ask. The commit
+    itself is recoverable with `git reset --hard ORIG_HEAD` or from `git reflog`; the uncommitted
+    edits are gone.
+
+    `git restore --staged <path>` is the narrower, modern equivalent of a mixed reset for a single
+    file; `git restore <path>` discards working-tree changes without touching history.
+  tags: [reset, index, working-tree]
+
+- id: git-basic-009
+  topic: history-surgery
+  difficulty: beginner
+  question: What does git cherry-pick do, and when does it cause trouble?
+  answer: |
+    `git cherry-pick <sha>` applies the diff of that commit onto the current `HEAD` and creates a
+    new commit with the same message and author. The new commit has a different hash and a
+    different parent: it is a copy, not a move.
+
+    ```bash
+    git switch release/1.4
+    git cherry-pick -x abc1234     # -x records the source hash in the message
+    ```
+
+    The canonical use is a hotfix: `main` contains unreleased work, so you copy the one fix onto
+    the release branch instead of merging everything.
+
+    Trouble appears when the copy and the original later meet. Merging the branch that contains
+    the original into the branch that contains the copy produces a conflict or a duplicate change,
+    because Git sees two independent edits to the same lines. `git log --cherry-pick
+    main...release` hides commits whose patch is already present on the other side, which is the
+    diagnostic.
+
+    Cherry-pick is also the wrong tool when the branches will be merged anyway: merge, and let the
+    graph record the relationship.
+  tags: [cherry-pick, hotfix, release-branches]
+
+- id: git-basic-010
+  topic: conflicts
+  difficulty: beginner
+  question: What causes a merge conflict, and what is the correct resolution workflow?
+  answer: |
+    A conflict occurs when both sides changed the same region of the same file relative to their
+    merge base, and the changes differ. Git writes markers and stops; it does not guess.
+
+    ```
+    <<<<<<< HEAD
+    timeout = 30
+    =======
+    timeout = 60
+    >>>>>>> feature/retry
+    ```
+
+    The workflow:
+
+    ```bash
+    git status                       # unmerged paths
+    git diff --name-only --diff-filter=U
+    # edit each file: choose, combine, or regenerate
+    git add src/client.py
+    git commit                       # or git merge --continue
+    ```
+
+    Resolve by understanding both intents, not by deleting markers. If one side is obsolete, say
+    so in the commit message. Generated files (lockfiles, protobufs, snapshots) should be taken
+    from one side and regenerated, never hand-merged.
+
+    Verify before committing: no leftover markers (`git grep -n '<<<<<<<'`), whitespace is clean
+    (`git diff --check`), and the tests covering that path pass. To back out entirely,
+    `git merge --abort` restores the exact pre-merge state.
+  tags: [conflicts, merge, three-way-merge]
+
+- id: git-basic-011
+  topic: conflicts
+  difficulty: advanced
+  question: During a rebase, which side is "ours" and which is "theirs"?
+  answer: |
+    They are inverted relative to a merge, and this is the most common way people silently keep the
+    wrong code.
+
+    - In a **merge**, `ours` is the branch you are on (`HEAD`), and `theirs` is the branch being
+      merged in.
+    - In a **rebase**, Git has checked out the upstream branch and is replaying your commits on
+      top of it. So `ours` is the upstream side, and `theirs` is *your* commit being applied.
+
+    ```bash
+    git checkout --ours src/client.py    # during rebase: the upstream version
+    git checkout --theirs src/client.py  # during rebase: your version
+    ```
+
+    Do not reach for these wholesale unless one side is genuinely obsolete. They discard the other
+    side's changes to the file without review.
+
+    To see what is being compared, enable the base section and inspect the commits:
+
+    ```bash
+    git config merge.conflictStyle zdiff3
+    git log --merge -p src/client.py
+    git diff --cc src/client.py
+    ```
+
+    If you get it wrong, `git rebase --abort` returns to the pre-rebase state, and `git reflog`
+    can recover commits from a rebase that already finished.
+  tags: [rebase, conflicts, ours-theirs]
+
+- id: git-basic-012
+  topic: remotes
+  difficulty: beginner
+  question: What is the difference between git fetch and git pull?
+  answer: |
+    `git fetch` downloads objects and updates remote-tracking refs such as `origin/main`. It never
+    touches your branches, index or working tree, so it is always safe.
+
+    `git pull` is `git fetch` followed by an integration step — a merge by default, a rebase if
+    configured. That second step is where surprises come from: it can create a merge commit, fail
+    on a dirty tree, or rewrite local commits.
+
+    ```bash
+    git fetch origin
+    git log --oneline HEAD..origin/main    # inspect what arrived
+    git rebase origin/main                 # or git merge origin/main
+    ```
+
+    That sequence is a pull with an inspection step in the middle, and it is the habit worth
+    keeping. If you use `git pull`, set the policy explicitly:
+
+    ```bash
+    git config --global pull.ff only       # fail rather than silently merge
+    git config --global pull.rebase true   # or: always rebase
+    ```
+
+    `git pull --ff-only` is also useful in scripts and deployment jobs, where an unexpected merge
+    commit is worse than a failed command.
+  tags: [fetch, pull, remotes]
+
+- id: git-basic-013
+  topic: remotes
+  difficulty: intermediate
+  question: What is origin/main, and why is it not the same as the server's main?
+  answer: |
+    `origin/main` is a **remote-tracking branch**: a local ref under `refs/remotes/origin/` that
+    records where `main` was on the remote the last time you fetched or pushed. It is a cache, not
+    a live view.
+
+    Consequences:
+
+    - A colleague merges a PR and your `origin/main` does not move until you fetch.
+    - `git log HEAD..origin/main` shows what you are missing *as of your last fetch*.
+    - Deleting a remote branch leaves the tracking ref behind until `git fetch --prune` (or
+      `fetch.prune=true`).
+
+    ```bash
+    git fetch origin
+    git branch -vv
+    # * main 1a2b3c4 [origin/main: ahead 2, behind 5]
+    ```
+
+    The tracking ref is what `--force-with-lease` compares against by default, which is why a
+    stale fetch can make a lease pass when it should not.
+
+    `origin` itself is just a remote name mapped to a URL (`git remote -v`); forks commonly use
+    `origin` for your fork and `upstream` for the canonical repository.
+  tags: [remote-tracking, origin, fetch]
+
+- id: git-basic-014
+  topic: remotes
+  difficulty: intermediate
+  question: Why is --force-with-lease safer than --force, and when can it still fail you?
+  answer: |
+    `git push --force` overwrites the remote ref with your local value, discarding any commits
+    pushed since your last fetch — including a colleague's work.
+
+    `--force-with-lease` first checks that the remote ref still equals your remote-tracking ref
+    (`origin/branch`), and refuses if it moved. That catches the common case: someone pushed while
+    you were rebasing.
+
+    ```bash
+    git push --force-with-lease origin feature/login
+    ```
+
+    It is not a guarantee. The lease is only as current as your last fetch: if a colleague pushed
+    and you have not fetched, your `origin/branch` is stale, the lease matches that stale value,
+    and the push still overwrites their commit. Two stronger forms:
+
+    ```bash
+    git fetch origin
+    git push --force-with-lease=feature/login:<expected-sha> origin feature/login
+    git push --force-if-includes origin feature/login
+    ```
+
+    `--force-if-includes` additionally verifies your local branch contains the remote tip it is
+    replacing, closing the stale-lease gap. Even so, the real protection is server-side branch
+    protection plus a rule: never force-push a shared branch.
+  tags: [force-push, lease, safety]
+
+- id: git-basic-015
+  topic: tags
+  difficulty: beginner
+  question: What is the difference between a lightweight and an annotated tag?
+  answer: |
+    A **lightweight** tag is just a ref pointing at a commit: `git tag v1.4.0`. No extra object, no
+    metadata.
+
+    An **annotated** tag creates a tag object containing the tagger, date, message and optional
+    GPG/SSH signature, which points at the commit: `git tag -a v1.4.0 -m "1.4.0"`. `git describe`
+    uses annotated tags by default, and `git show v1.4.0` shows who released it and why.
+
+    ```bash
+    git tag -a v1.4.0 -m "1.4.0: retry budget"
+    git tag -s v1.4.1 -m "1.4.1"        # signed
+    git verify-tag v1.4.1
+    git rev-parse v1.4.0^{}             # peel the tag object to the commit
+    ```
+
+    Use annotated tags for anything published. The peeled form matters in scripts: on an annotated
+    tag, `git rev-parse v1.4.0` returns the tag object hash, not the commit, so provenance records
+    can end up pointing at the wrong object.
+
+    Tags are not pushed by a normal `git push`. Use `git push origin v1.4.0` or
+    `git push --follow-tags` (annotated tags reachable from the pushed commits). `--tags` sends
+    everything, including local bookmarks you may not want public.
+  tags: [tags, releases, annotated]
+
+- id: git-basic-016
+  topic: releases
+  difficulty: beginner
+  question: How does semantic versioning decide major, minor and patch?
+  answer: |
+    `MAJOR.MINOR.PATCH` encodes a compatibility promise about the public API:
+
+    - **MAJOR** — incompatible change; existing callers may break.
+    - **MINOR** — new functionality, backwards compatible.
+    - **PATCH** — backwards-compatible bug fix.
+
+    Pre-release identifiers sort before the release and are ordered segment by segment:
+    `1.0.0-alpha < 1.0.0-alpha.1 < 1.0.0-beta.2 < 1.0.0-rc.1 < 1.0.0`. Build metadata
+    (`1.0.0+abc1234`) is ignored for precedence, so it is fine for provenance but useless for
+    ordering. For `0.y.z`, the spec allows anything to change; do not promise stability you have
+    not shipped.
+
+    Semver describes an API, not a repository or a deployment. A monorepo has one version per
+    published package; an internal service has a version mainly for traceability, and a patch bump
+    there is a convention, not a guarantee.
+
+    The practical failure is deciding the number from the diff size instead of the contract: a
+    one-line removal of a public function is a major change, and a 3,000-line internal refactor is
+    a patch.
+  tags: [semver, releases, versioning]
+
+- id: git-basic-017
+  topic: github-collaboration
+  difficulty: intermediate
+  question: What does a CODEOWNERS file do, and what does it not do?
+  answer: |
+    `CODEOWNERS` maps path patterns to users or teams. GitHub uses it to request reviews
+    automatically when a PR touches matching files, and to show ownership in the review UI.
+
+    ```
+    *                 @acme/platform
+    /docs/            @acme/docs-writers
+    /src/payments/    @acme/payments @alice
+    *.sql             @acme/data
+    ```
+
+    It is read from `.github/CODEOWNERS`, the repository root, or `docs/CODEOWNERS` — the first
+    found wins. Patterns follow gitignore conventions with exceptions: `!` negation and character
+    ranges are not supported, and the **last matching pattern wins**, so order from general to
+    specific.
+
+    What it does not do:
+
+    - It does not block merging on its own. Enforcement requires branch protection (or a ruleset)
+      with "Require review from Code Owners" enabled.
+    - It does not work if the owner lacks write access or the team is not visible to the
+      repository; the entry then silently has no effect.
+
+    Keep it path-based and small. Per-file ownership rots quickly and turns every refactor into a
+    review-routing negotiation.
+  tags: [codeowners, review, github]
+
+- id: git-basic-018
+  topic: github-collaboration
+  difficulty: intermediate
+  question: Why can an approved pull request still be blocked from merging?
+  answer: |
+    Approval is only one of several merge requirements. A PR can be approved and still be
+    unmergeable because:
+
+    - **Required status checks** have not passed (or never reported).
+    - **The branch is out of date** with the base, and "Require branches to be up to date" is on.
+    - **Conversations are unresolved**, when "Require conversation resolution" is enabled.
+    - **A review requesting changes** is outstanding; an approval does not override it.
+    - **The approving review is stale** because new commits were pushed after it, and "Dismiss
+      stale approvals" is enabled.
+    - **A required check never runs** because the workflow is filtered by `paths:` — a skipped
+      workflow reports nothing, so the required check stays pending.
+
+    ```bash
+    gh pr checks
+    gh pr view --json mergeStateStatus,reviewDecision
+    ```
+
+    `mergeStateStatus` is the useful field: `BLOCKED`, `BEHIND`, `DIRTY` (conflicts), `UNSTABLE`
+    (failing non-required checks), `CLEAN`.
+
+    The design lesson is to keep the required set small and always-running. A required job that
+    takes 40 minutes, or one that is skipped on documentation-only PRs, teaches the team to bypass
+    review rather than to trust it.
+  tags: [branch-protection, required-checks, pull-requests]
+
+- id: git-basic-019
+  topic: github-actions
+  difficulty: beginner
+  question: What is the difference between a workflow, a job and a step in GitHub Actions?
+  answer: |
+    - A **workflow** is a YAML file in `.github/workflows/`, triggered by events (`push`,
+      `pull_request`, `schedule`, `workflow_dispatch`, `merge_group`).
+    - A **job** is a unit of work with its own runner. Jobs run in parallel by default and can be
+      ordered with `needs`.
+    - A **step** is a single command or action inside a job. Steps in a job share the filesystem,
+      environment and shell; jobs share nothing.
+
+    That isolation is the part people get wrong. Files written by job A are not visible to job B.
+    Data moves through artifacts, outputs or a cache:
+
+    ```yaml
+    jobs:
+      build:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - run: make dist
+          - uses: actions/upload-artifact@v4
+            with: { name: dist, path: dist/ }
+      test:
+        needs: build
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/download-artifact@v4
+            with: { name: dist, path: dist/ }
+          - run: ./dist/app --version
+    ```
+
+    Each job also gets a fresh `GITHUB_TOKEN`, and each step starts from the job's workspace, not
+    from the repository's default branch.
+  tags: [actions, jobs, steps, artifacts]
+
+- id: git-basic-020
+  topic: github-actions
+  difficulty: advanced
+  question: How should you handle permissions and secrets for a workflow that runs on pull requests from forks?
+  answer: |
+    Workflows triggered by `pull_request` from a fork run with a **read-only `GITHUB_TOKEN`** and
+    **no repository secrets**. That is deliberate: the PR author controls the code, so giving it
+    deployment credentials would let anyone exfiltrate them.
+
+    Principles:
+
+    1. Set `permissions:` explicitly, starting from read-only, and add scopes per job.
+    2. Never use `pull_request_target` with a checkout of the PR head — it runs in the base
+       repository's context with secrets, which is the classic exfiltration path.
+    3. Split privileged work into a separate `workflow_run` job that consumes a artefact, and treat
+       that artefact as hostile input (validate names, paths and contents).
+    4. Gate deployment jobs on `environment:` protection rules with required reviewers.
+
+    ```yaml
+    permissions:
+      contents: read
+    jobs:
+      test:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - run: pytest -q
+    ```
+
+    Note that `secrets` cannot be referenced in a job-level `if:`; promote the value to `env` and
+    test the environment variable, or check `github.event.pull_request.head.repo.fork`. For cloud
+    access, prefer OIDC (`id-token: write` plus a role assumption) over stored keys.
+  tags: [actions, security, forks, permissions]
+
+- id: git-basic-021
+  topic: monorepos
+  difficulty: advanced
+  question: Submodules or subtrees — what is the difference and when do you use each?
+  answer: |
+    A **submodule** is a nested Git repository recorded in the parent as a gitlink (tree mode
+    `160000`) plus an entry in `.gitmodules`. The parent pins an exact commit, but the content
+    lives in the other repository.
+
+    ```bash
+    git submodule add https://github.com/acme/protobufs.git vendor/protobufs
+    git clone --recurse-submodules <parent>
+    git submodule update --init --recursive
+    ```
+
+    A **subtree** copies the other repository's content and history into a subdirectory of the
+    parent. It is ordinary files and ordinary commits:
+
+    ```bash
+    git subtree add --prefix=vendor/lib https://github.com/acme/lib.git main --squash
+    git subtree pull --prefix=vendor/lib https://github.com/acme/lib.git main --squash
+    ```
+
+    | | Submodule | Subtree |
+    |---|---|---|
+    | Consumer tooling | Needs init/update, CI flag | None |
+    | History | Separate | Duplicated into parent |
+    | Updating | Move the gitlink and commit | `subtree pull` |
+    | Failure mode | Empty directory, detached HEAD | Merge conflicts on vendored code |
+
+    Use submodules when the nested repository is independently authoritative and must be pinned —
+    shared protobufs, a vendored SDK with its own releases. Use subtrees when you want to vendor
+    code and forget about it, accepting that updates are merges. Neither is a package manager;
+    prefer a real dependency manager where one exists.
+  tags: [submodules, subtrees, monorepo]
+
+- id: git-basic-022
+  topic: recovery
+  difficulty: intermediate
+  question: You ran git reset --hard and lost commits. What do you do?
+  answer: |
+    Do not run `git gc`, and do not panic: `reset --hard` moved a ref, it did not delete objects.
+
+    ```bash
+    git reflog
+    # 3c4d5e6 HEAD@{0}: reset: moving to HEAD~2
+    # 1a2b3c4 HEAD@{1}: commit: add uploader retry
+    git reset --hard HEAD@{1}      # back to where you were
+    ```
+
+    `ORIG_HEAD` is also set by `reset`, so `git reset --hard ORIG_HEAD` often works without
+    reading the reflog.
+
+    If the commits were on a branch you deleted instead, find the tip in `git reflog` and attach a
+    new branch: `git branch recovered 1a2b3c4`. For commits made in detached HEAD and then
+    abandoned, the same reflog lookup applies.
+
+    Last resort, when no reflog entry mentions them:
+
+    ```bash
+    git fsck --unreachable --no-reflogs
+    git fsck --lost-found          # dangling commits under .git/lost-found/
+    ```
+
+    The reflog is local and expires (90 days for reachable entries, 30 for unreachable by
+    default). It does not exist on the server, so server-side force-push recovery depends on
+    someone still having the old object.
+  tags: [reflog, recovery, reset]
+
+- id: git-basic-023
+  topic: debugging
+  difficulty: intermediate
+  question: How does git bisect find a regression, and how do you automate it?
+  answer: |
+    `git bisect` binary-searches a commit range, asking you to classify each midpoint as good or
+    bad. On 1,000 commits that is about ten tests instead of a thousand.
+
+    ```bash
+    git bisect start
+    git bisect bad              # current HEAD is broken
+    git bisect good v1.3.0      # known-good tag
+    # test the checked-out midpoint, then:
+    git bisect good             # or git bisect bad
+    git bisect skip             # untestable commit
+    git bisect reset            # return to the original branch
+    ```
+
+    Automation is the point. `git bisect run` uses the exit code: `0` = good, `125` = skip,
+    `1`–`127` = bad, and `128` or above aborts the bisect.
+
+    ```bash
+    git bisect start HEAD v1.3.0
+    git bisect run ./scripts/repro.sh
+    ```
+
+    `repro.sh` must be deterministic and must build what it tests. A flaky check makes bisect
+    report a random commit; run the check twice inside the script, or fix the flakiness first.
+
+    For merges, `git bisect start --first-parent` walks only the main line, identifying the merge
+    that introduced the bug instead of a commit inside a side branch. A path restriction
+    (`git bisect start -- src/`) narrows the search but can miss interactions.
+  tags: [bisect, debugging, regression]
+
+- id: git-basic-024
+  topic: workflows
+  difficulty: beginner
+  question: What belongs in .gitignore, and what does it not affect?
+  answer: |
+    `.gitignore` lists patterns for files Git should not report as untracked or stage by default:
+    build outputs (`dist/`, `target/`), dependency directories (`node_modules/`, `.venv/`), local
+    environment files (`.env`), editor state and OS cruft (`.DS_Store`).
+
+    ```
+    .venv/
+    __pycache__/
+    dist/
+    .env
+    !.env.example
+    ```
+
+    Rules that matter:
+
+    - Patterns are relative to the directory containing the file; a leading slash anchors them.
+    - `!` re-includes a path, but only if its parent directory is not itself ignored.
+    - A tracked file is **not** affected. Adding a path to `.gitignore` after committing it leaves
+      it tracked; use `git rm --cached <path>` to stop tracking.
+
+    What it does not do:
+
+    - It does not remove anything from history. A committed secret stays in every clone.
+    - It is not a security boundary. A determined `git add -f` overrides it.
+    - It does not apply to files already in the index, or to other clones if the file itself is
+      untracked and not committed.
+
+    For personal, repository-specific ignores use `.git/info/exclude`; for a global list of editor
+    files use `core.excludesFile`. Use `.gitattributes` for how files are treated (line endings,
+    diff drivers), not `.gitignore`.
+  tags: [gitignore, hygiene, tracking]

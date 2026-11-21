@@ -1,0 +1,226 @@
+- id: linux-scn-001
+  title: The server does not come back after a routine reboot
+  technologies: [linux]
+  difficulty: intermediate
+  prompt: |
+    A database host was rebooted for a kernel update during a maintenance window. It never returned to
+    SSH. The console shows a login prompt for emergency mode, and scrolling up reveals
+    `Failed to mount /srv/pgdata` and `Dependency failed for Local File Systems`. The volume is an
+    attached cloud disk formatted XFS, mounted by `/dev/sdb1` in `/etc/fstab`, and it is present in
+    `lsblk` — but as `sdc`, because an extra volume was attached last week. Nobody tested the reboot;
+    the host had been up for 380 days.
+  approach: |
+    Triage the boot, not the application. At the emergency prompt the root filesystem is read-only, so
+    the first move is `mount -o remount,rw /` and then `systemctl --failed` to see the whole picture
+    rather than the last line on the screen.
+
+    Diagnose the mount: `lsblk -f` and `blkid` show the device now carries a different kernel name, and
+    `journalctl -b -p err` confirms the timeout. The fix is three parts:
+
+    1. Replace `/dev/sdb1` with `UUID=<fs-uuid>` from `blkid`, so the name cannot move again.
+    2. Add `nofail` and `x-systemd.device-timeout=15s` so a missing data volume degrades the service
+       instead of preventing the boot entirely.
+    3. Verify with `mount -a` and `systemctl daemon-reload`, then `systemctl default` to continue the
+       boot — no second reboot needed to prove it.
+
+    Then close the process gap: `findmnt --verify` belongs in the post-patch checklist, and a canary
+    reboot belongs before any kernel rollout to the fleet. The reason this became an outage is not the
+    device name; it is that a 380-day uptime meant nobody had exercised the fstab in a year.
+  red_flags:
+    - "Reinstalling the OS or rebuilding the host before reading the console output."
+    - "Editing fstab to point at the new `/dev/sdc` and calling it fixed."
+    - "Removing the mount line instead of fixing it."
+    - "Rebooting repeatedly to \"see if it comes back\"."
+
+- id: linux-scn-002
+  title: /var is full at 03:00 and everything on the host is failing
+  technologies: [linux, docker]
+  difficulty: intermediate
+  prompt: |
+    At 03:05 the alert fires: disk usage on `/var` is at 100 percent, then logins fail, then the API
+    starts returning 500s. On arrival, `df -h` shows `/var` full and `/` at 41 percent. `du -xhd1 /var`
+    reports only 14 GB used on a 40 GB volume. `/var/log` looks normal. A Docker daemon runs on the same
+    host with three containers, and one of them writes application logs to a mounted path.
+  approach: |
+    The gap between `df` and `du` is the whole investigation. Deleted-but-open files and a hidden mount
+    are the two candidates:
+
+    ```bash
+    lsof +L1 | head -20          # deleted files still held open
+    lsof /var | sort -k7 -n | tail
+    findmnt -T /var/log          # is something mounted over a directory?
+    ```
+
+    Most likely the logrotate path: an application kept writing to a rotated file, or a container wrote
+    to a JSON log that Docker rotated without the process reopening it. Truncating through
+    `/proc/<pid>/fd/<n>` reclaims the space immediately without a restart.
+
+    Then stop the recurrence rather than the symptom:
+
+    1. Cap the journal with `SystemMaxUse=2G` and give logrotate either `copytruncate` or a
+       `postrotate` reload, whichever the application actually supports.
+    2. Put `/var/lib/docker` and `/var/log` on their own LVs so a runaway log cannot take out the root
+       filesystem.
+    3. Configure the container log driver with `max-size` and `max-file`; the default `json-file` driver
+       has no rotation and is the single most common cause of this incident.
+    4. Alert at 80 percent, not 100.
+
+    Check inodes (`df -i`) as well — the same symptom appears when millions of small files exhaust them.
+  red_flags:
+    - "`rm -rf /var/log/*` and closing the ticket."
+    - "Deleting the biggest file without checking whether a process still holds it open."
+    - "Growing the volume as the only action; the same 40 GB will be full again next week."
+    - "Restarting Docker without looking at which container and which log path grew."
+
+- id: linux-scn-003
+  title: A nightly report job is killed at the same point, and the host has free memory
+  technologies: [linux, postgresql]
+  difficulty: advanced
+  prompt: |
+    A Python reporting job runs from a systemd unit at 02:00 on a 32 GB host, alongside Postgres and an
+    API. It dies around 70 percent completion with exit status 137. `free -h` at 02:30 shows 12 GB
+    available and no swap in use. The unit has no `MemoryMax=`, and the host runs with
+    `vm.swappiness=10`. Nothing in the application log indicates an error; the service simply
+    disappears.
+  approach: |
+    Confirm the mechanism before changing anything. Exit 137 means `SIGKILL`, and the two plausible
+    senders are the kernel OOM killer and systemd's own stop timeout:
+
+    ```bash
+    journalctl -k -b | grep -i -E 'killed process|out of memory'
+    systemctl show report.service -p TimeoutStopSec -p MemoryMax -p RuntimeMaxSec
+    journalctl -u report.service -b --no-pager | tail -40
+    ```
+
+    If the OOM line names the process with a large `anon-rss`, it is memory, and the question becomes
+    "what is the peak" rather than "why is memory low". On a current kernel,
+    `/sys/fs/cgroup/system.slice/report.service/memory.peak` gives the number; `systemd-cgtop` gives the
+    shape over time. A pandas job that reads a full Parquet file and then merges needs source plus join
+    build plus result simultaneously, which is why raising the limit only moves the finish line — the
+    fix is chunked reads, a streaming join, or pushing the aggregation into Postgres.
+
+    Rule out the other sender: `RuntimeMaxSec=` or a deploy script issuing `systemctl restart` at 02:30
+    produces 137 with no OOM line, and `systemctl show -p RuntimeMaxSec` plus the invocation list
+    settles it.
+
+    Finally, set `MemoryMax=6G` and `MemorySwapMax=0` so the job dies fast and visibly instead of
+    dragging the API into reclaim.
+  red_flags:
+    - "Raising the limit from 2 GB to 4 GB and calling it fixed."
+    - "Adding swap and assuming the problem is solved."
+    - "\"It is a memory leak\" without a memory-over-time graph."
+    - "Ignoring `dmesg` and treating exit 137 as an application bug."
+
+- id: linux-scn-004
+  title: The service fails on boot but works when started by hand
+  technologies: [linux, postgresql]
+  difficulty: intermediate
+  prompt: |
+    After a host rebuild, `api.service` fails every boot with `connection refused` to Postgres, yet
+    `systemctl start api` succeeds once the machine is up. The unit was copied from the old host:
+    `After=network.target postgresql.service`, `ExecStart=/opt/api/bin/api`, running as `api`. Two other
+    details: the API binds port 443, and under load it logs "too many open files". Postgres runs under
+    its own unit on the same host.
+  approach: |
+    Three separate defects, and the interview is about separating them.
+
+    **Ordering.** `After=network.target` means the network stack is configured, not that an address is
+    routable. `After=postgresql.service` without `Wants=` orders against a unit that may not be part of
+    this transaction, and even with both, `After=` waits for Postgres to be *started*, not ready. The
+    unit needs `Wants=postgresql.service`, `After=network-online.target postgresql.service`, and
+    readiness either from `Type=notify`/`ExecStartPre` or an application that retries with backoff.
+
+    **Privileges and limits.** Binding :443 as a non-root user fails without
+    `AmbientCapabilities=CAP_NET_BIND_SERVICE` (or a redirect from a privileged port). "Too many open
+    files" is `LimitNOFILE=` on the unit — `/etc/security/limits.conf` does not apply to systemd
+    services.
+
+    **State.** If it works by hand, check `systemctl cat api` for a drop-in left over from the old host,
+    and `EnvironmentFile=` for a variable that only exists in an interactive session.
+
+    Fix, then prove it: `systemctl daemon-reload`, restart, and reboot a canary before touching the
+    fleet.
+  red_flags:
+    - "Adding `sleep 30` to `ExecStart` instead of fixing readiness."
+    - "Running the service as root to get around port 443."
+    - "Editing `/etc/security/limits.conf` and restarting the service."
+    - "Declaring it fixed because a manual start works."
+
+- id: linux-scn-005
+  title: The port is open in the firewall but connections time out
+  technologies: [linux]
+  difficulty: intermediate
+  prompt: |
+    A newly provisioned host runs an API on :8443. `ufw status` shows `8443/tcp ALLOW Anywhere`, the
+    process is running, and the cloud security group allows the port from the office range. From a
+    laptop, `curl -v https://<ip>:8443` hangs and eventually times out; `ping` succeeds. From the host
+    itself, `curl https://127.0.0.1:8443` works. A colleague reports that the staging host — same image,
+    different subnet — works fine.
+  approach: |
+    Work down the layers. `ping` succeeding only proves ICMP, so ignore it.
+
+    On the host:
+
+    ```bash
+    ss -tulpen | grep 8443          # bound to 127.0.0.1 or 0.0.0.0?
+    ip -br addr; ip route
+    nft list ruleset | head -40     # what is enforced, including docker chains
+    ```
+
+    The most common finding is a bind address: a service on `127.0.0.1:8443` is unreachable whatever
+    the firewall says, and that also explains why the same image works on staging if staging passes
+    `--host 0.0.0.0` through a different env file.
+
+    If it is bound to `0.0.0.0`, compare against a host that works. `nft list ruleset` may show a second
+    ruleset — Docker's NAT chains, a VPN agent, or a hand-written table — that `ufw status` never
+    displays. Then check the path with `mtr -n --tcp -P 8443 <ip>`, and prove whether SYNs arrive at all
+    with `tcpdump -ni any tcp port 8443`.
+
+    Last, confirm the return path: `ip route get <laptop-ip>` shows which interface and source address
+    the reply would use. A second default route or an asymmetric path is a firewall-looking problem
+    caused by routing.
+  red_flags:
+    - "Opening the port more widely in the security group before checking the bind address."
+    - "`systemctl restart` as the first action."
+    - "Disabling ufw entirely to \"test\"."
+    - "Trusting `ufw status` as a description of the enforced ruleset."
+
+- id: linux-scn-006
+  title: SSH works, but nobody can say who still has access
+  technologies: [linux, ansible]
+  difficulty: advanced
+  prompt: |
+    A 60-host estate grew from three engineers to fifteen over two years. Access is individual keys in
+    `~/.ssh/authorized_keys`, added by hand, plus one shared `deploy` account used by CI. Two people left
+    last quarter. An auditor asks for a list of who can log in to production, and evidence of when
+    access was last reviewed. You also notice `PasswordAuthentication yes` on the older hosts, and one
+    host accepts root logins with a password.
+  approach: |
+    Three problems in order: visibility, hardening, then a model that does not decay.
+
+    **Visibility.** You cannot review what you cannot list. Per host, capture
+    `sshd -T | grep -E 'permitrootlogin|passwordauthentication|allowgroups'`,
+    `getent group sudo wheel`, and every key fingerprint:
+
+    ```bash
+    for f in /home/*/.ssh/authorized_keys /root/.ssh/authorized_keys; do
+      ssh-keygen -lf "$f" 2>/dev/null | sed "s|^|$f |"; done
+    ```
+
+    Any fingerprint that cannot be attributed to a person or a pipeline is a finding; the departed
+    engineers' keys surface here.
+
+    **Hardening, in a safe order.** Keys working for a non-root sudo user, `AllowGroups ssh-users`,
+    `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PermitRootLogin no`, `sshd -t`,
+    `systemctl reload sshd` — tested in a second session with console access available.
+
+    **The durable model.** An SSH CA with short-lived certificates (`TrustedUserCAKeys`, principals,
+    `-V +8h`) deletes the per-host key files; CI gets its own certificate or a `restrict,command=` key;
+    leavers expire instead of requiring a 60-host edit. Deploying `authorized_keys` (or the CA trust)
+    through configuration management also gives the auditor a diffable history, which hand-edited files
+    never will.
+  red_flags:
+    - "Disabling password auth on all hosts at once, from the only session you have."
+    - "Deleting the shared deploy account without knowing what CI depends on it."
+    - "Answering the audit with \"only the team has keys\"."
+    - "Changing the SSH port and calling it hardening."

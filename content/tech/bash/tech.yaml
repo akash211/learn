@@ -1,0 +1,125 @@
+slug: bash
+title: Bash & Shell Scripting
+category: programming
+level: core
+summary: The POSIX shell and Bash's extensions — quoting, expansion, pipelines, process control and the discipline that keeps scripts safe in production.
+relations:
+  - to: linux
+    type: foundation
+    note: The shell is the interface to the operating system — processes, file descriptors, permissions and signals are Linux concepts the script manipulates.
+  - to: git
+    type: complements
+    note: Hooks, CI steps and release tooling are shell scripts; quoting and exit-code habits decide whether a pipeline fails loudly or silently.
+  - to: cicd
+    type: uses
+    note: Every CI job is a shell session with a working directory and an exit status; `set -euo pipefail` and correct exit codes are what make a job fail at the right step.
+intro:
+  what: |
+    A shell is a program that reads commands, expands them, and asks the kernel to run the
+    resulting programs. Bash — the Bourne Again Shell — is the interactive shell on most Linux
+    distributions and the language of `#!/bin/bash` scripts: variables, arrays, functions, tests,
+    loops, pipelines, redirections and job control, all in one executable.
+
+    The language looks small and behaves unlike a general-purpose one. There is no type system
+    beyond strings and integers-in-context, no garbage collector, and no module system. Instead
+    there is an expansion pipeline that runs between what you typed and what executes: brace
+    expansion, parameter expansion, command substitution, arithmetic, word splitting and globbing,
+    in that order. Nearly every shell bug is a misunderstanding of that pipeline or of a process's
+    exit status.
+  why: |
+    The shell is the only language guaranteed to be present on the machine you are debugging.
+    When a container is crash-looping, a disk is full, or a deploy needs to stop halfway and clean
+    up, the tool you have is `/bin/sh`. Shell scripts also compose other programs without an FFI
+    or a client library: `curl`, `jq`, `psql`, `aws` and `kubectl` are all just commands with
+    stdin, stdout, stderr and an exit code.
+
+    That makes it the glue language of operations: entrypoints, cron jobs, CI steps, migrations,
+    backups, log rotation. Writing it well is less about clever one-liners and more about
+    predictable failure — the script should stop when a step fails, say where, clean up, and
+    return a status the caller can act on.
+  problems:
+    - Automate sequences of commands that a human would otherwise type by hand.
+    - Glue tools together through pipes and files without writing a program per hop.
+    - Express operational logic that must run on a minimal image with no interpreter installed.
+    - Control processes — start, wait, signal, time out and clean up after them.
+    - Act as the entrypoint contract for containers, CI runners and cron.
+  where_used:
+    - Container entrypoints and healthcheck commands.
+    - CI/CD job steps and release scripts.
+    - Cron jobs, backups, log rotation and disk cleanup.
+    - Server bootstrap, provisioning and configuration glue.
+    - Developer tooling: Makefile recipes, git hooks, build wrappers.
+  ecosystem: |
+    Bash sits between the kernel and everything above it. `systemd` units call it, Docker
+    `ENTRYPOINT`s are usually it, and CI runners wrap each step in `bash -eo pipefail`. Above the
+    shell sit the tools it drives: coreutils (`grep`, `sed`, `awk`, `find`), `jq` for JSON, cloud
+    CLIs, and Python for anything with real data structures or error handling. Knowing where the
+    shell stops being the right tool is part of knowing the shell.
+  alternatives:
+    - name: POSIX sh (dash, ash, busybox)
+      note: Smaller and more portable; no arrays, `[[`, or `local`, but present in minimal images.
+    - name: Python
+      note: Better once logic needs data structures, structured errors, or libraries; slower to start, needs an interpreter.
+    - name: Go
+      note: Compiled single binary with real types; the choice when a script grows into a tool.
+    - name: Ansible / Terraform
+      note: Declarative configuration instead of imperative command sequences, when that is the actual job.
+    - name: zsh / fish
+      note: Better interactive ergonomics; not a safe scripting target for portability.
+related: [linux, git, cicd, docker, python]
+chapters:
+  - id: shell-basics-quoting
+    title: Shell Basics and Quoting Rules
+    file: chapters/01-shell-basics-quoting.md
+    minutes: 12
+    level: core
+  - id: variables-arrays-expansion
+    title: Variables, Arrays and Parameter Expansion
+    file: chapters/02-variables-arrays-expansion.md
+    minutes: 13
+    level: core
+  - id: control-flow-tests-exit-codes
+    title: Control Flow, Tests and Exit Codes
+    file: chapters/03-control-flow-tests-exit-codes.md
+    minutes: 12
+    level: core
+  - id: functions-sourcing-scope
+    title: Functions, Sourcing and Scope
+    file: chapters/04-functions-sourcing-scope.md
+    minutes: 11
+    level: core
+  - id: pipes-redirection
+    title: Pipes, Redirection and Process Substitution
+    file: chapters/05-pipes-redirection.md
+    minutes: 13
+    level: core
+  - id: text-processing
+    title: Text Processing with grep, sed and awk
+    file: chapters/06-text-processing.md
+    minutes: 13
+    level: core
+  - id: files-permissions-find
+    title: Files, Permissions and find
+    file: chapters/07-files-permissions-find.md
+    minutes: 12
+    level: core
+  - id: processes-jobs-signals
+    title: Process Management, Jobs and Signals
+    file: chapters/08-processes-jobs-signals.md
+    minutes: 12
+    level: advanced
+  - id: error-handling
+    title: "Error Handling: set -euo pipefail, Traps and Logging"
+    file: chapters/09-error-handling.md
+    minutes: 14
+    level: advanced
+  - id: production-scripting
+    title: Production Scripting — Idempotency, Temp Files and Portability
+    file: chapters/10-production-scripting.md
+    minutes: 13
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

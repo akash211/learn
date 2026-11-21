@@ -1,0 +1,326 @@
+- id: linux-recent-001
+  topic: cgroups
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: Your monitoring agent still reads /sys/fs/cgroup/memory/memory.usage_in_bytes. What broke, and what does the cgroup v2-only world change?
+  answer: |
+    systemd 257 disabled cgroup v1 support, and distributions have been defaulting to the unified
+    hierarchy for years, so the per-controller directories (`memory/`, `cpu/`, `blkio/`) are simply gone.
+    The same numbers now live as single files: `memory.current`, `memory.max`, `cpu.stat`,
+    `io.stat`, plus `memory.pressure` and `io.pressure`.
+
+    Two things change beyond file paths. First, accounting is unified: `memory.current` includes page
+    cache, so a value near `memory.max` is not automatically a leak — `memory.stat` splits `anon`,
+    `file` and `slab`. Second, `cpu.max` is a quota per 100 ms period, so `nr_throttled` in `cpu.stat`
+    is the signal that explains p99 latency at modest average CPU.
+
+    Operationally the migration is an agent-compatibility project, not a kernel tuning project:
+    inventory what reads `/sys/fs/cgroup`, check whether the collector supports v2, and remember that
+    older Java and Node runtimes also detect limits differently under v2. A host that "has plenty of
+    memory" while its container is OOM-killed is usually a v1-era metric being read as if it still
+    meant something.
+  tags: [cgroups-v2, monitoring, systemd-257, containers]
+
+- id: linux-recent-002
+  topic: firewalls
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How do you migrate a host from iptables rules to nftables without an outage, and what actually changed?
+  answer: |
+    The kernel filter has been nftables for years; what changed is that current releases (RHEL 10,
+    recent Fedora and Debian) configure it directly rather than through `iptables`. `iptables` is still
+    present as `iptables-nft`, a compatibility front end — so old rules usually work, but maintaining
+    two syntaxes over one ruleset is how teams end up with rules nobody can find.
+
+    Migration in practice:
+
+    1. Inventory with `iptables-save` and `iptables-save -t nat` (plus `ip6tables-save`), and note
+       anything inserted by Docker, Kubernetes or a VPN.
+    2. Translate into a single `inet` table that handles IPv4 and IPv6 together — that alone removes a
+       whole class of "we forgot the v6 rule" findings.
+    3. Load with `nft -f`, keeping the old ruleset in a file, and schedule an automatic rollback
+       (`at now + 10min` restoring the backup) before applying remotely.
+    4. Verify from another host, not from the box: `ss -tulpen` locally plus an actual connection test.
+
+    The subtle part is ordering: `ct state established,related accept` must come before any drop, and
+    Docker's DNAT chains in `nat` bypass the input hook entirely.
+  tags: [nftables, iptables-nft, migration, ipv6]
+
+- id: linux-recent-003
+  topic: performance
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: Why is Pressure Stall Information preferred over load average and free memory for alerting today?
+  answer: |
+    Load average and `free` both describe causes ambiguously. Load counts runnable *and* uninterruptible
+    tasks without normalising by cores, and `free` reports page cache as "used", so a healthy host looks
+    starved. PSI measures the consequence: the fraction of time tasks were actually stalled waiting for
+    CPU, memory or I/O.
+
+    ```bash
+    cat /proc/pressure/cpu     # some avg10=... full avg10=...
+    cat /proc/pressure/memory
+    cat /proc/pressure/io
+    cat /sys/fs/cgroup/system.slice/api.service/memory.pressure
+    ```
+
+    `some` means at least one task was stalled; `full` means every runnable task was. A memory
+    `full avg10` above a few percent is a host in trouble, and an I/O `full` spike localises a stall to
+    storage without guessing from `%wa` in `top`.
+
+    The practical value is alert quality: PSI thresholds fire on user-visible slowness rather than on a
+    number crossing an arbitrary line, and per-cgroup pressure files let you alert per service instead
+    of per host. Most current kernels expose it; where it is missing, the fallback is still `vmstat`'s
+    `si/so` plus `iostat` `await`.
+  tags: [psi, monitoring, latency, cgroups]
+
+- id: linux-recent-004
+  topic: secrets and disk encryption
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How do you keep a service's database password off the disk, and how does TPM2 change LUKS unlocking?
+  answer: |
+    The old answer was a `0600` env file. The current answer is systemd credentials: `LoadCredential=`
+    places the secret in a per-service, in-memory file exposed at `$CREDENTIALS_DIRECTORY`, readable
+    only by that unit's user. `LoadCredentialEncrypted=` takes a `systemd-creds encrypt` blob bound to
+    the host's TPM2, so the ciphertext on disk is useless if copied to another machine.
+
+    ```
+    [Service]
+    LoadCredentialEncrypted=dbpass:/etc/app/dbpass.cred
+    ```
+
+    The rule to state explicitly: never put a secret in `ExecStart=`, because `/proc/<pid>/cmdline` is
+    world-readable, and environment variables are visible to root and to anything that can read
+    `/proc/<pid>/environ`.
+
+    For disk encryption, `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7` binds a LUKS2 keyslot to
+    the TPM and the Secure Boot state, so an unattended reboot unlocks without a passphrase while a
+    moved disk or a modified bootloader does not. Keep a passphrase keyslot as break-glass, and note the
+    trade: PCR 7 binding means a firmware or bootloader update can require re-enrolment.
+  tags: [systemd-creds, tpm2, luks, secrets]
+
+- id: linux-recent-005
+  topic: ssh
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How are teams replacing long-lived authorized_keys entries at scale, and what does an SSH CA buy?
+  answer: |
+    An SSH certificate authority signs user keys. Servers trust the CA once
+    (`TrustedUserCAKeys /etc/ssh/ca_user.pub`), and a user presents a certificate with a principal (the
+    username), a validity window, and options baked in:
+
+    ```bash
+    ssh-keygen -s ca_user -I "alice-20260211" -n alice,deploy -V +8h ~/.ssh/id_ed25519.pub
+    ```
+
+    What it buys: no per-host `authorized_keys` distribution, expiry measured in hours instead of
+    "until someone leaves", and revocation via a KRL (`RevokedKeys`) rather than an edit on forty
+    machines. Combined with a FIDO2 key (`ssh-keygen -t ed25519-sk`) or an SSO-backed issuer, the
+    private key never becomes a file that can be copied.
+
+    Host certificates solve the other half: `HostCertificate` plus a `@cert-authority` line in
+    `known_hosts` means a rebuilt node verifies correctly instead of producing the "host key changed"
+    prompt everyone has been trained to type `yes` into.
+
+    The operational cost is real — you now run a CA (Vault, step-ca, Teleport, or your IdP) and must
+    keep it available during an incident, with a documented break-glass path.
+  tags: [ssh, certificates, fido2, zero-trust]
+
+- id: linux-recent-006
+  topic: supply chain
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What did the xz-utils backdoor change about how you trust packages on a server?
+  answer: |
+    CVE-2024-3094 was a backdoor in xz/liblzma 5.6.0 and 5.6.1, injected through the *release tarballs*
+    rather than the git history, and aimed at sshd through liblzma. It was caught because an engineer
+    noticed sshd latency during a benchmark — not by a scanner.
+
+    The lasting lessons for host administration:
+
+    - Distributions are the control. A distro's signed package, built from its own source with its own
+      patches, is a different artefact from an upstream tarball; that is a feature worth paying for.
+    - Verify what you install: repo keys pinned in `/etc/apt/keyrings` or `/etc/pki/rpm-gpg`, HTTPS
+      sources, and no `curl | bash` for anything that runs as root. Maintainer scripts in `.deb`/`.rpm`
+      run as root — read them before rolling a package to a fleet.
+    - Know what your host actually runs: `dpkg -V` / `rpm -Va` detect modified binaries, and a package
+      manifest in configuration management makes a rebuild reproducible.
+    - Watch build-time dependencies, not just runtime ones. A compression library is a dependency of
+      almost everything, including the SSH daemon.
+
+    Practical outcome: more teams mirror and snapshot their repos, and treat a new third-party
+    repository as a privileged change requiring review.
+  tags: [supply-chain, xz, provenance, packages]
+
+- id: linux-recent-007
+  topic: immutable hosts
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What changes when the OS itself becomes an image — bootc, Flatcar, Bottlerocket, Fedora CoreOS?
+  answer: |
+    The model inverts: instead of mutating a running host with `apt install`, you build an OS image, ship
+    it, and reboot into it. `/usr` is read-only, updates are atomic (A/B partitions or an image
+    deployment), and rollback is "boot the previous image" rather than "undo the transaction".
+
+    What changes for an administrator:
+
+    - Package installation at runtime is discouraged or impossible; software ships in the image or as a
+      container. Configuration moves to `/etc` (often a thin writable layer) and cloud-init/ignition.
+    - Patching becomes an image pipeline: rebuild weekly, test, roll out in waves. The `needs-restarting`
+      question becomes trivial because deploys are reboots.
+    - Debugging is different: fewer tools on the host, so you use a debug container or a
+      `podman run --privileged` sidecar instead of installing `tcpdump` on the node.
+    - Anything that writes to `/usr` (a vendor agent, a hand-built kernel module) breaks and must be
+      rebuilt into the image.
+
+    The trade is real: you gain immutability, reproducible rebuilds and trivial rollback; you lose the
+    ability to hotfix a running box at 02:00. Teams keep a documented exception path — "rebuild the
+    image, or accept the drift until the next release".
+  tags: [immutable, bootc, coreos, image-based]
+
+- id: linux-recent-008
+  topic: patching
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How do you keep a fleet patched for kernel CVEs when reboots are expensive?
+  answer: |
+    Separate the two problems: getting the fix applied, and getting it running.
+
+    Live patching covers the first for a defined subset of CVEs — `kpatch`/`kGraft` on RHEL, Canonical
+    Livepatch on Ubuntu. It replaces individual functions in the running kernel, so the CVE is fixed
+    without a reboot, but it does not cover every advisory, does not help with userland (glibc, OpenSSL,
+    openssh) and does not change `uname -r`. A host that is "livepatched" still accumulates reboot debt.
+
+    So the runbook is: apply updates automatically for security, live-patch what is covered, and then
+    schedule the reboot on a cadence rather than waiting for a crisis. `dnf needs-restarting -r` and
+    `/var/run/reboot-required` tell you the truth. `kexec` shortens the interruption by skipping
+    firmware and POST.
+
+    At fleet scale, reboot orchestration is the actual engineering: drain the node, reboot in batches
+    with a canary and a health check, and never reboot the whole cluster in one window. The metric worth
+    tracking is "oldest running kernel in the fleet", not "packages up to date".
+  tags: [livepatch, kernel, reboot, fleet]
+
+- id: linux-recent-009
+  topic: observability
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: When would you reach for eBPF tooling instead of top, iostat and journalctl?
+  answer: |
+    The classic tools aggregate. They tell you a process used CPU or a device had high `await`, not which
+    function, syscall or peer address caused it. eBPF attaches programs to kernel probes and tracepoints
+    with low overhead, so you can answer those questions on a live production host.
+
+    Typical uses:
+
+    - `bpftrace -e 'kprobe:vfs_read { @[comm] = count(); }'` — who is doing the I/O.
+    - `bpftrace -e 'tracepoint:syscalls:sys_enter_openat { @[comm, str(args->filename)] = count(); }'` —
+      which files a process opens, without `strace` stopping it.
+    - Latency histograms on filesystem or scheduler functions, which `iostat` can only summarise.
+    - Continuous, low-overhead collection (Cilium/Tetragon, Pixie, Parca) instead of a debug session.
+
+    Where it does not help: a process in `D` state on a dead NFS mount (the kernel call is stuck, not
+    slow), a full disk, or a misconfigured unit. Start with `vmstat`, `iostat`, `ss` and the journal —
+    they are cheaper and answer 80% of pages. Reach for eBPF when you know the resource but not the
+    culprit, and be aware that `kernel.unprivileged_bpf_disabled=1` is a common hardening setting, so
+    the tooling needs root or a privileged helper.
+  tags: [ebpf, bpftrace, tracing, observability]
+
+- id: linux-recent-010
+  topic: cloud networking
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What does a cloud host's network configuration look like today, and why does IMDS matter for security?
+  answer: |
+    On Ubuntu the interface is described in Netplan YAML under `/etc/netplan`, rendered into
+    systemd-networkd or NetworkManager; on Amazon Linux and RHEL images it is usually NetworkManager
+    keyfiles managed by `nmcli`. Both are DHCP-first, and both are regenerated — a hand-edited
+    `/etc/resolv.conf` or `/etc/network/interfaces` will be overwritten or ignored, which is the most
+    common "my DNS change did not stick" cause.
+
+    The security half is the instance metadata service. `169.254.169.254` hands out instance identity,
+    user-data (often containing bootstrap secrets), and **temporary IAM credentials** for the instance
+    role. Anything that can make an HTTP request from the host can read them, which turns a
+    server-side-request-forgery bug or a compromised container into cloud account access.
+
+    Mitigations: require IMDSv2 (session-token based, so a simple SSRF GET fails), set the hop limit to
+    1 so containers cannot reach it, and prefer workload identity over instance roles where the platform
+    offers it. Verify with `curl -s -H "X-aws-ec2-metadata-token: $TOKEN"
+    http://169.254.169.254/latest/meta-data/iam/security-credentials/` — if that works from inside a
+    container, so does an attacker.
+  tags: [netplan, cloud-init, imds, metadata]
+
+- id: linux-recent-011
+  topic: systemd hardening
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: Which systemd sandboxing directives would you add to a typical service unit, and what breaks first?
+  answer: |
+    Sandboxing is a set of `[Service]` directives that apply namespaces, seccomp and mount restrictions
+    per unit — no container runtime required:
+
+    ```ini
+    DynamicUser=yes
+    ProtectSystem=strict
+    ProtectHome=yes
+    PrivateTmp=yes
+    PrivateDevices=yes
+    NoNewPrivileges=yes
+    ProtectKernelTunables=yes
+    ProtectKernelModules=yes
+    ProtectControlGroups=yes
+    RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+    RestrictNamespaces=yes
+    SystemCallFilter=@system-service
+    ReadWritePaths=/var/lib/api
+    ```
+
+    What breaks first: `ProtectSystem=strict` makes the entire filesystem read-only except `/dev`,
+    `/proc`, `/sys` and declared `ReadWritePaths=`, so anything writing to its own install directory
+    fails; `DynamicUser=yes` allocates an ephemeral UID with no `/etc/passwd` entry, which breaks tools
+    that look up the user by name and any state left in a home directory; `PrivateTmp=yes` gives the
+    service its own `/tmp`, so a shared socket path between two units stops working.
+
+    The workflow is incremental: add the directives, `systemd-analyze security <unit>` for a score,
+    start the service, read `journalctl -u <unit>` for the `EPERM`/`EACCES` failures, then relax
+    exactly one setting. `SystemCallFilter=@system-service` is usually the last thing to enable, because
+    it surfaces in obscure crashes rather than clean errors.
+  tags: [systemd, sandboxing, hardening, dynamicuser]
+
+- id: linux-recent-012
+  topic: incident response
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: A host is suspected compromised. What are your first thirty minutes, given that it is a cloud VM?
+  answer: |
+    Preserve, isolate, then investigate — in that order, because a reboot or a terminated instance
+    destroys everything.
+
+    1. Snapshot the volume and, if the platform allows it, the memory/console output. Note the timestamp
+       and instance ID.
+    2. Isolate at the network layer rather than powering off: a rule allowing only your management IP
+       keeps the process tree and network state observable while stopping exfiltration.
+    3. Capture volatile state: `ps auxf`, `ss -tulpen`, `last -50`, `who`, `crontab -l`,
+       `systemctl list-units --failed`, `journalctl -b -o short-iso --no-pager > /root/incident.log`.
+    4. Find the entry point: `journalctl -u ssh | grep Accepted`, new `authorized_keys` entries, new
+       systemd units or timers, recent `.deb`/`.rpm` changes (`dpkg -V`, `rpm -Va`), and any process
+       running from `/tmp` or `/dev/shm`.
+    5. Assume credentials are gone: rotate SSH keys, application secrets, and — critically — the
+       instance role's credentials, since IMDS hands them to anything on the host.
+
+    Then rebuild rather than clean. The cloud-specific reflex that hurts is terminating the instance
+    immediately: it stops the attack and erases the evidence in the same action.
+  tags: [incident-response, forensics, cloud, imds]

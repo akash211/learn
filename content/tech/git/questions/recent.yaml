@@ -1,0 +1,415 @@
+- id: git-recent-001
+  topic: github-collaboration
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: What problem does a GitHub merge queue solve that "require branches to be up to date" does not?
+  answer: |
+    "Require branches to be up to date" guarantees a PR was tested against current `main`, but it
+    creates a race: two green PRs are each up to date, one merges, and the other instantly becomes
+    stale and must be updated and re-tested. At high merge rates the queue of rebases becomes the
+    bottleneck, and people start merging on stale bases anyway.
+
+    A merge queue serialises integration. When a PR is queued, GitHub builds a temporary branch
+    containing `main` plus the queued PRs, runs required checks on that combination, and only
+    merges the batch into `main` if they pass. Two PRs that are individually green but mutually
+    breaking are caught before either lands.
+
+    The cost is that CI runs an extra time per PR, on a synthetic ref. Workflows must handle the
+    event:
+
+    ```yaml
+    on:
+      pull_request:
+      merge_group:
+    ```
+
+    Otherwise the required checks never report on the queue branch and nothing merges. Queues also
+    work best with fast required checks; putting a 40-minute suite in the required set makes the
+    queue the slowest part of the pipeline. Availability depends on the repository's plan, so
+    confirm before designing around it.
+  tags: [merge-queue, branch-protection, ci]
+
+- id: git-recent-002
+  topic: github-collaboration
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: How do repository rulesets differ from classic branch protection rules?
+  answer: |
+    Classic branch protection is one rule per branch pattern, configured per repository, with a
+    fixed set of toggles. Rulesets generalise that model:
+
+    - **Targeting** by branch or tag pattern, with include/exclude lists, instead of one pattern
+      per rule.
+    - **Layering**: multiple rulesets can apply to the same ref, including organisation-level
+      rulesets inherited by repositories.
+    - **Bypass lists** that are explicit and auditable, rather than an implicit "admins can
+      bypass" checkbox.
+    - **Evaluate mode**, which reports what a ruleset *would* block without enforcing it — the
+      sane way to roll out a new requirement.
+    - Rules beyond merging: block force-pushes, restrict deletions, require signed commits, require
+      deployments to succeed, require linear history.
+
+    ```bash
+    gh api repos/{owner}/{repo}/rulesets
+    ```
+
+    The migration risk is assuming one mechanism overrides the other. When both exist, audit which
+    rules actually apply to `main` and remove the duplicates; a repository with half its policy in
+    classic protection and half in rulesets is one nobody can reason about. Store rulesets as code
+    (Terraform or the API) so changes are reviewable.
+  tags: [rulesets, branch-protection, governance]
+
+- id: git-recent-003
+  topic: github-actions
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: Why is OIDC the preferred way for GitHub Actions to authenticate to a cloud provider?
+  answer: |
+    A stored cloud key is a long-lived credential sitting in repository secrets. It works from any
+    machine that can read it, survives staff turnover, and is usually over-privileged because
+    narrowing it later breaks pipelines.
+
+    OIDC removes the stored secret. The job requests a short-lived identity token from GitHub, the
+    cloud provider verifies its signature and claims, and exchanges it for temporary credentials:
+
+    ```yaml
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/gha-deploy
+          aws-region: eu-west-1
+    ```
+
+    The trust policy can restrict the `sub` claim to a repository, a branch and an environment, so
+    only `repo:acme/api:ref:refs/heads/main` or a job running in the `production` environment can
+    assume the role. Credentials expire with the job.
+
+    Two caveats: `id-token: write` must be granted explicitly, and a token from a fork PR must not
+    be able to assume a deploy role — scope the trust policy to protected refs and environments,
+    not to `pull_request` events.
+  tags: [oidc, security, actions, cloud]
+
+- id: git-recent-004
+  topic: objects
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: Git supports SHA-256 object names. Why is SHA-1 still the default?
+  answer: |
+    Git can create a repository with SHA-256 object names:
+
+    ```bash
+    git init --object-format=sha256 myrepo
+    git rev-parse HEAD    # 64 hex characters instead of 40
+    ```
+
+    The object model is unchanged — blobs, trees, commits and tags hash the same way with a
+    different digest. The motivation is collision resistance: SHA-1 is broken in the sense that
+    chosen-prefix collisions are practical, even though Git's hardened SHA-1 implementation
+    (sha1dc) detects known attack patterns and refuses to store colliding objects.
+
+    SHA-1 remains the default because interoperability is the hard part, not the hash function.
+    Every hosting provider, CI system, code scanner, IDE plugin and internal script that assumes
+    40-character hashes or hardcodes SHA-1 in a protocol message has to be updated. A repository
+    cannot mix the two formats, and converting means rewriting every object, so the migration is
+    per-repository and disruptive.
+
+    In practice: new repositories can choose SHA-256 if every tool in the chain supports it, and
+    most teams do not need to care yet. For interview purposes, the interesting part is that the
+    hash length is not baked into the object model — only into naming.
+  tags: [sha256, object-format, interoperability]
+
+- id: git-recent-005
+  topic: monorepos
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: How do partial clone and sparse checkout make a large monorepo usable?
+  answer: |
+    They attack two different costs: object transfer and working-tree size.
+
+    **Partial clone** omits objects and fetches them on demand:
+
+    ```bash
+    git clone --filter=blob:none <url>      # no file contents; history and trees present
+    git clone --filter=tree:0 <url>         # no trees either; commit graph only
+    ```
+
+    A blobless clone still supports `git log`, `git blame` (fetching blobs lazily) and normal
+    branching, while cutting the initial download. A treeless clone is for CI jobs that need a
+    single commit. Both require server support, which GitHub and modern Git servers provide.
+
+    **Sparse checkout** reduces the working tree and index to selected directories:
+
+    ```bash
+    git sparse-checkout set apps/web libs/ui
+    git sparse-checkout add services/billing
+    ```
+
+    Cone mode takes directories, which is what makes it fast; `--sparse-index` (Git 2.34+) keeps
+    the index sparse too, so `git status` does not scale with excluded files.
+
+    The combination is what `scalar clone` configures for very large repositories. The trap is CI:
+    a partial clone can fail when a tool walks history or reads blobs outside the filter, and
+    version-derivation scripts need a full clone or an unshallow step.
+  tags: [partial-clone, sparse-checkout, monorepo]
+
+- id: git-recent-006
+  topic: workflows
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: What are stacked pull requests, and what makes them hard to maintain?
+  answer: |
+    Stacked PRs split a large change into a chain of dependent branches: `feature-1` targets
+    `main`, `feature-2` targets `feature-1`, and so on. Each PR's diff shows only its own layer, so
+    reviewers see a small change instead of a 2,000-line one.
+
+    The mechanics are ordinary Git: branch from the previous branch, open the PR with
+    `--base feature-1`, merge bottom-up. The problem is that every merge rewrites the base of the
+    layers above it:
+
+    - Squash-merging `feature-1` creates a new commit on `main` that is not the parent of
+      `feature-2`, so the next PR shows the previous layer's changes again until it is rebased
+      onto the new `main`.
+    - `git rebase --onto main feature-1 feature-2` is the manual fix, and `--update-refs` keeps
+      the sibling branches pointing at rewritten commits.
+    - Review comments and required checks have to be re-run for each layer.
+
+    Hosting support is limited, so teams either accept the rebase discipline, use a tool that
+    manages the stack (Graphite, `ghstack`, `git-branchless`), or avoid stacks and split by
+    independent, mergeable slices. The interview point is that stacking trades review size for
+    integration complexity, and the complexity lands on whoever merges first.
+  tags: [stacked-prs, rebase, review]
+
+- id: git-recent-007
+  topic: releases
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: How does a release bot derive versions and changelogs from conventional commits?
+  answer: |
+    The bot reads commits since the last tag, classifies them by message, computes the next
+    version, and opens a release PR containing the version bump and changelog. When that PR
+    merges, it tags the commit and publishes the release.
+
+    The classification follows Conventional Commits:
+
+    ```
+    feat(upload): retry transient 5xx        → minor
+    fix(auth): refresh before expiry         → patch
+    feat(api)!: drop /v1/upload              → major
+    chore: bump dev dependencies             → no release
+    ```
+
+    `!` or a `BREAKING CHANGE:` footer marks a major change. Tools such as release-please,
+    semantic-release, changesets and git-cliff implement this, with different levels of opinion
+    about where the version lives.
+
+    What makes it work is not the tool but the discipline: commit messages become an API of the
+    release process, so squash-merge titles must be conventional and PR checks must enforce it.
+    Without that, the generator silently omits changes or mislabels them, which is worse than a
+    hand-written changelog because it looks authoritative.
+
+    For monorepos, configure one component per package with its own tag prefix, and make the
+    release PR update all affected packages together.
+  tags: [conventional-commits, release-automation, changelog]
+
+- id: git-recent-008
+  topic: supply-chain
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: What are build provenance attestations, and what do they actually prove?
+  answer: |
+    An attestation is a signed statement that a particular artefact was produced by a particular
+    workflow, from a particular commit, on a particular runner. GitHub Actions can generate one
+    during the build:
+
+    ```yaml
+    permissions:
+      id-token: write
+      contents: read
+      attestations: write
+    steps:
+      - uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: dist/app
+    ```
+
+    The signature comes from the workflow's OIDC identity, and the statement follows the in-toto
+    provenance format, so it can be verified offline:
+
+    ```bash
+    gh attestation verify dist/app --repo acme/api
+    ```
+
+    What it proves: this exact file was built by this workflow, from this commit, in this
+    repository. What it does not prove: that the code is safe, that the build was reproducible,
+    or that the artefact was not replaced after signing — verification has to happen at the point
+    of consumption, against a digest you already trust.
+
+    The practical value is closing the gap between "an artefact exists in a registry" and "we can
+    trace it to a reviewed commit". That is why provenance is increasingly required for container
+    images and release binaries, and why signing must be tied to an identity that cannot be forged
+    by a fork PR.
+  tags: [attestations, provenance, supply-chain, actions]
+
+- id: git-recent-009
+  topic: github-actions
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: When do you use a reusable workflow rather than a composite action?
+  answer: |
+    They scale different things.
+
+    A **composite action** bundles steps into one `uses:` unit that runs inside the caller's job.
+    It shares the caller's filesystem, environment and `GITHUB_TOKEN`, and is right for "install
+    and configure this toolchain" or "run our standard lint command":
+
+    ```yaml
+    runs:
+      using: composite
+      steps:
+        - run: pip install -r requirements-dev.txt
+          shell: bash
+    ```
+
+    A **reusable workflow** is a whole workflow invoked with `workflow_call`, with its own jobs,
+    runners and permissions. It is right for "run the standard test pipeline" or "deploy to
+    staging", where you want job-level parallelism, matrix strategies and a separate permission
+    boundary:
+
+    ```yaml
+    jobs:
+      test:
+        uses: ./.github/workflows/test.yml
+        with:
+          python-version: "3.12"
+        secrets: inherit
+    ```
+
+    The practical differences: a composite action cannot define jobs, cannot set its own
+    `permissions`, and shares the caller's workspace; a reusable workflow cannot see the caller's
+    `env` implicitly, must declare inputs and secrets, and adds a layer of indirection to logs.
+
+    The common failure is building a giant reusable workflow that every repository calls with
+    fifteen booleans. At that point the interface is the problem, and two smaller workflows are
+    easier to maintain.
+  tags: [reusable-workflows, composite-actions, actions]
+
+- id: git-recent-010
+  topic: maintenance
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: Why does a large repository need more than occasional git gc?
+  answer: |
+    `git gc` repacks objects and prunes unreachable ones, but it does not address the costs that
+    make large repositories slow: ancestry queries, path-limited history and object lookup across
+    many packs.
+
+    Modern Git has dedicated maintenance tasks:
+
+    ```bash
+    git maintenance start        # register scheduled maintenance
+    git maintenance run          # run the configured tasks now
+    git commit-graph write --reachable
+    git multi-pack-index write
+    ```
+
+    - **commit-graph** stores commit parents, generation numbers and root-tree hashes in a compact
+      file, so `git log --graph`, `git merge-base` and `git describe` stop walking objects. This is
+      usually the largest single win on a long history.
+    - **multi-pack-index** gives one lookup structure across many packfiles, avoiding a scan per
+      pack after incremental fetches.
+    - **incremental repack** keeps packs from proliferating without rewriting the whole store.
+    - **prefetch** updates refs in the background, so `git fetch` at the start of the day is cheap.
+
+    Running `git gc --prune=now` occasionally is not a substitute: it is expensive, it can prune
+    objects you wanted, and it does nothing for query performance once the repository is large
+    enough. Background maintenance is the intended mechanism, and `scalar` configures it
+    automatically.
+  tags: [maintenance, commit-graph, performance]
+
+- id: git-recent-011
+  topic: github-actions
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: What are the failure modes of dependency caching in CI, and how do you avoid them?
+  answer: |
+    Caches are keyed blobs with branch-aware scope, and they are immutable: once a key exists, a
+    later job writing the same key does not replace it. Most cache bugs follow from those two
+    properties.
+
+    Failure modes:
+
+    - **Key does not include dependency state.** `key: pip` serves the first cache forever.
+      Include `hashFiles('**/requirements*.txt')` or the lockfile hash.
+    - **Restore keys are too broad.** `restore-keys: pip-` restores a cache from an unrelated
+      branch and produces version skew that looks like a code bug.
+    - **Cache written by a failing build.** A half-installed `node_modules` or a corrupted wheel
+      cache is restored by every later run. Write caches only from successful steps, and key them
+      by the tool version too.
+    - **Secrets in the cache.** Caches are not encrypted per-user; never store credentials,
+      `.npmrc` tokens or build outputs containing them.
+    - **Assuming a cache is a build artifact.** Caches are evicted and are not guaranteed to
+      exist; a job must still work on a cold cache.
+
+    ```yaml
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: pip-${{ runner.os }}-${{ hashFiles('**/requirements*.txt') }}
+        restore-keys: pip-${{ runner.os }}-
+    ```
+
+    Prefer the built-in `cache:` input on `setup-python`/`setup-node`; it implements the same
+    pattern correctly. Scope matters for PRs: a PR can restore base-branch caches but writes are
+    isolated to the PR, so a fork cannot poison `main`'s cache — but a merged PR's cache does not
+    help `main` either.
+  tags: [caching, ci, actions, reliability]
+
+- id: git-recent-012
+  topic: review
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: How do you review a pull request that has been force-pushed several times?
+  answer: |
+    Start from the fact that a force-push rewrites commits: line comments on the old commits are
+    outdated, and "changes since your last review" may be meaningless if the base was rebased.
+
+    The tool built for this is `git range-diff`:
+
+    ```bash
+    git fetch origin
+    git range-diff origin/main...old-review-tip origin/main...new-tip
+    ```
+
+    It matches the two versions of the series commit by commit and shows what changed in each
+    patch, including commit message edits and reorderings. That answers "did the author only
+    rebase, or did they change behaviour?" far better than re-reading the whole diff.
+
+    Practical review hygiene:
+
+    - Ask authors to avoid force-pushing during an active review; add commits instead, and let the
+      PR's squash merge clean up. If a rebase is required by branch protection, say so in the PR.
+    - Use `git range-diff` for the review, not the "force-pushed" timeline entry, which only tells
+      you it happened.
+    - After a rebase, re-check that tests still cover the resolved conflicts; a conflict resolution
+      is new code.
+    - Prefer `--force-with-lease` when pushing, and never rewrite a branch someone else has
+      checked out and built on.
+
+    The process fix is smaller PRs and shorter lifetimes; force-push archaeology is a symptom of a
+    branch that lived too long.
+  tags: [range-diff, review, force-push]

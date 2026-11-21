@@ -1,0 +1,268 @@
+- id: r-scn-001
+  title: Finance says the monthly revenue report overstates by 8%
+  technologies: [r, sql]
+  difficulty: intermediate
+  prompt: |
+    A monthly revenue report is produced by an R script: read orders from the warehouse, join a
+    price table, join a customer table for segment, summarise by segment, render a Quarto document.
+    Finance reconciles the total against the ledger and finds the R report is 8% higher, every
+    month, consistently. The SQL query the script runs returns the correct total when run by hand.
+    Nobody has changed the script recently, and the difference is larger in months with more
+    promotions.
+
+    The pipeline runs `orders |> left_join(prices, by = "product_id") |> left_join(customers, by =
+    "customer_id")` and then `summarise(revenue = sum(revenue), .by = segment)`.
+
+    How do you find the cause, and what do you change?
+  approach: |
+    The consistent, promotion-correlated overstatement points at row multiplication, not at a wrong
+    calculation: the SQL total is right, so the difference is created after the data leaves the
+    warehouse.
+
+    1. Check row counts at each step, not at the end. `nrow()` before and after each join, plus
+       `count(prices, product_id) |> filter(n > 1)`. A price table with a promotional row per
+       product-month turns a one-to-one join into one-to-many, and every order then contributes the
+       promotional price *and* the list price.
+    2. Confirm the mechanism: compare `sum(revenue)` grouped by whether the order date falls in a
+       promotion window. If the excess appears only there, it is the duplicate price rows.
+    3. Fix the join properly, not with `distinct()`. Either filter `prices` to the applicable
+       version before joining (`filter(valid_from <= order_ts, order_ts < valid_to)`), or use an
+       as-of join with `join_by(product_id, order_ts >= valid_from, order_ts < valid_to)`. Then
+       assert `relationship = "many-to-one"` so a future duplicate errors instead of inflating.
+    4. Add the guard permanently: `stopifnot(nrow(joined) == nrow(orders))` after the price join,
+       and a reconciliation line in the report — report total versus ledger total, with a tolerance,
+       rendered visibly rather than logged.
+    5. Check the second join for the same problem, and check `filter()` earlier in the pipeline for
+       dropped rows with missing keys — an 8% overstatement and a silent row loss can coexist and
+       partially cancel.
+  red_flags:
+    - Rounding or applying a different currency conversion as the first hypothesis.
+    - Fixing it with `distinct()` on the order ID, which hides the fan-out and picks an arbitrary
+      price.
+    - Adding `sum(revenue) / 1.08` or any unexplained adjustment to match the ledger.
+    - Changing the SQL because the query must be wrong, when the query total already matched.
+    - Adding `multiple = "all"` to silence the warning instead of asserting cardinality.
+
+- id: r-scn-002
+  title: An R job that handled 50,000 rows now runs out of memory on 8 million
+  technologies: [r, sql]
+  difficulty: advanced
+  prompt: |
+    A scoring job reads a claims extract, applies a series of dplyr steps, fits a per-provider
+    model, writes a CSV. It ran in four minutes on the 50,000-row development extract. In production
+    it processes 8 million rows, the container has 16 GB, and the job is OOM-killed after about
+    twenty minutes. Memory climbs steadily rather than spiking.
+
+    The code does the following: `read.csv()` of a 3 GB file, `rbind()` inside a loop over twelve
+    monthly files, `mutate()` with several `ifelse()` calls, `filter()` to a subset, a
+    `group_by(provider) |> do(...)` style loop fitting a model per provider, and `write.csv()` at
+    the end. There is a `gc()` call at the end of each loop iteration.
+
+    Where does the memory go, and what is the plan?
+  approach: |
+    Steady growth with a bounded working set is the signature of retained copies, not of a single
+    large allocation.
+
+    1. Measure first. `Rprof(memory.profiling = TRUE)` or `profvis` on a 500,000-row sample, and
+       `gc()`'s max-used column for the peak. Do not optimise the model loop before knowing whether
+       the reads or the copies dominate.
+    2. `rbind()` in a loop is quadratic: each call copies every column of every previous result.
+       Replace with `map(files, read_csv) |> list_rbind()` or, better, `arrow::open_dataset()` over
+       the directory so nothing is concatenated in memory.
+    3. `read.csv()` guesses types, reads every column, and builds a full copy. `readr::read_csv()`
+       with `col_types` and `col_select` reads only what is needed and types the rest. If the file
+       really is 3 GB of text, Parquet or DuckDB is the right source.
+    4. Integer columns stored as doubles cost twice the memory. Coerce IDs and counts to integer,
+       and drop unused columns immediately after reading.
+    5. The per-provider model loop holds a fitted model object plus a data slice per provider. Use
+       `nest()` + `map()` and discard each model, or accumulate only the coefficients
+       (`map_dbl(models, \(m) coef(m)[["(Intercept)"]])`).
+    6. `gc()` at the end of each iteration cannot free what is still referenced by the accumulating
+       result, and it costs time. Removing it is not the fix, but its presence signals that nobody
+       profiled.
+    7. Fix the write: `write.csv()` materialises the output as character in memory and is slow.
+       `readr::write_csv()` or `arrow::write_parquet()` stream.
+  red_flags:
+    - Raising the container limit to 64 GB as the fix.
+    - Adding `gc()` more often, or `rm()` without understanding what still references the objects.
+    - Rewriting everything in `data.table` before measuring, then finding the bottleneck was the CSV
+      parse.
+    - Parallelising the provider loop, which multiplies peak memory by the worker count.
+    - Blaming R itself rather than the three specific copying patterns in the code.
+
+- id: r-scn-003
+  title: A churn model scores AUC 0.86 in R and 0.71 in production
+  technologies: [r, python]
+  difficulty: advanced
+  prompt: |
+    A churn model is fitted in R with `tidymodels` on two years of customer data. Cross-validated
+    AUC is 0.86 and the validation curve looks healthy. The model is exported and scored weekly by a
+    Python service on the current customer snapshot. In production the AUC against realised churn is
+    0.71, and the top decile by predicted risk churns at only twice the base rate rather than the
+    five times seen in validation.
+
+    The features include tenure, plan, monthly usage, support tickets in the last 30 days, a
+    `days_since_last_login` value, and a target-encoded `country` column. The split was
+    `initial_split(strata = churned)` on the full dataset. Preprocessing is a `recipe` with
+    `step_normalize()` and `step_other()`.
+
+    What is wrong, and how do you rebuild it?
+  approach: |
+    The gap is too large for distribution shift alone; assume leakage and pre-processing skew until
+    proven otherwise.
+
+    1. Audit the split. A random split on customer-months puts the same customer on both sides, and
+       with a time-varying target that leaks future information into training. Split by time (train
+       on months 1-18, validate on 19-24) or by customer, never randomly across a panel.
+    2. Audit the target encoding. If `country` was encoded using churn rates computed on the full
+       dataset, every row carries information from its own outcome and from the validation set. It
+       must be computed inside the resampling folds (`step_target_encoding()` applied per fold),
+       with smoothing for small countries.
+    3. Audit every feature for availability at scoring time. `days_since_last_login` measured from
+       the snapshot is fine; measured from the churn date onward, it is the outcome in disguise.
+       Support tickets must be counted in the 30 days before the snapshot, not before the label.
+    4. Check the score-time transform. `step_normalize()` uses the training means and standard
+       deviations; if the Python service recomputes them on the scoring batch, every feature is
+       subtly wrong. Export the preprocessing with the model — a `workflow` plus `bundle`, or
+       explicit centring and scaling constants — and score through it rather than reimplementing it.
+    5. Check the comparison itself. Production AUC against realised churn measures something
+       different from cross-validated AUC on a curated label: churn timing lags, customers are
+       censored, and the population drifts. Recompute validation AUC on the time-based holdout with
+       the production label definition before concluding the model is broken.
+    6. Re-baseline: refit with the time split and fold-safe encoding, then compare against a simple
+       logistic regression on a handful of features. If the complex model no longer beats it, the
+       complexity was fitting the leak.
+  red_flags:
+    - Retraining on more data, or tuning hyperparameters, to close the gap.
+    - Concluding that production data is just different, without checking feature availability.
+    - Fixing it by recalibrating the probabilities, which does not change ranking at all.
+    - Reimplementing the preprocessing in Python to make it match, without exporting the training
+      constants.
+    - Reporting the cross-validated number again as evidence the model is fine.
+
+- id: r-scn-004
+  title: A scheduled report's numbers changed after a package upgrade
+  technologies: [r]
+  difficulty: intermediate
+  prompt: |
+    A weekly Quarto report renders on a Linux VM via cron, reading from Postgres. Last week an
+    engineer ran `install.packages()` to fix an unrelated issue, which upgraded `dplyr`, `tidyr` and
+    `ggplot2`. This week's report rendered without error, but the average order value KPI dropped by
+    3%, two charts changed their axis order, and one table now shows a column of `NA`s.
+
+    There is no `renv.lock`, no CI, and the VM's R version is whatever it came with. The report
+    renders in 40 seconds and the cron job only checks that the file exists.
+
+    What happened, and what do you change?
+  approach: |
+    Treat it as three separate faults that arrived together, then fix the process that allowed them.
+
+    1. Establish what changed: `sessionInfo()` from a previous render if one was saved, the package
+       changelogs, and `git log` on the `.qmd`. Without a previous `sessionInfo()`, restore the older
+       versions in a scratch library and diff the output.
+    2. The `NA` column: `separate()`/`extract()` behaviour and dplyr's join and grouping defaults
+       have changed across versions. Reproduce with the old versions to identify the step rather than
+       guessing from the symptom.
+    3. The axis order: factor level ordering is the usual cause, and a package that changed how `NA`
+       or unused levels are handled changes the plot. An explicit `fct_reorder(..., .fun = ...)` or
+       an explicit `levels()` assignment removes the dependence on defaults.
+    4. The 3% KPI change: look for a row-count change, not rounding. Check whether a join now drops
+       or duplicates rows (`relationship`, `na_matches`, or a changed `filter()` on `NA`); `nrow()`
+       after each step under both versions settles it.
+    5. Fix forward, then fix the process: `renv::init()`, `renv::snapshot()`, and commit
+       `renv.lock`, `.Rprofile` and `renv/activate.R`; install with `renv::restore()`; pin the R
+       version in a `rocker/r-ver` image.
+    6. Make the render fail loudly: check the exit code in cron, assert `nrow() > 0` and the
+       expected column types inside the document, and compare headline KPIs against last week within
+       a tolerance.
+  red_flags:
+    - Downgrading packages by hand until the number matches, with no lockfile afterwards.
+    - Editing the KPI query to restore the old value without finding the changed row count.
+    - Adding `warning = FALSE` or `error = TRUE` to the document to make the render clean.
+    - Blaming the database when the SQL is unchanged and the R packages are not.
+    - Accepting "it renders, therefore it works" as the success criterion.
+
+- id: r-scn-005
+  title: A Shiny dashboard times out when the team starts using it at 9am
+  technologies: [r, sql]
+  difficulty: advanced
+  prompt: |
+    A Shiny app shows sales by region with four filters. Each session runs a query against Postgres
+    in a reactive that depends on all four filters, then renders three plots and a `DT` table. With
+    two users it is instant. At 9am, when fifteen people open it, loads take 40 seconds and some
+    sessions error with a timeout. CPU on the host stays low. Memory grows through the day.
+
+    The app runs under `shiny::runApp()` behind a reverse proxy on a 4-core VM. The query is a
+    `SELECT *` from a 200-million-row table, filtered in R after loading.
+
+    Where is the bottleneck, and what do you change?
+  approach: |
+    Low CPU with high latency means the processes are waiting, and one R process serves one session
+    at a time.
+
+    1. Confirm the architecture: a single R process handles one reactive evaluation at a time, so
+       fifteen concurrent sessions serialise behind the slowest query. CPU is low because the process
+       is blocked on the database, not computing.
+    2. Fix the query before scaling anything. `SELECT *` of 200 million rows into R, then filtering
+       in dplyr, is the whole problem: push the filters into SQL (dbplyr verbs on a `tbl()`), select
+       only the needed columns, and index the filter columns. If this is a fixed set of views, a
+       pre-aggregated summary table refreshed nightly is better still.
+    3. Cache the repeated work: `bindCache()` on the reactive, keyed on the filter values plus a
+       data version, so fifteen users on the default view cost one query. `req()` to hold evaluation
+       until inputs are valid.
+    4. Move the slow call off the event loop only if needed: `future` + `promises` with a
+       `multisession` plan lets one session wait without blocking others, at the cost of one worker's
+       memory per concurrent evaluation.
+    5. Scale by processes, not threads: several R processes behind a load balancer (Shiny Server,
+       Posit Connect, or several containers), each with its own connection pool. Budget Postgres
+       connections accordingly — fifteen sessions times four workers will exhaust a small pool.
+    6. Watch memory per session: each holds its own copy of anything it loads, so a 500 MB frame is
+       7.5 GB at fifteen users. Shrink it, share it through the database or Arrow, or precompute.
+  red_flags:
+    - Adding cores to the VM, which does nothing for a single-threaded blocked process.
+    - Wrapping the query in `tryCatch` and returning an empty data frame.
+    - Increasing the proxy timeout so 40 seconds becomes a 60-second wait.
+    - Caching without a key, so every user sees the first user's filters.
+    - Rewriting the app in another framework before fixing the `SELECT *`.
+
+- id: r-scn-006
+  title: Two analysts run the same script and get different numbers
+  technologies: [r, sql]
+  difficulty: intermediate
+  prompt: |
+    A script computes monthly revenue by region and writes a CSV. Analyst A runs it on a laptop
+    (macOS, R 4.3, packages installed over two years) and gets 4,182,930 euros. Analyst B runs it on
+    the Linux analysis server (R 4.4, fresh install) and gets 4,187,451. The difference is 0.1% and
+    concentrated in one region. Both read the same database with the same query.
+
+    The script does `read.csv()` on a reference file for region mapping, `merge()` the reference with
+    the fact table, `aggregate()` revenue by region, `round()` to two decimals, and `write.csv()`.
+
+    How do you find the difference, and how do you stop it recurring?
+  approach: |
+    A 0.1% difference confined to one region is a mapping or ordering difference, not floating-point
+    noise — but rule out the cheap explanations in order.
+
+    1. Compare inputs, not outputs. Hash the reference CSV on both machines with `tools::md5sum()`,
+       and dump the query result to a file with an explicit `arrange()` so row order is comparable.
+    2. Check the join. `merge()` sorts by the key and silently coerces types; if `region_code` is
+       integer on one machine (from `read.csv()` inference) and character on the other (because one
+       value has a leading zero), the matches differ. Read with explicit `col_types` and cast both
+       sides to character.
+    3. Check for duplicate keys in the reference: `merge()` fans out, and the extra rows land in
+       whichever region the duplicate belongs to. That matches the symptom exactly — one region,
+       small percentage.
+    4. Check `round()` and locale. `round()` is half-to-even and locale-independent, but
+       `write.csv()` formatting follows `LC_NUMERIC`; a comma decimal separator changes every
+       downstream sum. `Sys.getlocale()` on both machines.
+    5. Diff `sessionInfo()`. Version changes in `dplyr`/`data.table` grouping and `NA` handling
+       explain differences that persist after the mapping is fixed.
+    6. Make it deterministic: an `renv` lockfile, explicit `col_types`, `join_by()` with
+       `relationship`, `arrange()` before writing, `LC_NUMERIC=C` in the job, and an assertion
+       comparing the region total against the source query.
+  red_flags:
+    - Attributing it to floating point without checking the affected region for duplicate keys.
+    - Comparing the final CSVs in a spreadsheet and adjusting one by 0.1%.
+    - Installing the same package versions by hand on both machines with no lockfile.
+    - Re-running until the numbers agree.
+    - Concluding the database is non-deterministic because the query has no `ORDER BY`.

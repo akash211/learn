@@ -1,0 +1,296 @@
+- id: cicd-scn-001
+  title: A pipeline that took nine minutes now takes forty, and developers have started batching changes
+  technologies: [cicd, docker]
+  difficulty: intermediate
+  prompt: |
+    A team of six grew to twenty-two over a year. The pull-request pipeline used to finish in about
+    nine minutes; it now takes forty on a good day and over an hour when several people push at
+    once. Developers have responded predictably: they batch unrelated changes into one large pull
+    request, merge without waiting for green, and re-run failed jobs rather than read them.
+
+    The workflow has grown to eleven jobs. A single `build` job does checkout, installs
+    dependencies, builds the image and pushes it to the registry on every branch. Nine test jobs
+    each run `pip install -r requirements.txt` from scratch, then the full test suite, even though
+    they were split by directory. A `lint` job runs after the tests "so it does not waste time
+    early". The matrix builds Python 3.9 through 3.13 on two database versions. There is no
+    concurrency group, so every push to a branch starts a new run that runs to completion.
+  approach: |
+    Separate queue from execution before changing anything: compare the trigger timestamp with the
+    first step's start, and the last step's end with the run's completion. If the gap is large, the
+    problem is capacity, not the workflow.
+
+    1. **Cancel superseded runs.** A concurrency group per ref with `cancel-in-progress: true` for
+       pull requests removes most of the duplicate work at once — every superseded push is a full
+       pipeline that nobody will read.
+    2. **Fix the ordering.** Lint and type checks cost seconds and belong first. A pipeline that
+       runs them last spends its most expensive minutes on changes that a ten-second check would
+       have rejected.
+    3. **Stop installing nine times.** A single `setup` job that produces a wheel or a virtualenv
+       artefact, downloaded by the test jobs, replaces nine cold `pip install` runs. This is the
+       largest single win in most Python pipelines, and it is why the job split was not helping.
+    4. **Cache what is cacheable.** `actions/cache` keyed on the lockfile hash for the install
+       step, and a registry-backed BuildKit cache (`--cache-from type=registry`) for the image, so
+       a cold runner is not actually cold. The build currently re-runs on every branch push and
+       pushes an image per branch, which is both slow and a registry full of unreferenced tags.
+    5. **Shrink the matrix to what is supported.** Testing 3.9–3.13 on two databases is twenty
+       combinations, most of which no deployment uses. Test the versions in production plus the one
+       being adopted, and put the rest on a nightly job.
+    6. **Re-measure at p50 and p95**, and put the number in the workflow file so the next
+       regression is visible in review.
+
+    The cultural fix follows the technical one: once the pipeline is under ten minutes, "merge
+    without green" stops being rational, and branch protection can enforce it without a revolt.
+  red_flags:
+    - Buying bigger runners or more concurrency before looking at what the pipeline actually does.
+    - Splitting into more jobs without sharing the built artefact, which multiplies install time.
+    - Deleting the matrix and losing coverage of the runtime that actually runs in production.
+    - Adding retries so the forty minutes become fifty but look greener.
+    - Telling developers to batch less without changing the feedback loop that made them batch.
+
+- id: cicd-scn-002
+  title: Every deploy produces a burst of 502s and a handful of 500s, and the team has normalised it
+  technologies: [cicd, kubernetes]
+  difficulty: intermediate
+  prompt: |
+    A service runs six replicas behind an ingress. Each deploy is a rolling update with
+    `maxUnavailable: 25%` and no `maxSurge` set explicitly. Dashboards show a spike of 502s for
+    about ninety seconds at the start of every rollout, and a smaller number of 500s spread through
+    the rollout. The team calls it "deploy noise" and has stopped investigating.
+
+    The container's readiness probe is `httpGet /health` on port 8080 with `initialDelaySeconds: 2`
+    and `periodSeconds: 10`. `/health` returns 200 as soon as the HTTP server binds, before the
+    database pool is initialised. There is no `preStop` hook and `terminationGracePeriodSeconds`
+    is the default. The application handles `SIGTERM` by closing the listener and exiting
+    immediately. A recent change added a second version of an internal API endpoint and removed
+    the old one in the same release.
+  approach: |
+    Two separate failure classes, and the fix for each is different.
+
+    1. **502s at the start** are almost always capacity and readiness. `maxUnavailable: 25%` on six
+       replicas takes one and a half pods out of rotation before replacements are ready, so the
+       fleet is briefly at 75% capacity; if the service is latency-sensitive, that alone produces
+       errors. Set `maxUnavailable: 0` with `maxSurge: 1`, and check that the readiness probe
+       reflects real readiness rather than "the process started".
+    2. **502s during the rollout** come from endpoints that are terminating while still receiving
+       traffic. The pod closes its listener on `SIGTERM`, but the ingress takes a few seconds to
+       remove it from the endpoint list. Add a `preStop` sleep longer than that propagation delay,
+       and make the shutdown sequence "stop accepting, drain in-flight, exit" rather than "close
+       the listener".
+    3. **The 500s** are the mixed-version problem. Removing an endpoint in the same release that
+       adds its replacement means old pods call a route that new pods no longer serve. Split it:
+       add the new route, keep both for a release, migrate callers, then remove. The same applies
+       to response fields and database columns.
+    4. **Verify the timeline** rather than assuming: correlate the 502 timestamps with pod
+       creation and deletion events (`kubectl get events`), and the 500s with which pod served
+       them. The two spikes should have different shapes if the diagnosis is right.
+    5. **Make it a gate**: run a synthetic request loop during the rollout in staging and fail the
+       deploy on any 5xx. That converts "deploy noise" into a regression test.
+  red_flags:
+    - "Adding retries at the client and calling the 502s handled."
+    - Increasing `replicas` so the percentage removed is smaller, without fixing readiness.
+    - Concluding the ingress is broken because the errors appear there.
+    - Rolling back and forward repeatedly to "see if it settles".
+    - Removing the readiness probe to make pods ready faster.
+
+- id: cicd-scn-003
+  title: A migration that normally takes 80 ms froze the orders table for four minutes at peak
+  technologies: [cicd, postgresql]
+  difficulty: advanced
+  prompt: |
+    A deploy at 14:05 shipped a migration adding a `NOT NULL` column with a default to the `orders`
+    table, which has about 40 million rows. On staging, with 200k rows, it took 80 ms. In
+    production the API latency went to 30 seconds, connection pools saturated, and the on-call
+    engineer saw thousands of sessions in `pg_stat_activity` waiting on a lock. The migration
+    session itself was `active` for four minutes before completing. Rollback of the deploy was
+    attempted, but the previous version failed to start because it used a different migration
+    tool version and refused to run against the newer schema history.
+
+    The pipeline runs migrations from an init container before the new pods start, which means all
+    six replicas' init containers ran the migration concurrently on the previous deploy until an
+    advisory lock was added.
+  approach: |
+    The failure is lock queueing, not a slow `ALTER`.
+
+    1. **Diagnose with `pg_locks` and `pg_stat_activity`**: one `ALTER TABLE` holding or waiting for
+       `ACCESS EXCLUSIVE`, and every subsequent query queued behind it because Postgres grants
+       locks in order. `pg_blocking_pids()` names the blocker — usually a long-running report, an
+       idle-in-transaction connection, or a vacuum.
+    2. **The fix is `lock_timeout`**, set on the migration session. With `SET lock_timeout = '3s'`,
+       the migration fails instead of building a queue, the table stays available, and the deploy
+       can retry. `statement_timeout` guards the other direction.
+    3. **The `NOT NULL` was the wrong shape.** On a large live table, add the column nullable, set
+       a default if needed (metadata-only for non-volatile defaults on modern Postgres), backfill in
+       batches, then add a `CHECK (col IS NOT NULL) NOT VALID` and `VALIDATE CONSTRAINT`, which
+       takes a light lock. From PG 12 the validated check lets `SET NOT NULL` skip the full scan.
+    4. **Migrations must not run from every replica.** One job, one advisory lock, and the deploy
+       gated on its success — the init-container pattern races and produces partial schema. The
+       pipeline should fail the rollout if the migration fails, not let pods crash-loop.
+    5. **The rollback failure is separate and worse.** A tool-version mismatch in the migration
+       container made the previous release unable to start. Pin the migration tool with the
+       application, keep schema history forward-compatible, and make the rule explicit: roll back
+       code only, fix schema forward.
+    6. **Test on production-shaped data.** A migration timed on 200k rows says nothing about 40
+       million. Restore a snapshot, measure lock acquisition and duration under load, and add a
+       migration linter (Squawk, Atlas) to the pipeline for the obvious locking mistakes.
+  red_flags:
+    - Running the migration again immediately, at the same traffic level.
+    - Adding a replica or restarting the application as the first response.
+    - Concluding the database is undersized because the table is large.
+    - Rolling back by dropping the column, which destroys data and still does not restore the old
+      pods.
+    - Leaving `lock_timeout` out because "the staging run was fast".
+
+- id: cicd-scn-004
+  title: A registry token and a customer API key appeared in a public build log and in an image layer
+  technologies: [cicd, docker]
+  difficulty: advanced
+  prompt: |
+    A contractor reviewing a failed build notices a registry password printed in the job log, and a
+    scan of the published image finds a customer's API key in a layer. The pipeline runs on
+    pull requests from forks as well as on `main`, and the affected workflow uses
+    `pull_request_target` because it needs to comment on the PR. It checks out
+    `${{ github.event.pull_request.head.sha }}` to build.
+
+    The registry password came from a step that ran `docker login -p "${{ secrets.REGISTRY_TOKEN }}"`
+    and then, on failure, `env` for debugging. The API key was copied into the image by
+    `COPY .env .` because "the build needs it", and a later `RUN rm .env` was assumed to remove it.
+    Twelve tags in the registry point at digests containing the key, and the registry is readable
+    by everyone in the company.
+  approach: |
+    Contain, rotate, then fix — in that order, and without deleting evidence.
+
+    1. **Rotate both credentials now.** Assume compromise: the registry token has been in a log
+       that many people can read, and the API key has been in a pullable image for an unknown
+       period. Revoke first; every other step is hygiene.
+    2. **Scope the exposure.** Which digests contain the key (`docker history`, layer inspection),
+       which repositories and tags reference them, whether the registry token was used from
+       unexpected IPs (audit logs), and whether the customer key was used. That determines whether
+       this is an incident for the customer too.
+    3. **Fix the workflow privilege model.** `pull_request_target` plus a checkout of the PR's code
+       is the core vulnerability: contributor code ran with secrets in scope. Split it — an
+       unprivileged `pull_request` workflow that builds, and a privileged workflow that only
+       comments, with no checkout of untrusted code and minimal `permissions`.
+    4. **Stop printing secrets.** Remove the `env` dump, disable `set -x` around anything
+       credential-bearing, and remember masking is a display filter: a base64-encoded or
+       substring-printed secret still appears.
+    5. **Get the secret out of the image correctly.** `COPY .env` then `RUN rm` leaves the bytes in
+       the earlier layer. Use a BuildKit secret mount
+       (`RUN --mount=type=secret,id=api_key ...`) which is never written to a layer or to history,
+       or better, move the value to runtime configuration so the build never needs it.
+    6. **Purge what is pullable.** Delete the affected manifests (not only the tags), run registry
+       garbage collection, and accept that node-level caches may hold layers until pruned.
+    7. **Prevent recurrence**: gitleaks or trufflehog in pre-commit and CI, a `.dockerignore` that
+       excludes env files, and a check that fails the build when a high-entropy string or a known
+       credential pattern appears in a layer or a log.
+  red_flags:
+    - Deleting the tags and closing the ticket, leaving the digests pullable.
+    - Rotating the credentials after the postmortem instead of during the incident.
+    - Adding `RUN rm .env` and believing the layer is clean.
+    - Making the registry private and treating that as remediation.
+    - Disabling fork PR builds entirely, which removes the signal rather than the exposure.
+
+- id: cicd-scn-005
+  title: The canary was switched off after a week of false aborts, and deploys are back to all-at-once
+  technologies: [cicd, kubernetes]
+  difficulty: advanced
+  prompt: |
+    A team adopted a progressive delivery controller with a five-step canary: 5%, 25%, 50%, 75%,
+    100%, each with a five-minute pause and an analysis template on request error rate and p95
+    latency. In the first week it aborted four deploys, none of which had a real problem. The
+    service handles roughly 400 requests per hour, has a baseline error rate that moves between
+    0.3% and 2% depending on upstream behaviour, and its p95 is dominated by a third-party call
+    with a heavy tail. The team's response was to remove the analysis steps and keep the weight
+    steps, which now promote on a timer.
+
+    Two deploys later, a release with a broken database query reached 100% and was caught by a
+    customer complaint ninety minutes later.
+  approach: |
+    The canary is measuring the wrong things at the wrong resolution, and the fallback removed the
+    only automated check.
+
+    1. **Diagnose the false aborts before changing thresholds.** With 400 requests an hour, a 5%
+       canary sees about twenty requests in five minutes. At a 2% baseline error rate, one error in
+       twenty is indistinguishable from normal. The analysis has no statistical power — the aborts
+       are noise, not conservatism.
+    2. **Fix the comparison, not the threshold.** Compare canary against stable over the same
+       window with a ratio and a confidence interval, rather than against a fixed absolute number.
+       Widen the window so the sample is meaningful — thirty minutes at 5% is a hundred requests,
+       which is still thin but workable for gross failures.
+    3. **Choose volume-independent signals for the early steps.** Readiness failures, crash loops,
+       connection errors and "5xx ratio above a floor" do not need statistical power; they catch
+       "does not start" and "cannot reach the database", which is most of what a canary is for at
+       this scale.
+    4. **Separate the third-party tail from the service's own latency.** p95 including a slow
+       upstream will abort on the upstream's bad minutes. Measure the service's own handler latency,
+       or the third-party call's error rate separately.
+    5. **Add a deterministic pre-phase.** Send the smoke suite to the canary through a header
+       before any user traffic. That is the check that would have caught the broken query, and it
+       costs seconds.
+    6. **Never replace analysis with a timer.** A canary that promotes on a schedule is a slow
+       rolling deploy with extra infrastructure. If analysis cannot be made reliable, drop to
+       rolling with strong readiness and a smoke gate, and be explicit that the canary was not
+       buying anything.
+
+    The follow-up question is what the metric for "this release is bad" actually is — and for a
+    database query, it is usually error rate plus a business-level signal (orders created per
+    minute) rather than latency.
+  red_flags:
+    - Raising the abort threshold until nothing aborts.
+    - Blaming the controller or the mesh rather than the sample size.
+    - Removing analysis and keeping the weights, which is what already failed.
+    - Adding retries inside the canary analysis to "smooth" the data.
+    - Concluding canaries do not work at this scale without trying header-tagged traffic.
+
+- id: cicd-scn-006
+  title: One run in three is red for reasons unrelated to the change, and the rollback drill failed
+  technologies: [cicd, kubernetes]
+  difficulty: advanced
+  prompt: |
+    A monorepo pipeline has a 34% failure rate, but almost none of the failures reproduce locally
+    and re-running the job usually passes. The team has developed a habit: check whether the failing
+    test is one of the "known bad" ones, and if so re-run up to three times before merging. Nobody
+    can name the current list of known-bad tests; it lives in a Slack thread from four months ago.
+
+    Separately, during an incident the on-call engineer tried to roll back a service to the
+    previous release. The command referenced `api:1.4.1`, which no longer existed — the retention
+    policy keeps the last fifty builds by push date, and the running version was eight months old.
+    The engineer then tried `kubectl rollout undo`, which restored a ReplicaSet template that
+    referenced the same missing tag. The rollback took forty-five minutes and involved rebuilding
+    from a tag in git.
+  approach: |
+    Two failures with a shared root cause: nobody owns the pipeline's reliability, so both the
+    signal and the recovery path have decayed.
+
+    1. **Quantify the flake rate mechanically.** Group runs by commit and workflow; a commit with a
+       pass and a fail of the same job is a flake. Rank tests by flake count. The distribution is
+       almost always concentrated — a handful of tests produce most of the noise — which makes the
+       problem tractable.
+    2. **Quarantine with ownership and an expiry.** Move the top offenders to a non-gating suite
+       automatically, assign each to a team, and set a two-week fix-or-delete deadline. A
+       quarantined test with no owner is a deleted test with extra steps.
+    3. **Fix causes, not symptoms.** The usual four: `sleep()` instead of condition waits, shared
+       mutable fixtures, ordering dependencies, and real clocks or randomness. A retry that makes a
+       race invisible leaves the race in production.
+    4. **Retry only environmental failures, and report the rate.** A registry timeout or a service
+       container that failed to start is retryable; a failed assertion is not. Publish the retry
+       rate so "green with retries" is visible rather than reassuring.
+    5. **Fix the rollback target.** Retention must keep every digest currently deployed, regardless
+       of age, and the deployment record must store the previous digest rather than a tag. Resolve
+       `previous` at deploy time, before anything goes wrong — this is the single highest-value
+       change in the whole scenario.
+    6. **Make rollback a digest operation**, not a tag operation: `kubectl set image
+       deploy/api api=repo@sha256:…`, with the digest coming from the deployment record.
+    7. **Drill it.** Quarterly, with a timer, measuring detect/decide/execute/verify. The finding
+       is usually permissions, a missing runbook step, or a pruned artefact — all fixable before an
+       incident rather than during one.
+
+    The cultural point: the 34% failure rate is not a testing problem, it is a trust problem. Once
+    engineers learn that red means nothing, every real failure is ignored too, and the pipeline
+    stops being a control.
+  red_flags:
+    - Increasing retries to three, then five, and calling the pipeline stable.
+    - Deleting the flaky tests without replacing the coverage or recording why.
+    - Keeping the tag-based rollback and adding a note to "check the tag exists".
+    - Raising artefact retention to a year without pruning anything, which just moves the failure
+      to storage exhaustion.
+    - Treating the rollback failure as an operational mistake by one engineer.
