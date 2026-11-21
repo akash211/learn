@@ -320,3 +320,373 @@
     - Full rebuilds for an hourly refresh at 140 GB/day.
     - Allowing overlapping runs and treating the overlap as harmless.
     - No lookback for late-arriving CDC data.
+
+- id: sd-scn-007
+  title: Design multi-tenant analytics with row-level isolation for 1,500 tenants
+  technologies: [python, sql, spark]
+  difficulty: advanced
+  prompt: |
+    A B2B product analytics company runs 1,500 tenant accounts. Tenants send 250 million events a
+    day at about 800 bytes each, peaking at 4x average. Each tenant sees only its own data: a
+    dashboard that must return in under 2 s p95, and a report builder whose scans can span 13
+    months. The largest tenant is 18% of all events. Contracts promise deletion of a tenant's data
+    within 30 days of termination, and finance wants per-tenant infrastructure cost. The team is
+    six engineers running Postgres, object storage and a Spark cluster.
+
+    Walk through the isolation model, the storage layout, the query path, and what happens when one
+    tenant runs a 13-month scan at 09:00 on a Monday.
+  approach: |
+    **Rubric — 5 bands, 2 points each (10 total).**
+
+    **1. Envelope arithmetic (0–2).** 250M ÷ 86,400 = 2,894 events/s average; at 4x that is
+    11,574/s peak, and peak sizes the ingest path. Storage: 250M × 800 B = 200 GB/day, x 365 = 73
+    TB/year raw; Parquet with zstd at roughly 5x on flat JSON with repeated event names gives 14.6
+    TB/year, so 13 months is 15.8 TB. Rows: 250M x 395 = 98.75 billion. The largest tenant at 18%
+    is 45M events/day = 521/s average and 2,084/s peak, and owns 2.8 TB of the 15.8; the average
+    tenant is 15.8 TB ÷ 1,500 = 10.5 GB. That last number is the design driver: 1,480 of 1,500
+    tenants are small enough to share one pool. Query load is 40,000 dashboard queries/day, 70% of
+    them in a nine-hour window: 28,000 ÷ 32,400 s = 0.86/s, and about 4.3/s at a 5x peak. Even the
+    burst is tiny, which is the point — this is a low-concurrency, high-scan workload, so the
+    binding constraint is bytes scanned per query, not queries per second. A candidate who sizes
+    the query tier for QPS has misread the problem.
+
+    **2. Isolation model (0–2).** Compares the three placements with the cost named. Shared tables
+    with tenant_id keep one copy of 15.8 TB and one schema to migrate; isolation rests entirely on
+    the query layer, so a single missing predicate is a cross-tenant leak. Schema or database per
+    tenant gives catalog separation but not resource separation, and 1,500 schemas means every
+    migration is 1,500 DDL statements against a catalog that was not built for it. Silo per tenant
+    is the only option that also isolates storage throughput, and it is unaffordable for 1,500
+    tenants. The strong answer is tiered: the 20 tenants above 0.5% of events (55% of volume
+    combined) get their own Iceberg namespace and their own query resource group; the remaining
+    1,480 share a pool holding 45% of events = 7.1 TB. Enforcement is named explicitly and in three
+    layers: the tenant comes from the authenticated session and never from a request parameter; the
+    semantic layer compiles a tenant predicate into every model and a CI check rejects any query
+    against an event table without it; and engine-level row filters act as defence in depth. Cache
+    keys include the tenant — a shared key on a query hash is the classic leak, and it fails
+    silently because the numbers returned are plausible.
+
+    **3. Storage and query path (0–2).** Raw events land in Iceberg partitioned by event_date and
+    bucketed by a hash of tenant_id into 16 buckets, so one tenant's scan touches 1/16 of a day's
+    files rather than all of them. At a 512 MB target file size, 200 GB/day is about 400 files/day,
+    or 158,000 files over 13 months for the pool — manageable only because date and bucket pruning
+    cut a single-tenant query to a few hundred files. Raw alone is still the wrong path for a 2 s
+    dashboard, so two rollups carry the interactive load: tenant_hour_event at tenant x hour x
+    event name (1,500 x 8,760 x 40 = 525.6M rows/year at about 120 B, 63 GB/year) and
+    tenant_user_day for funnels and retention. One tenant's annual slice of the hourly rollup is
+    350k rows, about 42 MB, comfortably inside 2 s. The honest limit is the report builder: a
+    13-month scan at raw grain over the largest tenant is 2.8 TB, which at a realistic 2 GB/s scan
+    rate is 1,400 s. So reports above a scan threshold (say 200 GB after pruning) are submitted as
+    a batch job that materialises a result table and notifies, rather than pretending an
+    interactive query planner can do it. State that boundary instead of promising sub-30 s.
+
+    **4. Noisy neighbour and the Monday 09:00 scan (0–2).** The scenario is not a volume problem but
+    a contention problem: one query can hold a worker slot and evict everyone else's pages. Controls
+    are per-tier resource groups with a memory ceiling (pool tenants capped at 30% of cluster
+    memory), per-tenant concurrency of three queries, a per-query scan limit of 200 GB and a 120 s
+    runtime cap, and fair-share queueing so a small tenant waits seconds rather than being rejected.
+    Ingestion and compaction run on separate compute from queries, and compaction is scheduled
+    outside the 08:00-18:00 window, because a compaction job competing with dashboards is
+    self-inflicted. Cost attribution falls out of the same instrumentation: bytes scanned per query
+    tagged by tenant, which becomes both the chargeback number and the evidence for moving a tenant
+    to a silo.
+
+    **5. Deletion, failure modes and grading (0–2).** Deletion is the requirement teams fake. An
+    Iceberg delete of rows for one tenant writes delete files and hides the data, but the bytes
+    remain, so a rewrite of the affected partitions must follow, and snapshot expiry must be shorter
+    than the 30-day promise or time travel resurrects the data. Verification is a scan for the
+    tenant returning zero rows plus a manifest check, not a dropped view. Failure modes worth
+    naming: duplicate events from an at-least-once ingest (dedupe on event_id during the merge);
+    mobile SDKs buffering 48 hours, so rollups rebuild with a three-day lookback; per-tenant custom
+    event properties stored as a map column rather than dynamic columns; a tenant over quota getting
+    429 at the edge with the payload buffered in the log, not in Postgres.
+
+    **Trade-offs to state.** Bucketing by tenant costs pruning efficiency for internal cross-tenant
+    analysis. Rollups cost an hour of freshness and a rebuild path that must be tested. Silos cost
+    per-tenant operational surface — 20 namespaces is 20 things to monitor. Build order: one table
+    plus row filters plus rollups; split a tenant into its own namespace when its queries exceed 10%
+    of cluster memory; a dedicated cluster only when a contract pays for it.
+
+    **Automatic fail:** taking the tenant from a request parameter; caching without the tenant in
+    the key; one global queue with no per-tenant limits; claiming deletion while raw files remain.
+  red_flags:
+    - Row-level security offered as the whole isolation story, with no failure mode named.
+    - Sizing the query tier from QPS when the workload is scan-bound.
+    - One schema per tenant for 1,500 tenants, with no migration arithmetic.
+    - Deleting rows in a view and calling the data gone.
+
+- id: sd-scn-008
+  title: Score 5,000 authorisations a second inside a 200 ms p99 window
+  technologies: [python, kafka, sql]
+  difficulty: advanced
+  prompt: |
+    A card processor scores every authorisation for fraud inline. Peak is 5,000 events/s, average
+    3,000/s, 1.5 KB per event, and the issuer's window closes at 200 ms p99. There are 45 features:
+    card velocity over 1, 5 and 60 minutes, a merchant risk score refreshed daily, device-to-account
+    graph features, and 180 days of history — 46 billion transactions. About 0.1% of transactions
+    are fraudulent, the average ticket is $50, a false decline costs roughly $8 in lost margin and
+    support, and chargebacks arrive up to 120 days later. The review team can handle 2,000 cases a
+    day.
+
+    Design the pipeline, the feature path, the decision policy, and say what happens when a feature
+    or a model is unavailable.
+  approach: |
+    **Rubric — 5 bands, 2 points each (10 total).**
+
+    **1. Envelope and consistency checks (0–2).** 3,000 × 1.5 KB = 4.5 MB/s average and 5,000 × 1.5
+    KB = 7.5 MB/s at peak — small for a log, which is the point: the constraint is latency, not
+    bandwidth. Daily volume: 3,000 × 86,400 = 259.2M events × 1.5 KB = 389 GB/day, 142 TB/year raw
+    and about 28 TB/year at 5x Parquet compression, so 180 days of history is 14.0 TB. Cross-check
+    the prompt against itself: 46B rows ÷ 180 days = 255.6M rows/day, within 1.4% of the 259.2M
+    derived from the rate, which means the history and the live feed are the same population. Say
+    that out loud, because a candidate who never reconciles the two numbers will size training on a
+    different dataset than serving. Partition count: 5,000 ÷ 24 partitions = 208 events/s per
+    partition, and a consumer task sustains roughly 1,000/s on this shape, so peak utilisation is
+    21% and a single task restart does not create a lag spiral.
+
+    **2. Latency budget as arithmetic (0–2).** Allocates the 200 ms: TLS and load balancer 4 ms,
+    token validation 3, orchestration 3, feature multi-get 15, graph lookup 30, model ensemble 45,
+    policy 3, serialisation 2 — 105 ms of p99 contributions, leaving 95 ms of headroom. The headroom
+    is not padding: the p99 of a sum is not the sum of p99s, so a design that allocates 195 of 200 ms
+    will miss the target most days. Names the hard deadline (the orchestrator cancels at 180 ms and
+    returns the policy fallback), because a response that arrives at 240 ms is a decline by timeout
+    and indistinguishable to the issuer from a fraud block. Forbids any per-feature database call:
+    45 round trips at 3 ms each is 135 ms before the model even runs.
+
+    **3. Feature path and state size (0–2).** Three freshness tiers, each with a mechanism. Velocity
+    over 1/5/60 minutes is maintained in a stateful streaming job keyed by card_id; the state is 25M
+    active cards x about 1.2 KB = 30 GB in RocksDB, checkpointed incrementally every 60 s, and only
+    the 60-minute window is live — not 180 days. Graph features (device-to-account fan-out) are a
+    5-minute micro-batch into a KV store, because a graph traversal at decision time cannot fit in
+    30 ms. Merchant risk is a daily table. The serving tier reads all 45 features in one multi-get:
+    25M cards x 2 KB = 50 GB of feature vectors, on three 32 GB primaries with a replica each —
+    192 GB provisioned for 50 GB live, because losing a primary at peak must not halve throughput.
+    Feature definitions live in one library used by both the streaming job and the training
+    pipeline, and the training set is built with point-in-time joins so a value seen at decision
+    time is reproducible at label time. A daily job recomputes 1% of decision-time vectors and
+    alerts above 0.1% mismatch: that is the training-serving skew alarm, and without it the model
+    decays silently while every dashboard stays green.
+
+    **4. Decision policy from economics, not F1 (0–2).** This is where answers separate. 0.1% of
+    259.2M is 259,200 fraudulent transactions/day, about $12.96M of exposure at a $50 ticket. The
+    review queue holds 2,000 cases/day = 0.00077% of volume; even at an implausible 50% precision it
+    catches 1,000 frauds, 0.4% of frauds. So review is not a control — it is for merchant onboarding
+    and the top of the medium band, sorted by score and filtered to tickets above $250. Automated
+    decline carries the load, and its threshold comes from break-even: a decline costs $8 when the
+    customer is good and saves $50 when the transaction is fraud, so declining pays above
+    8/50 = 16% precision. Set the decline band at p(fraud) above 0.30 for margin against drift; at
+    90% precision that is 181,440 caught ÷ 0.9 = 201,600 declines, 0.078% of volume, costing 20,160
+    false declines x $8 = $161k/day against $9.07M of fraud prevented. Bands: decline above 0.30;
+    review from 0.05 to 0.30 subject to capacity; approve below 0.05, with step-up authentication
+    for the 0.05-0.15 slice on high-value tickets. Every threshold change runs in shadow mode for a
+    week first, because a threshold is a business decision that deserves evidence rather than a
+    pull request.
+
+    **5. Compute, failure and operations (0–2).** Inference: 45 ms of CPU per event at 5,000/s = 225
+    vCPU-seconds per second, so 225 vCPU minimum and 450 at a 50% utilisation target — about 12
+    nodes at 40 vCPU, roughly $13k/month at $0.04 per vCPU-hour (450 x 730 x 0.04). Headroom is 2x,
+    not 1.5x, because losing a node at peak must not queue requests into the 200 ms window.
+    Degradation is ordered and explicit: feature store unavailable, serve from the streaming job's
+    queryable state; more than 20% of features missing, fall back to a rules model at 15 ms with a
+    conservative decline threshold and log the fallback-rate SLI; model timeout, the same rules
+    fallback; tickets above $500 fail closed to review rather than open. Duplicate authorisation
+    retries are deduped on transaction_id with the decision cached for 60 s, so a retry cannot get a
+    different answer. Watch p99 latency, fallback rate, decline rate by merchant, feature-store hit
+    rate and score distribution — a two-point move in decline rate is either a model regression or a
+    merchant under attack, and both need the same alarm. Labels arrive up to 120 days late, so train
+    on a 90-day window with recency weighting and use the recent decline rate as the drift proxy
+    until chargebacks land.
+
+    **Automatic fail:** a database call per feature; no cold-start or missing-feature policy;
+    choosing thresholds from a model metric with no reference to the cost of a false decline;
+    claiming the streaming job and the training set compute identical features without
+    point-in-time joins.
+  red_flags:
+    - A "fast model" with no vCPU or latency arithmetic.
+    - A review queue sized to the fraud rate rather than to the people reviewing it.
+    - Failing open on a timeout for high-value transactions.
+    - Budgeting 195 of 200 ms and calling it done.
+
+- id: sd-scn-009
+  title: Move 38 TB off SQL Server into a lakehouse with no downtime
+  technologies: [sql, spark, airflow]
+  difficulty: advanced
+  prompt: |
+    A 12-year-old analytics estate runs on four SQL Server instances holding 38 TB across 1,900
+    tables, of which about 600 are read by 3,500 BI users through 900 stored procedures. Traffic is
+    40,000 queries a day, peaking at 120/s. Writes come from eleven source applications at an average
+    of 1,500 rows/s, 1.2 KB each, peaking at 2,500/s. The link to the new cloud environment is 1
+    Gbps, and the Spark cluster has 8 nodes.
+
+    The business will not accept a maintenance window longer than 15 minutes, and any query that
+    worked on Friday must return the same answer on Monday. Design the migration, the cutover, and
+    the rollback, and be explicit about what you would leave behind.
+  approach: |
+    **Rubric — 5 bands, 2 points each (10 total).**
+
+    **1. Define "zero downtime" before designing for it (0–2).** Zero downtime is not one property.
+    Decompose it: read availability stays at the current 99.9%; no write freeze longer than 15
+    minutes, once; no data loss (RPO 0 for committed rows); and answer parity — every consumer query
+    returns the same result before and after. Naming four separate promises is what makes the rest
+    of the design checkable, because each has a different mechanism. Also states what is out of
+    scope: 240 of the 900 procedures have not executed in 30 days of instrumentation and are
+    retired rather than migrated, which reduces the parity surface by 27% before any engineering
+    starts. That triage is the highest-leverage decision in the project and candidates usually skip
+    it.
+
+    **2. The arithmetic that forces the plan (0–2).** A 1 Gbps link is 125 MB/s theoretical; at 70%
+    efficiency it moves about 90 MB/s. 38 TB = 38,000,000 MB, so a raw copy is 38,000,000 ÷ 90 =
+    422,222 s = 117 hours, or 4.9 days. Compressed on the wire at 3x for relational export, that is
+    about 39 hours. Neither fits a 15-minute window, so the initial load must run alongside the live
+    system and the cutover must be a *catch-up*, not a copy. CDC fills the gap: 1,500 rows/s × 1.2
+    KB = 1.8 MB/s average = 6.5 GB/hour, so a 39-hour snapshot accumulates 39 × 6.5 = 253 GB of
+    change. Applying at 40 MB/s drains that in 253,000 ÷ 40 = 6,325 s = 105 minutes. Therefore the
+    realistic timeline is snapshot 39 h, catch-up 1.75 h, parity checks 2 weeks in parallel, cutover
+    15 minutes. The other number that constrains the design is retention: SQL Server CDC keeps three
+    days by default, and at 6.5 GB/hour that is 468 GB. If the connector falls more than about 36
+    hours behind, the log truncates and the only recovery is a new snapshot — so lag is monitored
+    against retention, alerted at 50%, and treated as a page, not a ticket.
+
+    **3. Target architecture and the one trade-off that matters (0–2).** Bronze keeps the raw CDC
+    payload immutable and append-only, partitioned by ingestion date, so a parsing bug is
+    replayable. Silver applies changes into Iceberg tables with the source primary key, using a
+    MERGE keyed by primary key and ordered by commit LSN; gold holds the marts the BI tools read.
+    The trade-off to state explicitly: a warehouse-managed table gets query performance and
+    concurrency for free and would cut parity time, while an open format keeps every engine able to
+    read the same bytes and makes the rollback cheap because SQL Server still owns the data. Given
+    the 3,500 users and 120/s peak, the recommendation is an open table format with a warehouse or
+    Trino reading it, and the honest admission that the first month of query tuning will be spent
+    recovering the indexes SQL Server gave away for free. Two correctness details that decide
+    whether parity holds: a business transaction touching three tables arrives as three independent
+    row events, so silver applies with a 60-second commit-order buffer rather than row by row, or
+    readers see half a transaction; and type mapping needs a written table — datetime2 to timestamp
+    at microsecond precision, money to decimal(19,4), nvarchar to UTF-8 with a collation decision,
+    identity columns replaced by source keys, computed columns recomputed in silver, and triggers
+    that CDC never captures reimplemented as downstream logic.
+
+    **4. Parallel run, cutover and rollback (0–2).** Parity is measured, not asserted: 200 golden
+    queries run nightly against both systems for two weeks, comparing exact row counts, sums within
+    0.01%, and a 1% row-level hash sample, with failures triaged into mapping bugs versus genuine
+    semantic differences. Cutover is per consumer group, not big bang, behind a routing layer that
+    can point a report at either system. The 15-minute window holds a short write freeze on the
+    eleven source applications, waits for CDC lag to reach zero (verified by LSN, not by eyeballing
+    a dashboard), flips the connection strings, runs 20 smoke queries, and unfreezes. Rollback
+    inside the window is a flip back. Rollback after it is the part candidates miss: it is only free
+    if the lakehouse accepted no writes. So the design deliberately keeps SQL Server as the only
+    writable system of record for the duration of the migration, and any table that must become
+    writable afterwards gets reverse CDC in a separate, later project. Making the lakehouse writable
+    during cutover converts a cheap rollback into a bidirectional reconciliation problem.
+
+    **5. Failure modes and grading (0–2).** Names the failures that actually happen: CDC lag
+    approaching log retention; snapshot read pressure slowing the production server (throttle to 60%
+    of link capacity, run off-peak, use read-committed snapshot isolation rather than locking
+    hints); schema drift from a source adding a column mid-migration, handled by schema evolution
+    rather than a failed MERGE; late-arriving dimension rows breaking referential joins in gold;
+    row-level security not replicated, which is a data-exposure incident rather than a bug; Power BI
+    dataset refresh failing on a renamed column; and cost drift from a Spark cluster left running
+    after the backfill. Operations: a migration dashboard with lag, parity pass rate and cost; a
+    named owner per consumer group; and a written abort condition — if parity is below 98% on the
+    golden set at T-3 days, the cutover is postponed rather than negotiated.
+
+    **What to leave behind.** The 240 unused procedures, the SSRS reports nobody opened in 90 days,
+    the 280 procedural jobs that mix T-SQL control flow with data movement (phase 2, rewritten as
+    orchestrated jobs rather than translated line by line), and any table under 1 GB that a single
+    application reads — moving it buys nothing and adds a network hop.
+
+    **Automatic fail:** a big-bang weekend cutover; copying 38 TB inside a maintenance window;
+    no parity harness; making the lakehouse writable before rollback is proven.
+  red_flags:
+    - Lift-and-shift with a managed copy tool and no throughput arithmetic.
+    - Migrating all 900 procedures one for one.
+    - No rollback story beyond "restore the backup".
+    - Ignoring CDC log retention while the snapshot runs for two days.
+
+- id: sd-scn-010
+  title: A permissions-aware assistant over 2 million internal documents
+  technologies: [python, sql]
+  difficulty: advanced
+  prompt: |
+    An engineering organisation wants an assistant over its internal corpus: 2 million documents
+    (design docs, runbooks, contracts, HR files) averaging ten pages, held in four systems with
+    their own ACLs. There are 4,000 permission groups; a document belongs to 3.2 on average and a
+    user to 12, with nesting that can expand to 60 effective principals. Traffic is 30,000 questions
+    a day, peaking at 8/s, with time-to-first-token under 2 s and full answers under 10 s. The
+    budget is $12,000 a month.
+
+    Legal requires that a user never sees text from a document they cannot open, that revoked access
+    takes effect within minutes, and that document text is not retained by the model provider.
+    Design the retrieval path, the permission model, and the evaluation that proves it works.
+  approach: |
+    **Rubric — 5 bands, 2 points each (10 total).**
+
+    **1. Corpus and cost arithmetic (0–2).** 2M documents × 10 chunks = 20M chunks; at about 500
+    tokens each that is 10 billion tokens. Embedding once at $0.02 per million tokens is
+    10,000 × 0.02 = $200, which sounds free and is the wrong conclusion: at 5,000 chunks per minute
+    the pipeline needs 20,000,000 ÷ 5,000 = 4,000 minutes = 67 hours. The constraint is throughput,
+    not spend, so chunk-level incremental re-embedding is mandatory and a monthly full rebuild is
+    not available as an operational habit. Query cost: 8 chunks × 500 = 4,000 context tokens, plus
+    300 system and 200 question = 4,500 input; at $3/M input and $15/M output that is $0.0135 +
+    350 × 15/1M = $0.00525, so $0.01875 per answer. At 30,000/day that is $562.50/day = $16,875 per
+    30-day month — 41% over budget. The fix is arithmetic, not a cheaper model: a 35% exact and
+    near-duplicate cache hit rate leaves 19,500 unique answers × $0.01875 = $365.63/day = $10,969,
+    inside budget. A second lever is context pruning to 6 chunks, 3,500 input tokens, $0.01575 per
+    answer, $9,214/month.
+
+    **2. Index sizing and retrieval (0–2).** 20M × 1,536 × 4 B = 122.9 GB of raw vectors, and an
+    HNSW graph at roughly 50% overhead makes it 184 GB. This is the number that decides the
+    architecture: it does not fit one node, unlike a 2M-chunk corpus, so the index is sharded eight
+    ways at about 23 GB each, with queries fanned out and merged. Retrieval is hybrid — BM25 for
+    exact identifiers (error codes, service names) plus vectors for paraphrase — 50 candidates,
+    reranked to 8. The rerank budget is real: a cross-encoder at 3 ms per pair over 50 candidates is
+    150 ms, and at 8 ms it is 400 ms, which is why the small reranker is the default. Chunking
+    respects document structure (headings, tables kept whole) and stores a parent-document id so a
+    retrieved chunk can expand to its section for the prompt without embedding the whole document.
+
+    **3. Permissions: the part that is actually hard (0–2).** The naive design filters after
+    retrieval, and the arithmetic kills it: if a user can open 2% of the corpus, the top 50
+    unfiltered candidates yield an expected 50 × 0.02 = 1 authorised chunk, so recall collapses
+    exactly for the users with the narrowest access — the ones most likely to hold sensitive
+    documents. The design is pre-filter plus verify. Retrieval carries a coarse filter derived from
+    the document's owning workspace (a bounded set, so the ANN index can use it efficiently), and
+    then every candidate is verified against the authorisation service in one batched call of 50 ids
+    at about 10 ms. That second check is what makes revocation take effect in seconds rather than at
+    the next index rebuild: ACLs are never baked into the vector index, only the coarse workspace is,
+    and group membership is expanded at query time to at most 60 principals with a 60-second cache.
+    Three consequences to state: the cache key must include a hash of the principal set, never just
+    the question, or one user's answer is served to another; the answer must refuse without naming
+    the document, because "you cannot access the Q3 layoff plan" is itself a disclosure; and
+    deletions and ACL changes emit a tombstone so a chunk stops being retrievable immediately, with
+    the vector physically removed on the next compaction.
+
+    **4. Serving, latency and failure (0–2).** Budget: question embedding 30 ms, sharded vector
+    search 40, batched authz 10, rerank 150, prompt assembly 20 = 250 ms before the model; prefill of
+    4,500 tokens at 3,000 tokens/s = 1,500 ms, so TTFT is about 1.75 s against a 2 s target, and 350
+    output tokens at 60 tokens/s = 5.8 s, total 7.6 s inside the 10 s target. Streaming is required,
+    and the output cap is the latency control. Citations are generated from retrieved ids, not from
+    the model's prose, and validated after generation: an answer citing an id that was not in the
+    context is discarded. Retrieved text is data, never instructions, and each chunk is delimited and
+    stripped of imperative-looking markup, because a runbook containing "ignore previous
+    instructions" is a real injection vector in an internal corpus. Provider outage degrades to a
+    sources-only response listing the top passages with titles and links, which is genuinely useful
+    and keeps the product up. Legal's retention requirement is met by a zero-retention endpoint with
+    a contractual guarantee and no logging of prompts at the provider, or by self-hosting the model —
+    and the audit log of which documents were shown to whom lives on our side, 30,000 × 395 days =
+    11.85M rows at about 2 KB = 24 GB, cheap and non-negotiable for a compliance review.
+
+    **5. Evaluation, including the security tests (0–2).** A 400-question golden set with expected
+    document ids and required facts, scored on retrieval recall@8, answer faithfulness, citation
+    validity and refusal correctness. Then the suite that most teams omit: 100 leakage questions
+    whose answers exist only in documents a test user cannot open, run as that user, with any
+    content from those documents treated as a release blocker; a revocation test that removes access
+    and asserts the answer changes within five minutes; and a deleted-document test. Regression gate
+    of two points on the golden set before any prompt or model change, versioned prompts, and 1%
+    human review of production answers. Report cost per answered question alongside quality, because
+    the cheapest way to improve this system's numbers is to answer fewer questions well.
+
+    **Automatic fail:** post-filtering only, with no analysis of recall for restricted users; ACLs
+    embedded in the index with no revocation path; caching answers without the principal set in the
+    key; claiming the model cannot leak text it was given.
+  red_flags:
+    - Treating permissions as a metadata filter bolted on after the vector search.
+    - A per-user index, or one index per group, at 20M chunks.
+    - Answering "that document is restricted" instead of refusing.
+    - No leakage test, and an evaluation set built only from documents the test user owns.

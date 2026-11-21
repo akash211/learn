@@ -9,16 +9,19 @@
     data, Trino and Snowflake query it, and a Python service reads it directly, an open table format
     gives you one copy with a shared catalog instead of an export pipeline per consumer.
 
-    Iceberg's practical advantages are snapshot isolation, hidden partitioning, and schema
-    evolution without rewriting files. That matters for the operational cases: a bad write can be
-    rolled back to a snapshot in minutes, and a partition spec can change without breaking existing
-    readers. At 300 TB, one copy versus two is also the difference between roughly $6,900 and
-    $13,800 per month in object storage before compute.
+    Iceberg's practical advantages are snapshot isolation, hidden partitioning, and schema evolution
+    without rewriting files. That matters operationally: a bad write rolls back to a snapshot in
+    minutes, and a partition spec changes without breaking readers. At 300 TB, one copy versus two
+    is roughly $6,900 versus $13,800 a month in object storage before any compute.
 
-    Choose the managed warehouse table when the workload is SQL-only, the team is small, and
-    performance tuning matters more than portability. Managed engines optimise layout, caching and
-    concurrency for you. The honest 2026 answer is usually a hybrid: open format for the lake's
-    system of record, with the warehouse reading it through a catalog rather than owning a copy.
+    The format loses when you cannot own the maintenance. Someone must run compaction, expire
+    snapshots, and repair metadata; without that the table degrades into small files and slow
+    planning. Below roughly 10 TB with a single query engine, a managed warehouse is faster to
+    operate and its optimiser will beat hand-tuned layout.
+
+    The honest 2026 answer is usually hybrid: open format as the lake's system of record, with the
+    warehouse reading it through a catalog rather than holding a copy, and the managed engine used
+    for the workloads where its performance justifies the lock-in.
   tags: [iceberg, lakehouse, table-format, portability]
 
 - id: sd-recent-002
@@ -31,19 +34,21 @@
     They do not achieve exactly-once delivery; they achieve idempotent commits with a transactional
     table layer. The pattern is checkpoint, deterministic file names, then an atomic snapshot commit.
 
-    A streaming job checkpoints offsets and operator state together every few seconds. Output files
-    are written with names derived from `(partition, checkpoint_id)`, so a retry produces the same
-    paths. The Iceberg or Delta commit then adds those files to the table atomically. If the job
-    dies after writing files but before committing, the files are orphans and the replay writes
-    them again — same names, same contents, one visible snapshot.
+    A streaming job checkpoints offsets and operator state together, typically every 10–60 seconds.
+    Output files are named from `(partition, checkpoint_id)`, so a retry produces identical paths.
+    The Iceberg or Delta commit then adds those files to the table atomically through a catalog
+    compare-and-swap. If the job dies after writing files but before committing, the files are
+    orphans, the replay rewrites them under the same names, and the table ends with one visible
+    snapshot. Two writers committing to the same table surface as a commit conflict and must be
+    retried, not ignored.
 
-    The fragile part is determinism. A `now()` or a random UUID in the output means the replay
-    writes different bytes under the same name, and the table ends up with duplicates or corrupted
-    files. Derive timestamps from the event and use deterministic keys.
+    The fragile part is determinism. A `now()` or a random UUID in the output means the replay writes
+    different bytes under the same name, and you get duplicates or corrupted files. Derive timestamps
+    from the event and use deterministic keys. An orphan-file cleanup job is not optional; without it
+    a job that fails repeatedly leaks storage silently.
 
-    For sinks that are not transactional tables — an external API, a Kafka topic without
-    transactions — the same idea applies at the handler: an idempotency key and an upsert, not a
-    delivery guarantee.
+    Where the sink is not a transactional table — an external API, or a topic without transactions —
+    the same idea applies at the handler: an idempotency key and an upsert, not a delivery guarantee.
   tags: [exactly-once, iceberg, checkpointing, determinism]
 
 - id: sd-recent-003
@@ -55,20 +60,21 @@
   answer: |
     Do the arithmetic first. Two million chunks at 1,536 dimensions in float32 is 12.3 GB of raw
     vectors, and an HNSW index adds roughly 50%, so about 18.4 GB resident — one 32 GB node, or a
-    Postgres instance with `pgvector` and an HNSW index that fits in shared buffers.
+    Postgres instance with `pgvector` whose index fits in shared buffers.
 
     pgvector is enough when the corpus is under roughly 10 million chunks, the index fits in memory,
-    queries are in the hundreds per second, and you already run Postgres with backups, monitoring
-    and access control. Reusing that operational story is worth more than a few milliseconds of
-    query latency.
+    queries run in the hundreds per second, and you already operate Postgres with backups,
+    monitoring and access control. A single HNSW query costs a few milliseconds at `ef_search` 100,
+    so one node serves a few hundred queries per second before CPU saturates. Reusing the existing
+    operational story is worth more than a few milliseconds.
 
-    A dedicated vector database earns its place when you need sharding beyond one node, very high
-    query concurrency, hybrid search with sophisticated fusion, or metadata filtering at a scale
-    where Postgres planning degrades. It also helps when the index must be rebuilt continuously
-    without touching the transactional database.
+    The trap is filtering. `WHERE tenant_id = ?` combined with an ANN index either post-filters and
+    loses recall or pre-filters and loses the index; at 2% selectivity the planner may scan. Test
+    with production-shaped filters, not a clean benchmark.
 
-    The deciding factor is usually operational, not algorithmic: how many stateful systems can the
-    team run well? Adding a vector store adds a backup, upgrade and consistency story.
+    A dedicated vector database earns its place at sharding beyond one node, thousands of queries
+    per second, or filtering that Postgres plans badly. The deciding factor is usually operational:
+    how many stateful systems can the team run well?
   tags: [pgvector, vector-database, rag, sizing]
 
 - id: sd-recent-004
@@ -78,22 +84,24 @@
   period: "2024-2026"
   type: representative
   answer: |
-    A gateway centralises the things that must be consistent across every feature: credentials,
-    per-tenant rate limits and quotas, cost attribution, prompt and response logging, redaction,
-    retries and fallback across providers.
+    A gateway centralises what must be consistent across every feature: credentials, per-tenant rate
+    limits and quotas, cost attribution, prompt and response logging, redaction, retries and
+    fallback across providers.
 
-    The direct-call approach works until the second team ships an LLM feature. Then each service has
-    its own retry policy, its own timeout, its own key, and nobody can answer "what did we spend on
-    this tenant last month" without joining four log stores. At 200,000 requests/day and $0.0105
-    per request, a 20% cache-hit improvement is $8,700/month — you cannot find that without
-    centralised token accounting.
+    Direct calls work until the second team ships an LLM feature. Then each service has its own
+    retry policy, timeout and key, and nobody can answer "what did we spend on this tenant last
+    month" without joining four log stores. At 200,000 requests a day and $0.0105 each, a 20%
+    cache-hit improvement is $8,700 a month — you cannot find that without centralised token
+    accounting.
 
-    The gateway also gives one place to enforce safety: PII redaction before the call, prompt
-    injection checks on retrieved content, and output validation. And it makes provider failover a
-    configuration change rather than a code change in six services.
+    It also gives one place to enforce safety: PII redaction before the call, prompt-injection checks
+    on retrieved content, output validation, and a request log that satisfies an audit. Provider
+    failover becomes a configuration change rather than a code change in six services.
 
-    The cost is a hop and a single point of failure, so it must be stateless, horizontally scaled,
-    and excluded from the hot path's critical budget — a 20 ms overhead, not 200 ms.
+    Two limits keep it honest. It must stream responses pass-through, or time-to-first-token
+    regresses for every product behind it. And it must not own business logic: prompts, retrieval
+    and thresholds belong to the calling service, or the gateway becomes a monolith with a queue.
+    Keep it stateless, horizontally scaled, and budget 20 ms of overhead — not 200.
   tags: [llm-gateway, cost-control, governance, reliability]
 
 - id: sd-recent-005
@@ -104,21 +112,23 @@
   type: representative
   answer: |
     Serverless fits spiky, low-duty-cycle work: event-driven ingestion, webhook handlers, scheduled
-    maintenance, and interactive queries that run for seconds a few times an hour. Paying per
-    request when utilisation is 2% is a genuine saving over a provisioned cluster.
+    maintenance, and interactive queries that run for seconds a few times an hour. Paying per request
+    at 2% utilisation is a genuine saving over a provisioned cluster.
 
-    It becomes expensive when the work is steady or long-running. A job that runs eight hours a day
-    at high CPU is cheaper on reserved capacity; per-second billing with a minimum memory
-    allocation and cold-start overhead adds up. The break-even is roughly where average utilisation
-    exceeds 20–30% — below that, serverless wins; above it, provisioned wins.
+    It becomes expensive when the work is steady or long-running. A service needing 2 vCPU around the
+    clock is about 1,460 vCPU-hours a month; at $0.000024 per vCPU-second that is roughly $126 on
+    per-request billing, against perhaps $35 for a small reserved instance — and the per-request bill
+    grows with traffic while the reserved one does not. The break-even sits near 20–30% average
+    utilisation: below it serverless wins, above it provisioned wins.
 
-    The subtler costs are architectural. Function timeouts cap how long a task can run, so
-    long backfills must be chunked. Connection limits force a pooler in front of Postgres.
-    Cold starts add hundreds of milliseconds to p99, which matters for interactive paths. And
-    local state is ephemeral, so every function must be idempotent and resumable.
+    The subtler costs are architectural. Function timeouts cap how long a task runs, so backfills must
+    be chunked. Connection limits force a pooler in front of Postgres. Cold starts add hundreds of
+    milliseconds to p99, which matters on interactive paths. Local state is ephemeral, so every
+    function must be idempotent and resumable. And the bill often hides in egress and bytes scanned,
+    not in compute.
 
-    Use serverless for glue and bursty edge work; use provisioned compute for sustained throughput
-    and anything that needs a long-lived connection or a large in-memory working set.
+    Use serverless for glue and bursty edge work; provisioned compute for sustained throughput and
+    anything needing a long-lived connection or a large in-memory working set.
   tags: [serverless, cost, utilisation, cold-start]
 
 - id: sd-recent-006
@@ -129,21 +139,24 @@
   type: representative
   answer: |
     A data contract is a versioned, enforced agreement between a producer and its consumers about
-    schema, semantics, freshness and ownership. It is the interface definition for data, in the
-    same way an OpenAPI spec is the interface for an HTTP service.
+    schema, semantics, freshness and ownership — the interface definition for data, as an OpenAPI
+    spec is for an HTTP service.
 
-    Concretely it contains field names and types, nullability, units, allowed enum values, the
-    primary key, the partitioning scheme, an SLA for freshness and volume, and a named owner. It is
-    checked in CI on the producer side and validated at ingestion on the consumer side.
+    It contains field names and types, nullability, units, allowed enum values, the primary key, the
+    partitioning scheme, freshness and volume SLAs, and a named owner. It is checked in CI on the
+    producer side and validated at ingestion on the consumer side.
 
-    The value is in the failure it prevents: an upstream team renames `user_id` to `uid`, and six
-    dashboards silently return nulls for a week. With a contract, the producer's build fails before
-    deployment, or the consumer quarantines the batch and alerts within minutes.
+    The value is the failure it prevents. An upstream team renames `user_id` to `uid`; six dashboards
+    return nulls for a week and nobody notices until a board meeting. With a contract, the producer's
+    build fails before deploy, or the consumer quarantines the batch and alerts within minutes.
 
-    Enforcement is the hard part. A contract nobody validates is documentation. Practical
-    implementations compile it into a schema registry entry plus a compatibility check, and add
-    runtime assertions on volume and null rate. Start with the three or four most-consumed tables
-    rather than attempting a company-wide programme.
+    Enforcement is the hard part, and a contract nobody validates is documentation. Practical
+    implementations compile it into a schema registry entry with a compatibility mode (backward by
+    default, full for tables with external consumers), add runtime assertions on row count and null
+    rate, and version with additive-only changes plus a deprecation window.
+
+    Start with the three or four most-consumed tables. A company-wide programme announced in one
+    quarter produces 200 unenforced YAML files and no behaviour change.
   tags: [data-contracts, schema-registry, governance, slo]
 
 - id: sd-recent-007
@@ -158,16 +171,17 @@
 
     The mechanism is a keyed record of the request. The server inserts the key with a hash of the
     payload before executing, returns the stored response on a repeat, and returns 409 if the same
-    key arrives with a different body. Concurrent duplicates see "in progress" rather than starting
-    a second operation. Keys expire after a window longer than the client's retry horizon — 24
-    hours is typical, and at 400 writes/s that is 34.6 million keys and about 4.2 GB.
+    key arrives with a different body. A concurrent duplicate finds the key in progress and gets 409
+    or 425 rather than starting a second charge — the insert must be the concurrency control, not a
+    check followed by a write. Keys expire after a window longer than the client's retry horizon;
+    24 hours is typical, and at 400 writes/s that is 34.6 million keys, about 4.2 GB at 120 bytes.
 
-    Two details make it usable in practice. Return the original status code and body, not a generic
-    "already processed", so client code can follow the same success path. And document which
-    failures are retryable: a 500 or a timeout is, a 422 is not, and a 409 means the client reused
-    a key incorrectly.
+    Two details make it usable. Return the original status code and body, not a generic "already
+    processed", so the client follows the same success path. And document which failures are
+    retryable: a 500 or a timeout is, a 422 is not, and a 409 on reuse means the client has a bug.
 
-    Without this, every client eventually writes its own dedupe table, badly and inconsistently.
+    Without this, every client writes its own dedupe table, badly and inconsistently, and the support
+    queue fills with double charges that are nobody's fault in particular.
   tags: [idempotency, api-design, retries, public-api]
 
 - id: sd-recent-008
@@ -178,21 +192,23 @@
   type: representative
   answer: |
     Cardinality is the bill. A histogram with a `user_id` label creates one time series per user —
-    3.5 million series for one metric — and the vendor charges per series and per sample. The first
-    step is a label policy: bounded dimensions (region, endpoint template, status class) are allowed;
-    unbounded ones (user id, request id, raw URL) are not.
+    3.5 million series for one metric — and vendors charge per series and per sample. Start with a
+    label policy: bounded dimensions (region, endpoint template, status class) are allowed; unbounded
+    ones (user id, request id, raw URL) are not, and are rejected at the SDK rather than discovered
+    on the invoice.
 
-    Then volume. Logs at debug level on a 4,860 events/s path produce terabytes a day. Sample
-    aggressively at the source: keep all errors and slow requests, sample 1% of successful ones, and
-    drop debug in production. Traces follow the same logic — head-sample 10%, but tail-sample to keep
-    every trace that errored or exceeded a latency threshold.
+    Then volume. Logs at debug level on a 4,860 events/s path produce terabytes a day. Sample at the
+    source: all errors and slow requests, 1% of successes, no debug in production. For traces,
+    head-sample 10% and tail-sample the collector so every errored or slow trace survives — tail
+    sampling needs the whole trace, so the decision is made at the collector, not in the SDK.
 
     Retention is the third lever: 7 days hot for search, 30 days in cheaper storage, 13 months
-    aggregated for trend analysis. Most investigations happen within a day of the incident.
+    aggregated for trend. Most investigations happen within a day of the incident, and nobody has
+    ever queried a 400-day-old span.
 
-    Finally, tie spend to value: per-team budgets, a monthly review of the top ten noisiest metrics,
-    and deletion of dashboards nobody opens. Observability is a product with a price, not a free
-    by-product.
+    Finally, tie spend to value: per-team budgets, a monthly review of the ten noisiest metrics, and
+    deletion of dashboards nobody opens. Typical splits run about 45% logs, 40% metrics, 15% traces,
+    so a logs-only cost review usually misses the problem.
   tags: [observability, cardinality, sampling, cost]
 
 - id: sd-recent-009
@@ -204,21 +220,22 @@
   answer: |
     Isolation has three levels, and the right one depends on the tenant's size and contract. Shared
     tables with a `tenant_id` column are cheapest and fine for the long tail; a noisy tenant then
-    competes for the same connection pool, cache and CPU as everyone else. Schema-per-tenant gives
-    query isolation but not resource isolation. Database-per-tenant, or a dedicated shard, gives
-    both at a much higher operational cost.
+    competes for the same connection pool, cache and CPU. Schema-per-tenant gives query isolation but
+    not resource isolation. Database-per-tenant, or a dedicated shard, gives both at much higher
+    operational cost.
 
     The practical architecture is tiered: small tenants share a pool, large tenants get a dedicated
-    shard or instance, and the routing layer knows which is which. That keeps the 90% cheap and the
+    shard or instance, and a routing layer knows which is which. That keeps 90% of tenants cheap and
     10% isolated.
 
-    Resource isolation must be explicit regardless of tier. Per-tenant rate limits at the gateway,
-    per-tenant connection pool quotas, and query timeouts prevent one client from consuming the
-    shared budget. Without limits, a single tenant running an unbounded export at 10× normal volume
-    will saturate the primary.
+    Resource isolation must be explicit regardless of tier. Per-tenant token buckets at the gateway,
+    partitioned connection pools so one tenant cannot take every connection, statement timeouts, and
+    a query-cost ceiling. Without them, one tenant running an unbounded export at 10x normal volume
+    saturates the primary, and every other tenant sees the latency.
 
-    Measure per tenant: p99 latency, error rate and query cost. Aggregate dashboards hide the
-    problem until the loudest customer calls.
+    Measure per tenant: p99, error rate, query cost, queue depth. Aggregate dashboards hide the
+    problem until the loudest customer calls. The early signal is usually a per-tenant p99 that
+    drifts while the global p50 stays flat.
   tags: [multi-tenancy, noisy-neighbour, isolation, quotas]
 
 - id: sd-recent-010
@@ -228,21 +245,77 @@
   period: "2024-2026"
   type: representative
   answer: |
-    Separate the ingestion pipeline from the query path, and make re-indexing incremental and
-    idempotent. A full re-embed of 2 million chunks costs about $20 and a few hours — affordable
-    occasionally, not every hour.
+    Separate ingestion from the query path, and make re-indexing incremental and idempotent. A full
+    re-embed of 2 million chunks costs about $20 and takes hours — affordable occasionally, not every
+    hour.
 
-    The standard design watches the source (CDC on the document table, or a webhook from the CMS),
-    chunks and embeds only changed documents, and upserts by `(document_id, chunk_index,
-    content_hash)`. Deletes are tombstoned rather than forgotten, because a deleted policy document
-    must stop appearing in answers immediately. A `content_hash` prevents re-embedding unchanged
-    text.
+    The standard design watches the source (CDC on the document table, or a CMS webhook), chunks and
+    embeds only changed documents, and upserts by `(document_id, chunk_index, content_hash)`. A
+    `content_hash` stops unchanged text being re-embedded. Deletes are tombstoned rather than
+    forgotten, because a deleted policy document must stop appearing immediately.
+
+    The subtle bug is re-chunking. Inserting a paragraph shifts every subsequent chunk index, so a
+    changed document must delete all its chunks and rewrite them atomically, or old and new
+    boundaries coexist and retrieval returns half-sentences.
 
     Freshness then has an explicit bound: the pipeline's p95 lag, typically under five minutes for
-    CDC-driven updates. State that bound in the product — "answers reflect documents from the last
-    five minutes" — rather than implying real time.
+    CDC. State it in the product — "answers reflect documents from the last five minutes" — rather
+    than implying real time.
 
-    Keep the embedding model version in the index metadata. Changing models requires a parallel
-    index and a cutover, because vectors from two models are not comparable; mixing them silently
-    degrades retrieval in ways evaluation will catch only if you look for it.
+    Keep the embedding model version in the index metadata. Changing models needs a parallel index
+    and a cutover, because vectors from two models are not comparable, and mixing them degrades
+    retrieval in ways only a recall test will catch.
   tags: [rag, indexing, freshness, embeddings]
+
+- id: sd-recent-011
+  topic: batch versus streaming
+  difficulty: intermediate
+  question: The business asks for a real-time dashboard. How do you decide whether that means streaming or a faster batch job?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    Ask what decision the number changes, and how late it can be before that decision changes. "Real
+    time" from a product owner usually means "fresher than yesterday", and the honest requirement is
+    often a freshness bound with a tolerance, not a latency target.
+
+    Then price both. A dashboard on a 5-minute micro-batch reads 140 GB/day in 288 partitions; the
+    incremental job touches 0.49 GB per run (140 ÷ 288) and costs a few compute-minutes. The
+    equivalent streaming pipeline keeps state for every key in the window, runs 24/7, and needs
+    on-call coverage for checkpoint failures, watermark stalls and backfill. The infrastructure might
+    be three times the cost and the operational surface an order of magnitude larger.
+
+    Streaming earns its place when the latency bound is genuinely under a minute, when the output
+    drives an automated action (fraud decline, inventory reservation, alerting), or when the same
+    computation must serve many consumers continuously. A human looking at a chart every few hours is
+    none of those.
+
+    The compromise most teams should ship: a 5-minute batch for the dashboard, a streaming path only
+    for the metric that triggers action, and one shared definition of the metric so the two do not
+    disagree. Divergent numbers in two dashboards cost more trust than the latency saved.
+  tags: [streaming, batch, freshness, cost]
+
+- id: sd-recent-012
+  topic: backpressure
+  difficulty: advanced
+  question: How do you size a queue between a fast producer and a slow consumer, and what happens when it fills?
+  period: "2024-2026"
+  type: representative
+  answer: |
+    With arithmetic, not instinct. If arrivals are 5,000/s and the consumer sustains 4,000/s, the
+    backlog grows at 1,000/s regardless of queue size — a bigger queue buys time, never throughput.
+    A 10-minute buffer holds 1,000 × 600 = 600,000 messages, about 600 MB at 1 KB each, and takes
+    600,000 ÷ 1,000 = 600 s to drain once the burst ends. If the burst lasts longer than the drain
+    headroom, the queue is a delay line that ends in the same failure, later and with more data at
+    risk.
+
+    Little's law gives the steady-state depth: L = λ × W. At 5,000/s and a 2 s processing time, 10,000
+    messages are in flight even when the system is healthy, so a depth of 10,000 is not a backlog.
+
+    When the queue fills, the choice is explicit and belongs in the design: block the producer, shed
+    load with a 429 or a sampled drop, or degrade to a cheaper path. Blocking propagates backpressure
+    and is correct for internal callers; shedding is correct for telemetry, where losing 1% of events
+    beats losing the ingest tier.
+
+    And alarm on age, not depth. A depth of 500,000 is fine at 5,000/s and fatal at 50/s; the oldest
+    unprocessed message age is the number that predicts the breach.
+  tags: [backpressure, queueing, little-law, load-shedding]
