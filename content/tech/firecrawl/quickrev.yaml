@@ -1,0 +1,87 @@
+concepts:
+  - title: Scrape
+    detail: One known URL transformed into requested content formats and source metadata; validate both the provider response and target-page status.
+  - title: Crawl
+    detail: Starts from a URL and recursively discovers pages within explicit limits and filters; long jobs are asynchronous and results may be paginated.
+  - title: Map
+    detail: Discovers candidate URLs for scoping or follow-up retrieval; it is not the page-content corpus and can be bounded or incomplete.
+  - title: Search
+    detail: Finds ranked candidate pages from a query; results are neither exhaustive nor automatically authoritative.
+  - title: Markdown
+    detail: Compact, readable extraction format for prose and many LLM/RAG workflows, but it can lose layout and table details.
+  - title: JSON format
+    detail: Requests schema-shaped structured data; schema validity constrains shape, not factual correctness.
+  - title: waitFor
+    detail: A bounded render delay can help hydration but does not prove required content loaded; verify a meaningful content signal.
+  - title: Actions
+    detail: Simple browser interactions such as click or scroll can reveal content; check outcome and use Playwright for complex state.
+  - title: Two status layers
+    detail: API success describes the Firecrawl request; metadata statusCode describes the target page response.
+  - title: Job ID and cursor
+    detail: Persist asynchronous job state and follow every next cursor until result ingestion is complete, not merely the job status.
+  - title: Page limit
+    detail: An explicit crawl limit bounds work and exposure; it is a ceiling, not a completeness guarantee.
+  - title: Provenance
+    detail: Keep source URL, title, fetched time, target status and extraction version close to every document and chunk.
+  - title: Content hash
+    detail: Hash normalized text to detect unchanged content and avoid unnecessary re-embedding; retain processing version context.
+  - title: Conservative URL normalization
+    detail: Remove fragments and known tracking noise, but preserve query parameters that may change page content or language.
+traps:
+  - Assuming a successful API response means the target returned HTTP 200 or the desired content was extracted.
+  - Treating a fixed wait as proof that client-side rendering has completed.
+  - Launching an unbounded crawl and relying on its default page limit.
+  - Assuming schema-valid JSON is grounded and factually correct.
+  - Retrying permanent 404 or access-denied results as if they were transient network errors.
+  - Deleting last-good indexed content because a single crawl failed to rediscover it.
+advanced:
+  - Persist each paginated result before checkpointing its cursor; make replays idempotent.
+  - Keep API errors, target status codes, crawler errors and content-validation failures as separate categories.
+  - Evaluate extraction on present, absent and ambiguous-field fixtures, not just parseable JSON.
+  - Re-embed changed normalized content only; rebuild when chunking or embedding versions change.
+  - Treat Firecrawl credits and limits as plan- and feature-dependent; confirm current account terms.
+  - Self-hosting transfers browser lifecycle, patching, scaling and reliability work to your team.
+comparisons:
+  - a: scrape
+    b: crawl
+    difference: Scrape processes a known URL; crawl discovers and scrapes pages under a starting scope.
+  - a: map
+    b: search
+    difference: Map discovers URLs associated with a site; search finds ranked candidate sources from a query.
+  - a: Markdown
+    b: HTML
+    difference: Markdown is compact for text workflows; HTML retains more structure for specialized parsing and diagnostics.
+  - a: Firecrawl
+    b: Playwright
+    difference: Managed extraction and discovery surface versus direct browser control with more infrastructure and workflow ownership.
+  - a: HTTP plus trafilatura
+    b: browser rendering
+    difference: Lightweight for static HTML; browser rendering is needed when content is created client-side or interaction-dependent.
+  - a: URL deduplication
+    b: content-hash deduplication
+    difference: URL identity finds repeated requests; normalized content hashes catch identical text at different URLs.
+commands:
+  - label: Scrape one URL as Markdown
+    code: |
+      curl -X POST https://api.firecrawl.dev/v2/scrape -H "Authorization: Bearer $FIRECRAWL_API_KEY" -H "Content-Type: application/json" -d '{"url":"https://example.com","formats":["markdown"]}'
+  - label: Start a bounded crawl
+    code: |
+      curl -X POST https://api.firecrawl.dev/v2/crawl -H "Authorization: Bearer $FIRECRAWL_API_KEY" -H "Content-Type: application/json" -d '{"url":"https://example.com/docs","limit":100}'
+  - label: Poll crawl status
+    code: |
+      curl -H "Authorization: Bearer $FIRECRAWL_API_KEY" https://api.firecrawl.dev/v2/crawl/<job-id>
+  - label: Map a site URL inventory
+    code: |
+      curl -X POST https://api.firecrawl.dev/v2/map -H "Authorization: Bearer $FIRECRAWL_API_KEY" -H "Content-Type: application/json" -d '{"url":"https://example.com"}'
+  - label: Retry with bounded exponential backoff
+    code: |
+      for attempt in 1 2 3; do run_job && break; sleep $((2 ** attempt)); done
+  - label: Count crawl results by target status
+    code: |
+      jq -r '.data[].metadata.statusCode' crawl.json | sort | uniq -c
+  - label: Hash normalized document text
+    code: |
+      python -c "import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())" < normalized.txt
+  - label: Validate the module with project environment
+    code: |
+      cd /home/ubuntu/projects/learn && .venv/bin/python -m backend.app.content

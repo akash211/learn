@@ -1,0 +1,90 @@
+- id: pbi-recent-001
+  topic: Direct Lake
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: When would you choose Direct Lake over Import or DirectQuery in a Fabric solution?
+  answer: |
+    I would consider Direct Lake when analytical data is already curated in supported Delta tables in OneLake and the team wants a Power BI semantic model to use that data without a traditional full import or per-query DirectQuery translation. I would compare it with Import for model behavior, refresh and memory needs, and with DirectQuery for source load, latency and connector limitations. I would first verify the target Fabric capacity, table layout, model features and current Direct Lake behavior, including any fallback path relevant to the configuration. Then I would prototype real report interactions, security, schema changes, concurrency and freshness against the production-like data. Direct Lake does not eliminate model design, data quality or capacity management. If the data is not in the right Fabric shape, or if the required features and workload are better served elsewhere, Import or DirectQuery may remain the simpler choice. The selection should be backed by measured end-to-end behavior.
+  tags: [direct-lake, fabric, storage-modes]
+- id: pbi-recent-002
+  topic: semantic model reuse
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: How would you govern shared semantic models when teams build self-service reports?
+  answer: |
+    I would assign a clear model owner and publish shared definitions for critical measures, grain, refresh expectations, lineage and support. Report authors should use an endorsed or otherwise discoverable model rather than extracting the same source and rebuilding metrics independently. Grant Build permission only to users who need to create reports or query the model, and use apps or viewer access for consumers. Keep authoring and production boundaries explicit, with review and deployment steps for model changes. Certification criteria should include reconciliation, documentation, security, refresh reliability and ownership; an endorsement alone is not proof of correctness. Monitor dependencies so a field or measure change does not unexpectedly break downstream reports. Provide a safe exploration workspace and a supported path for successful content to become governed. Finally, periodically review access and usage, remove abandoned artifacts, and make it easy for users to tell which model is authoritative without blocking legitimate analysis.
+  tags: [semantic-model, governance, build-permission]
+- id: pbi-recent-003
+  topic: Fabric architecture
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: Where should transformation logic live across Fabric pipelines, Dataflows Gen2 and the semantic model?
+  answer: |
+    Put durable, reusable data engineering and quality rules in a governed lakehouse or warehouse when they need broad reuse, testing and lineage. Use Dataflows Gen2 when Power Query is an effective managed preparation tool and multiple downstream consumers benefit from its output. Keep report-facing relationships, business measures and filter-sensitive calculations in the semantic model. Pipeline orchestration should coordinate dependencies and operational retries, not duplicate transformation semantics. I would map each rule to one authoritative layer, document its owner and test it with representative data. Too many layers increase refresh dependencies and failure modes; putting all logic in DAX can also make shared data quality difficult to reuse. Verify supported destinations, credentials, refresh behavior and capacity in the actual tenant. A practical design is the simplest one that meets latency, reuse, governance and engineering needs, with lineage visible from source through curated data to semantic model and report.
+  tags: [dataflows-gen2, fabric, architecture]
+- id: pbi-recent-004
+  topic: RLS security
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: How would you validate dynamic RLS after publishing a model to the Power BI service?
+  answer: |
+    I would validate the complete identity-to-row path. First check that the entitlement table contains the identity string the service exposes and the intended allowed keys, then verify relationship direction and role filter propagation to every fact. Assign an identity group to the role where possible and confirm the test user is actually a read-only consumer, not a workspace editor whose privileges bypass the expected viewer restriction. In the service, test representative users with one, multiple and no entitlements, and compare returned totals with an independently filtered source or known fixture. Exercise slicers, drill-through, export and other enabled access paths. Check the app audience and semantic-model permissions as well as role membership. Do not treat Desktop “View as” alone as sufficient. Record negative tests proving a user cannot see another tenant or region. If an RLS change ships through a deployment pipeline, repeat the production test afterward because membership and environment bindings are operational configuration too.
+  tags: [dynamic-rls, security, validation]
+- id: pbi-recent-005
+  topic: incremental refresh
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: Incremental refresh runs successfully but an old corrected fact row never changes. What do you investigate?
+  answer: |
+    I would check whether the correction falls outside the configured refresh period. Incremental refresh generally refreshes selected recent partitions, so an older row can remain unchanged unless the policy or a supported change-detection strategy brings that partition into scope. Confirm the RangeStart/RangeEnd predicate, partition boundaries, source query folding and the model's actual service policy. Verify that a modification timestamp changes for the correction and is reliable for detection; a static ingestion date will not signal updates. Source deletions need separate handling because a missing row in an old partition may not be rediscovered by refreshing only recent data. Compare partition row counts and business totals with the source for the affected period, and inspect refresh history. Then decide whether to widen the refresh window, schedule periodic reconciliation, or manage a targeted partition refresh using an appropriate supported approach. Test the fix with a late correction and a deletion before relying on a successful status alone.
+  tags: [incremental-refresh, partitions, data-quality]
+- id: pbi-recent-006
+  topic: performance diagnosis
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: A report is slow after a release. How do you identify whether DAX, the source or visuals are responsible?
+  answer: |
+    I would reproduce the slow interaction with the same page, filters, user and data volume, then use Performance Analyzer to separate visual query timing from client-side rendering and capture the DAX query. For an Import model, I would inspect DAX Studio server timings and query plans, model size and capacity pressure. For DirectQuery, I would correlate query timing with source telemetry, query plan, network and gateway behavior; the source may be the bottleneck even when DAX is simple. I would check whether the release added visuals or interactions that cause more queries. Compare a known baseline and warm versus cold behavior, then form one testable hypothesis and change one thing. Validate correctness and rerun at realistic concurrency. Avoid rewriting measures based on intuition or attributing the whole visual duration to DAX. Save the captured query and timing as evidence so the team can verify that the regression is fixed in the deployed environment.
+  tags: [performance-analyzer, dax-studio, diagnosis]
+- id: pbi-recent-007
+  topic: workspace governance
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: What checks belong in a development-to-production Power BI deployment pipeline?
+  answer: |
+    Before promotion, review the model and report changes, dependencies, measure compatibility, security impact and test evidence. Use deployment rules for supported environment-specific settings, but do not assume all settings or credentials transfer automatically. After deployment, confirm data source bindings, parameters, gateway or cloud connections, credentials, refresh schedules and the production data path. Reconcile key totals and test representative visuals. Verify role definitions and group membership, workspace access, app audiences, Build permission and intended RLS outcomes. Confirm the production app or report is actually published to the audience and that prior release rollback is understood. Check refresh and service health after the release; artifact deployment success is not equivalent to an operationally successful report. Pipelines help standardize promotion but are not a replacement for source control, approval or security review. Keep a concise release record with owner, changed artifacts, validation results, known risks and rollback steps so an incident can be diagnosed quickly.
+  tags: [deployment-pipelines, release-management, governance]
+- id: pbi-recent-008
+  topic: DirectQuery design
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: How would you keep a DirectQuery semantic model from overloading its source database?
+  answer: |
+    I would begin with a representative concurrency test and identify the actual source queries generated by visuals. Keep Power Query transformations foldable, remove unnecessary columns and apply selective filters early. Use a star-shaped model and measures that translate efficiently, then inspect source execution plans and indexing with the database team. Reduce unnecessary visuals and cross-highlighting that trigger duplicate queries, and consider aggregations or an appropriate composite design for common summaries. Configure source capacity and connection limits intentionally, and monitor query duration, timeouts and workload during peak periods. If the source is transactional, protect application workloads and consider a replicated or analytical serving layer rather than routing every interactive report to the primary system. Caching behavior and freshness requirements should be explicit; DirectQuery is not automatically real-time. Benchmark detail drill-through and RLS paths too. Any tuning should preserve metric correctness and be rechecked after source schema, connector or model changes.
+  tags: [directquery, source-performance, query-folding]
+- id: pbi-recent-009
+  topic: model optimization
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: A model's memory usage grows sharply after adding a few columns. How do you investigate?
+  answer: |
+    I would inspect each added column's data type, distinct count, row count and actual model memory rather than judging from source bytes. High-cardinality text, unique timestamps and identifiers can create large dictionaries and compress less effectively than repeating attributes. Determine whether each column is needed in a report, relationship or calculation; remove unused fields and move descriptive attributes to dimensions where appropriate. Consider whether timestamp precision or imported history can be reduced without losing required semantics, and whether an aggregate is acceptable for older data. Check calculated columns and duplicated keys as well. Use model metadata or a suitable VertiPaq analysis tool to locate the largest columns, then compare memory after each targeted change. Do not truncate identifiers or round financial values simply to reduce size. Re-test refresh, relationships and drill-through so optimization preserves reconciliation and analytical grain. Also verify service capacity behavior, since Desktop memory does not fully represent shared service workload.
+  tags: [vertipaq, cardinality, model-size]
+- id: pbi-recent-010
+  topic: BI platform selection
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: How would you choose among Power BI, Tableau and a custom-coded dashboard for a new analytics product?
+  answer: |
+    I would translate the use case into tasks and operational constraints before comparing platforms: who authors metrics, how users filter and drill, where data lives, what identity and row access are required, how content is released, and who supports it. Run the same representative workflow in Power BI and Tableau, including shared semantic definitions, collaboration, accessibility and administration. Evaluate custom code if the experience must be deeply embedded or highly bespoke, but include the full cost of building and operating authorization, caching, accessible interactions, semantic consistency, monitoring and deployment. A coded browser filter is not a security control. Compare fit with existing skills and data architecture, not only chart appearance or a price snapshot. For a Microsoft-centered lakehouse architecture, assess Fabric integration and Direct Lake where applicable, but test actual feature and capacity needs. Choose the simplest option that meets product requirements and has a credible ownership and governance model, then validate with real users before broad commitment.
+  tags: [tableau, custom-dashboard, platform-selection]

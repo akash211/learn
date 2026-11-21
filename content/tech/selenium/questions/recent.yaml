@@ -1,0 +1,129 @@
+- id: sel-recent-001
+  topic: Selenium Manager and reproducibility
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: Selenium Manager removes manual driver paths in many setups. What should still be pinned or provisioned in CI?
+  answer: |
+    Selenium Manager handles common browser-driver discovery and resolution, but deterministic CI still needs an intentional browser environment. Pin the Selenium Python dependency and browser image or package version; verify that the browser binary and required OS libraries exist. Decide whether the build can reach the network for driver resolution and how its cache is populated. Restricted runners may need drivers provisioned during image creation instead of fetching at session startup. Record the browser and driver versions with test results, and run a startup smoke test after image updates. Manager reduces routine version-matching work; it does not guarantee an offline install, install every browser, make a floating browser version reproducible, or resolve proxy and permission failures automatically.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [selenium-manager, ci, reproducibility]
+
+- id: sel-recent-002
+  topic: WebDriver BiDi
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: What is WebDriver BiDi, and how does it differ from classic WebDriver commands?
+  answer: |
+    Classic WebDriver is primarily a request/response model: the client issues a command such as navigate or find element and receives a response. WebDriver BiDi adds a bidirectional communication model so clients can subscribe to browser events and receive notifications, such as relevant log or network events, while the session is active. It is a W3C standard effort and browser and client support varies by feature and version, so do not assume every BiDi capability works uniformly across browsers or Selenium releases. It complements rather than erases the classic WebDriver API. When considering BiDi for diagnostics, verify the exact Selenium binding, browser version and event support, then keep a fallback plan. Avoid claiming that BiDi automatically provides a full, portable trace for every session.
+  tags: [webdriver-bidi, protocol, browser-events]
+
+- id: sel-recent-003
+  topic: Grid and observability
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: A Selenium Grid session request waits in a queue during CI. How would you diagnose and improve it?
+  answer: |
+    First separate session-creation delay from test execution time. Log the request timestamp, requested browser capabilities, endpoint, and returned session ID. Check Grid status, node health, matching browser slots, queue behavior, and whether the requested browser version exists in the deployed images. Compare demand with available capacity and measure node CPU, memory and browser crashes before increasing concurrency. If requests cannot match capabilities, standardize the requested options and node configuration. If capacity is genuinely saturated, reduce shard concurrency, add appropriate nodes, or schedule jobs. Set bounded session-creation timeouts and fail with the queue context rather than letting a suite appear hung. Protect Grid access and avoid retrying every session request without a cap, which can worsen overload.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [grid, ci, capacity]
+
+- id: sel-recent-004
+  topic: waits and test reliability
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: A team proposes replacing Selenium explicit waits with fixed sleeps to remove intermittent failures. What is a stronger approach?
+  answer: |
+    Identify the state transition that races, then wait for observable evidence of that state. Use `WebDriverWait` with a relevant `expected_conditions` predicate, such as visibility, clickability, a changed title, alert presence, or staleness of a replaced node. If none captures application readiness, write a short read-only predicate that checks a stable signal such as a result list and absence of a busy indicator. After an action, wait for its expected outcome rather than merely waiting before it. Keep implicit wait behavior simple—usually zero when explicit waits are used—and avoid broadly ignored exceptions. A sleep is a fixed delay, not a readiness guarantee; it can still be too short under load and unnecessarily long on fast runs. Collect failure evidence to test the hypothesis.
+  tags: [waits, flakiness, expected-conditions]
+
+- id: sel-recent-005
+  topic: locator strategy
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: How would you decide whether a test should locate a control by accessible name, test ID, CSS, or XPath?
+  answer: |
+    Begin with the requirement under test. If the user-facing accessible name or label is part of the contract, locating and asserting that semantic behavior can make the test meaningful. A stable `data-testid` or ID is useful when an otherwise correct UI element lacks unique public semantics, especially for an internal application whose developers can maintain the hook. CSS works well for stable attributes and component scoping; XPath can express text and ancestor relationships when needed. Avoid generated styling classes, deep DOM paths and positional selectors unless position itself is under test. Check uniqueness in the relevant page or component, and prefer a readable locator over a compact but opaque expression. The best strategy is the one whose identity survives harmless redesign while still validating the intended user interaction.
+  tags: [locators, accessibility, testability]
+
+- id: sel-recent-006
+  topic: headless CI
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: A browser test passes locally but fails only in a headless container. What do you inspect before changing the test?
+  answer: |
+    Compare the actual runtime first: browser and Selenium versions, container image, viewport, fonts, locale, time zone, system libraries, shared memory and network policy. Capture a screenshot and relevant driver or browser logs on failure. A smaller viewport can expose a responsive menu or overlay that does not exist on a laptop; a missing font or blocked resource can change layout. Confirm the target is visible and unobstructed, then check whether the wait is tied to the right state. Reproduce locally with the same image where possible. Do not immediately increase sleeps, disable browser security, or add privileged container mode. Fix a missing dependency or deliberate viewport mismatch at the environment level, and only change a test when evidence shows it relies on an invalid assumption.
+  tags: [headless, containers, debugging]
+
+- id: sel-recent-007
+  topic: parallel execution
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: How do you determine whether parallel Selenium execution is helping or merely creating instability?
+  answer: |
+    Measure end-to-end wall time along with Grid queue time, per-test duration, browser startup, node CPU and memory, crash rate, and failure categories at several worker counts. Each test should own its WebDriver session and isolated data, download directory and artifact name. Sharing a driver or a mutable test account creates races that look like browser flakiness. Increasing workers can overload the browser nodes or the application under test, so faster throughput is not guaranteed. Compare single-worker and parallel runs, including failures that depend on order. Use test-duration-based sharding and cap parallelism at observed capacity. If adding workers increases queue time or retries, reduce concurrency or provision resources. Treat retries as a diagnostic signal, not a substitute for isolation and capacity planning.
+  tags: [parallelism, grid, isolation]
+
+- id: sel-recent-008
+  topic: Selenium and Playwright
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: What evidence would justify choosing Playwright instead of Selenium for a new UI test suite?
+  answer: |
+    Compare requirements rather than framework popularity. Playwright can be attractive when built-in auto-waiting, isolated browser contexts, convenient tracing and an integrated test-runner ecosystem reduce the team's setup and maintenance burden. Selenium may be preferable when WebDriver language bindings, an existing Grid, broad ecosystem integration or current team expertise are important. Build a small proof of concept around the hardest flows: asynchronous rendering, frames or popups, downloads, target browser coverage, CI provisioning and failure artifacts. Measure flake rate, runtime, diagnostics, infrastructure and migration cost. Neither framework makes unstable selectors or shared test data reliable. A switch is justified when observed benefits address actual constraints, not simply because one API feels shorter in a trivial example.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [playwright, selenium, framework-choice]
+
+- id: sel-recent-009
+  topic: downloads and Grid
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: Why might a Selenium test on Grid not find a file downloaded by the browser, and how should it be designed?
+  answer: |
+    The browser may download to the filesystem of the remote node, while the Python test runs on a different client machine. A local path check therefore inspects the wrong filesystem. Configure an isolated download location and use a transfer mechanism supported by the deployed Grid and Selenium client when managed downloads are enabled. Verify version-specific capabilities rather than assuming all Grid deployments expose identical behavior. Wait for a completed file rather than a temporary download and validate its size and contents. Alternatively, if the UI download ultimately maps to an approved endpoint, an authorized direct fetch may be a simpler test after separately checking that the UI triggers the expected export. Keep download artifacts isolated per test and clean them up.
+  tags: [grid, downloads, remotewebdriver]
+
+- id: sel-recent-010
+  topic: browser evidence
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: What should a useful failure artifact bundle contain, and what should it avoid?
+  answer: |
+    A useful bundle usually includes the first exception and traceback, a screenshot captured before session teardown, current URL and title, test identifier, timestamp, Selenium and browser versions, capabilities, execution mode and Grid session ID. Driver and browser logs can add context when configured and supported. Keep capture in a fixture so failures are handled consistently, and do not allow a secondary screenshot error to replace the original exception. Avoid full page dumps, cookies, authentication headers, passwords and unnecessary personal data. URLs and screenshots can themselves contain private information, so restrict access and retention, and redact where practical. A compact, consistent bundle helps distinguish application regressions from selector, wait, browser startup, resource and infrastructure failures without turning artifacts into a secret store.
+  tags: [debugging, artifacts, privacy]
+
+- id: sel-recent-011
+  topic: responsible automation
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: An extraction job starts receiving HTTP 429 responses and a bot challenge. What is the responsible engineering response?
+  answer: |
+    Stop or reduce the run and review the service's documented limits, terms and authorization. A 429 commonly indicates throttling; honor any `Retry-After` guidance and do not amplify load with unbounded retries or more parallel sessions. A bot challenge or access-control response is a boundary, not an invitation to add stealth, proxy rotation or challenge-solving code. Ask the operator for an approved API, export, quota or test environment. If retries are allowed, use bounded backoff only for safe, idempotent operations. Preserve enough logs to understand volume and stop conditions without collecting sensitive page data. Selenium can control a browser, but technical capability does not establish permission to access or reuse content.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [ethics, rate-limits, access-controls]
+
+- id: sel-recent-012
+  topic: WebDriver exception diagnosis
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: How do you distinguish `NoSuchElementException`, `StaleElementReferenceException`, and a session-creation failure?
+  answer: |
+    `NoSuchElementException` means the lookup found no matching element at that time; inspect locator correctness, page state and whether a condition-specific wait is needed. `StaleElementReferenceException` means a previously located remote element no longer refers to a live node in the current document, often after navigation or a framework re-render; wait for the transition and locate the current element again. A session-creation failure, often represented by `SessionNotCreatedException`, occurs before normal page interactions and points toward browser/driver startup, capabilities, permissions or Grid capacity. Classifying the first failure by lifecycle stage prevents random selector edits. Capture URL, versions, capabilities and logs where possible. Do not globally catch and retry all three: a retry may hide a real mismatch or duplicate a side effect.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [exceptions, debugging, webdriver]

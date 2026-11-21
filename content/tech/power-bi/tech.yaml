@@ -1,0 +1,94 @@
+slug: power-bi
+title: Power BI
+category: analytics
+summary: Microsoft's business intelligence platform for shaping data, building semantic models and delivering governed interactive analytics.
+level: core
+relations:
+  - to: sql
+    type: uses
+    note: Power BI commonly queries SQL sources and benefits from relational modeling and query literacy.
+  - to: tableau
+    type: alternative
+    note: Tableau is another BI platform; compare the modeling, authoring, governance and deployment needs of the organization.
+  - to: microsoft-fabric
+    type: complements
+    note: Fabric integrates Power BI semantic models and reports with lakehouse, warehouse and OneLake workloads.
+  - to: azure-sql
+    type: uses
+    note: Azure SQL Database is a common operational or analytical source for Power BI models.
+intro:
+  what: |
+    Power BI is Microsoft's business intelligence platform for connecting to data, preparing it, modeling business concepts, creating reports and sharing governed analytics. Power BI Desktop is the primary Windows authoring application; the Power BI service hosts workspaces, semantic models, reports, apps and collaboration. A report is a collection of interactive visual pages. A semantic model (formerly commonly called a dataset) defines tables, relationships, measures, hierarchies, metadata and security that reports use. Power Query provides extraction and transformation, while DAX expresses calculations over the model.
+
+    A useful mental model separates the data pipeline, semantic layer and presentation. A source query is not a model; a model is not a report; and a report visual is not a substitute for a defined measure. The choice between Import, DirectQuery, Dual and Direct Lake affects where data is stored and how queries execute. It also affects latency, feature support, capacity and operational requirements. The right choice is workload-specific, not a one-way ladder from simple to advanced.
+
+    Power BI capabilities evolve across Desktop, the service and Fabric. Exact feature availability depends on tenant settings, capacity, region, source connector and release. Treat documentation and a tested deployment as authoritative for a particular environment, especially for Direct Lake, dataflows and governance.
+  why: |
+    Organizations need dependable answers, not merely charts. Power BI can unify data from operational databases, files and analytical platforms behind a reusable model, with measures and access rules shared across reports. That can reduce duplicated calculations and help business teams explore questions without asking an analyst to rebuild every view.
+
+    The same flexibility can create inconsistent metrics, slow reports, accidental overexposure or unmaintainable refresh chains when models lack design and ownership. Strong practitioners understand grain, filter context, source capabilities and deployment boundaries. They can explain why a number is correct, who can see it, when it updates and how a change reaches production.
+  problems:
+    - Combining business data and defining reusable measures over a clear semantic model.
+    - Letting users explore interactive reports while keeping metric definitions consistent.
+    - Balancing freshness, interactivity, model size and source-system load.
+    - Governing refresh, access, endorsement, workspaces and release promotion.
+    - Diagnosing DAX, model, query-folding and visual-level performance bottlenecks.
+  where_used:
+    - Departmental and enterprise reporting across finance, operations, sales and product analytics.
+    - Governed self-service BI built on shared certified or endorsed semantic models.
+    - Embedded or distributed analytics, subject to licensing, security and capacity design.
+    - Microsoft Fabric analytics using OneLake, lakehouses, warehouses and Direct Lake models.
+  ecosystem: |
+    Power BI connects through Power Query and source connectors, then presents data through a semantic model and report. SQL sources are common; Azure SQL can serve as a source, while Fabric provides a broader analytical platform whose OneLake and Direct Lake capabilities can complement Power BI. Tableau is a credible alternative when comparing authoring workflows, data architecture, administration, deployment and existing skills. Report code using libraries such as JavaScript or Python can fit highly bespoke applications, but usually requires building and operating the interaction, accessibility, security and semantic logic that a BI platform supplies. Choose by the whole operating model, not chart appearance.
+  alternatives:
+    - name: Tableau
+      note: Competing BI platform with its own data model, calculations, authoring and governance workflows; compare on representative user tasks.
+    - name: Custom dashboard application
+      note: Code offers control over interaction and integration but shifts semantic consistency, accessibility, security and lifecycle ownership to the team.
+  related: [sql, tableau, microsoft-fabric, azure-sql]
+chapters:
+  - id: semantic-model
+    title: The Semantic Model
+    file: chapters/01-semantic-model.md
+    minutes: 14
+    level: core
+  - id: dax-fundamentals
+    title: DAX Fundamentals and Interview Questions
+    file: chapters/02-dax-fundamentals.md
+    minutes: 14
+    level: core
+  - id: storage-modes
+    title: Storage Modes and Choosing
+    file: chapters/03-storage-modes.md
+    minutes: 13
+    level: core
+  - id: power-query-dataflows
+    title: Power Query and Dataflows Gen2
+    file: chapters/04-power-query-dataflows.md
+    minutes: 13
+    level: core
+  - id: refresh-gateway
+    title: Incremental Refresh and Gateway Setup
+    file: chapters/05-refresh-gateway.md
+    minutes: 13
+    level: core
+  - id: security-governance
+    title: Row-Level Security and Workspace Governance
+    file: chapters/06-security-governance.md
+    minutes: 14
+    level: core
+  - id: performance
+    title: Performance Tuning
+    file: chapters/07-performance.md
+    minutes: 14
+    level: core
+  - id: ecosystem-fabric
+    title: Power BI, Tableau, Code and Fabric
+    file: chapters/08-ecosystem-fabric.md
+    minutes: 13
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

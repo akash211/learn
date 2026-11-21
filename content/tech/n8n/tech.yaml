@@ -1,0 +1,92 @@
+slug: n8n
+title: n8n
+category: web-automation
+summary: "Fair-code workflow automation for connecting APIs, services and AI systems, with self-hosted control over execution and data."
+level: core
+relations:
+  - to: rest-apis
+    type: uses
+    note: HTTP Request and Webhook nodes make REST integration a core workflow pattern.
+  - to: cicd
+    type: complements
+    note: Versioned workflows and environment promotion benefit from CI/CD practices.
+  - to: llm-agents
+    type: complements
+    note: n8n can orchestrate model and agent calls, while agent design supplies the reasoning patterns and safeguards.
+intro:
+  what: |
+    n8n is a fair-code workflow automation platform for connecting applications, APIs, databases and services. A workflow is a directed graph of nodes: trigger nodes start a run, action nodes perform work, and branches or loops control which data reaches the next step. It offers a visual editor and the ability to add JavaScript or Python logic where a node-based integration is not enough. n8n is available as a hosted cloud service and as software that an operator can self-host; deployment, data custody, updates and operational responsibility therefore differ between those options.
+
+    The project describes its licensing as fair-code, not open source under the OSI definition. The Sustainable Use License permits many internal and personal uses, while commercial use and redistribution can have restrictions; review the current license for a proposed use rather than assuming the word “fair-code” grants unrestricted SaaS rights. Self-hosting provides control over infrastructure and stored execution data, but the operator must secure, back up, upgrade and monitor it. Cloud users delegate platform operations to n8n while remaining responsible for workflow design, credentials, access and data handling.
+  why: |
+    Organizations repeatedly move information between systems that expose different APIs, schedules and event mechanisms. n8n reduces the amount of bespoke glue code needed to authenticate, transform, route and retry that work. A visual graph makes the integration’s steps inspectable, and the execution record can help operators understand inputs, outputs and failures.
+
+    Automation still has production software concerns. A workflow may receive duplicate events, exceed an API rate limit, partially complete a multi-step operation or expose sensitive data in its execution history. A successful-looking canvas is not evidence of exactly-once behavior or a safe deployment. Reliable use depends on explicit data contracts, bounded retries, idempotency, least-privilege credentials and operational monitoring.
+  problems:
+    - Connect SaaS applications and internal systems through APIs, events, schedules and database operations.
+    - Transform and route data without building a separate service for every integration.
+    - Make integration logic visible to both workflow authors and operators.
+    - Coordinate model calls and tool use while retaining explicit workflow steps and controls.
+  where_used:
+    - Internal business-process automation and notifications.
+    - Webhook-driven intake, synchronization and enrichment pipelines.
+    - Scheduled data movement and API polling jobs.
+    - Prototypes and production integrations whose complexity fits the workflow runtime.
+  ecosystem: |
+    n8n sits between trigger sources and destination systems. Its core nodes cover common services, while HTTP Request and Webhook nodes provide generic API boundaries. It complements REST API knowledge for authentication, pagination and error semantics; CI/CD practices help promote workflow changes; and LLM-agent concepts inform AI workflows. A self-hosted installation commonly uses Docker, a database such as PostgreSQL, and optionally Redis with worker processes for queue mode. These deployment choices do not change the need to understand node data and execution semantics.
+  alternatives:
+    - name: Make
+      note: Hosted visual automation with a managed service model; deployment control and connector behavior differ.
+    - name: Zapier
+      note: Hosted no-code automation oriented around application integrations and business users.
+    - name: Apache Airflow
+      note: Code-oriented orchestration suited to scheduled data pipelines and dependency management, with different event and interaction strengths.
+    - name: FastAPI plus cron
+      note: Explicit application code and operating-system scheduling can be simpler when an integration needs tests, custom protocols or a stable API.
+related: [rest-apis, cicd, llm-agents]
+chapters:
+  - id: architecture-deployment
+    title: Architecture and Deployment
+    file: chapters/01-architecture-deployment.md
+    minutes: 12
+    level: core
+  - id: nodes-triggers-execution
+    title: Nodes, Triggers and the Execution Model
+    file: chapters/02-nodes-triggers-execution.md
+    minutes: 12
+    level: core
+  - id: expressions-data-flow
+    title: Expressions and Data Flow
+    file: chapters/03-expressions-data-flow.md
+    minutes: 12
+    level: core
+  - id: errors-retries
+    title: Error Handling, Retries and Error Workflows
+    file: chapters/04-errors-retries.md
+    minutes: 12
+    level: core
+  - id: credentials-security
+    title: Credentials, Encryption and Security
+    file: chapters/05-credentials-security.md
+    minutes: 12
+    level: core
+  - id: webhooks-scheduling
+    title: Webhooks, Scheduling and Idempotency
+    file: chapters/06-webhooks-scheduling.md
+    minutes: 12
+    level: core
+  - id: ai-agent-nodes
+    title: AI and Agent Nodes
+    file: chapters/07-ai-agent-nodes.md
+    minutes: 12
+    level: core
+  - id: versioning-code-choice
+    title: Version Control, Environments and Code Choices
+    file: chapters/08-versioning-code-choice.md
+    minutes: 12
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

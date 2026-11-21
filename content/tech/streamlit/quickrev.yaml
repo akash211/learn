@@ -1,0 +1,96 @@
+concepts:
+  - title: Rerun model
+    detail: "A widget event normally updates its value and reruns the app script top to bottom; local Python variables are recreated."
+  - title: Button event
+    detail: "A button is true only during its click-triggered run; persist results separately if they must remain visible."
+  - title: Widget keys
+    detail: "Stable unique keys identify widgets and expose values in Session State; keys are not authorization controls."
+  - title: Forms
+    detail: "`st.form` batches widget edits until submit; it does not provide database transaction semantics."
+  - title: Callback order
+    detail: "Widget callbacks run before the main script reruns, so they can update state that the next run reads."
+  - title: Session State
+    detail: "Per-session mapping for values across reruns; it is volatile, not cross-user storage or durable persistence."
+  - title: Widget lifecycle
+    detail: "State for a widget that is not rendered can be cleaned up; copy required values into app-owned keys."
+  - title: "st.cache_data"
+    detail: "Caches computed data based on function code and arguments and returns copies; inputs must capture real dependencies."
+  - title: "st.cache_resource"
+    detail: "Caches and shares resource identity such as a model or engine; verify concurrency safety and avoid user-specific mutable state."
+  - title: Cache invalidation
+    detail: "External/global dependencies omitted from arguments can yield stale hits; use explicit version inputs, TTL, or clear after writes."
+  - title: Fragment rerun
+    detail: "`st.fragment` lets contained widget interactions rerun a region; it does not make work durable or free."
+  - title: Page router
+    detail: "`st.navigation` returns the selected `st.Page`; call `.run()` once, and do not expect `pages/` routing to combine."
+  - title: Browser payload
+    detail: "A large dataframe costs Python memory, serialization, network transfer, and browser rendering even on a cache hit."
+  - title: Upload trust
+    detail: "`st.file_uploader(type=...)` is best-effort filtering; validate content, size, schema, and storage handling yourself."
+  - title: Resource lifecycle
+    detail: "Cache a connection pool or engine as a resource; create and close short-lived connections/transactions for each operation."
+  - title: Deployment boundary
+    detail: "Streamlit serves a stateful browser app; proxy WebSockets, identity, secret handling, and process limits are deployment concerns."
+
+traps:
+  - "Expecting ordinary local variables to survive an interaction-triggered rerun."
+  - "Treating a button's true return value as a persistent clicked flag."
+  - "Using a shared cache for tenant data while omitting trusted tenant identity from the key."
+  - "Assuming `st.cache_resource` returns isolated copies or makes its object thread-safe."
+  - "Assuming tabs, expanders, or hidden pages defer work or enforce authorization."
+  - "Treating an uploader type filter, spinner, or form submit as security, durability, or transaction control."
+
+advanced:
+  - "Use idempotency keys and database constraints for side effects that may be triggered again after reruns, refreshes, or retries."
+  - "A `st.cache_data` entry count bound is not a memory-byte limit; monitor result size and copy/serialization costs."
+  - "Parallel fragments may overlap with other app work; protect shared mutable resources and respect external-container restrictions."
+  - "Session State is per session; durable workflow status and cross-device resumption need an external store."
+  - "Enforce tenant authorization in the query/service layer; cache-key partitioning helps correctness but is not access control."
+  - "A long-running export needs a worker and persisted job state; `run_every` fragments only poll while a session is active."
+
+comparisons:
+  - a: "st.cache_data"
+    b: "st.cache_resource"
+    difference: "Data cache stores computed results and returns copies; resource cache returns a shared object identity that must be safe across callers."
+  - a: "Widget state"
+    b: "Application-owned Session State"
+    difference: "Widget state follows rendering lifecycle; app-owned keys can preserve a value independently when the widget disappears."
+  - a: "Immediate widget"
+    b: "Form widget"
+    difference: "Immediate controls typically rerun on change; form values are submitted together through the form submit button."
+  - a: "Full app rerun"
+    b: "st.fragment rerun"
+    difference: "A full rerun rebuilds the script output; a fragment rerun refreshes an isolated region while surrounding output remains."
+  - a: "st.dataframe"
+    b: "st.table"
+    difference: "Dataframe supports interactive inspection; table is static. Neither replaces server-side pagination for very large results."
+  - a: "st.navigation"
+    b: "pages/ directory"
+    difference: "Explicit router defines Page objects and shared entrypoint flow; directory routing is conventional discovery, and they do not combine in one app session."
+  - a: Streamlit
+    b: FastAPI plus frontend
+    difference: "Streamlit favors Python-first data interfaces; FastAPI plus a dedicated client favors stable APIs and custom browser interaction."
+
+commands:
+  - label: Run app locally
+    code: streamlit run app.py
+  - label: Install declared dependencies
+    code: python -m pip install -r requirements.txt
+  - label: Set Streamlit configuration directory
+    code: mkdir -p .streamlit
+  - label: Example non-secret server config
+    code: |-
+      # .streamlit/config.toml
+      [server]
+      headless = true
+  - label: Load app secrets
+    code: 'st.secrets["database"]["url"]'
+  - label: Cache a deterministic data result
+    code: "@st.cache_data(ttl=300, max_entries=64)"
+  - label: Cache a shared client or engine
+    code: |-
+      @st.cache_resource
+      def get_engine():
+          return create_engine(...)
+  - label: Clear a function's data cache after a successful write
+    code: load_report.clear()

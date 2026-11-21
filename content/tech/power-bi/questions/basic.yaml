@@ -1,0 +1,154 @@
+- id: pbi-basic-001
+  topic: semantic modeling
+  difficulty: beginner
+  question: What is a star schema, and why is it commonly recommended in Power BI?
+  answer: |
+    A star schema separates measurable business events in fact tables from descriptive attributes in dimension tables. A Sales fact might hold order-line grain, quantities and amounts, while Product, Customer, Date and Geography dimensions provide labels and filters. Dimension keys are unique; facts can contain repeated foreign keys. Relationships typically let dimensions filter facts in a one-to-many direction. This structure makes the grain and filter paths easier to explain, supports reusable measures, and often lets VertiPaq and the query engine work efficiently. It also avoids duplicating descriptive text on every fact row. The schema is not a rule to force every source into one shape: multiple facts can share conformed dimensions, and bridges or role-playing dimensions may be needed. Start by stating the grain and validating keys; a star-shaped diagram with incorrect grain still gives incorrect numbers.
+  tags: [star-schema, grain, modeling]
+- id: pbi-basic-002
+  topic: relationships
+  difficulty: beginner
+  question: Explain relationship cardinality and cross-filter direction.
+  answer: |
+    Cardinality describes whether keys are unique at each end of a relationship. In a typical dimension-to-fact relationship, the dimension has one row per key and the fact can have many rows, so it is one-to-many. Cross-filter direction determines which table's filters propagate; a single direction from dimension to fact is the common star-schema choice. Bidirectional filtering can be valid, but it can create ambiguous paths, unexpected slicer effects and extra query work. Many-to-many should reflect a real business relationship, often represented by a bridge table, rather than being chosen simply to silence a duplicate-key warning. For each relationship, verify key uniqueness, blank or unmatched values, active status and the intended path. Then test totals and slicer combinations. Cardinality is not merely a performance switch: it encodes assumptions about the data, so a wrong choice can yield plausible but misleading totals.
+  tags: [relationships, cardinality, filter-direction]
+- id: pbi-basic-003
+  topic: DAX contexts
+  difficulty: intermediate
+  question: What is the difference between row context and filter context in DAX?
+  answer: |
+    Row context identifies a current row, as in a calculated column or while an iterator such as SUMX walks a table. Filter context is the set of restrictions active when an expression is evaluated: visual grouping, slicers, report filters, relationship propagation and filters added by DAX. Measures are evaluated in filter context. Row context alone does not automatically filter a related table or become a filter on the current table. CALCULATE can perform context transition, converting an existing row context into filters; a measure invoked inside an iterator receives that transition implicitly. When troubleshooting, write down the current row and the filters separately, then determine which rows the expression can see. This distinction explains why a measure in a matrix can return a value different from a calculated column, and why totals are recalculated under a broader filter context rather than necessarily summing displayed rows.
+  tags: [dax, row-context, filter-context]
+- id: pbi-basic-004
+  topic: DAX calculations
+  difficulty: intermediate
+  question: What does CALCULATE do, and what is context transition?
+  answer: |
+    CALCULATE evaluates an expression in a modified filter context. Its filter arguments can add or replace filters, while modifiers can remove filters or change relationship behavior. For example, CALCULATE([Sales], REMOVEFILTERS(Product)) removes Product filters but preserves other filters such as Date, unless the expression specifies otherwise. Context transition is the conversion of an existing row context into equivalent filter context. CALCULATE performs it when called under row context; measure references inside iterators get it implicitly. That is why CALCULATE([Sales]) inside an iterator over Customer can evaluate sales for the current customer. A good explanation identifies the expression, the existing context, each filter being changed and the resulting rows. Avoid saying merely that CALCULATE “forces a recalculation.” Also avoid using ALL or REMOVEFILTERS as a generic fix: removing the wrong filters can make a ratio or security-sensitive result incorrect.
+  tags: [calculate, context-transition, dax]
+- id: pbi-basic-005
+  topic: DAX iterators
+  difficulty: beginner
+  question: When would you use SUMX instead of SUM?
+  answer: |
+    SUM adds the values of one numeric column over the rows visible in the current filter context. SUMX iterates a table, evaluates an expression for each row and sums those results. If the model has quantity and unit price but no trusted line-amount column, `SUMX(Sales, Sales[Quantity] * Sales[Net Unit Price])` expresses the row-level calculation before aggregation. If a validated extended amount is already stored, `SUM(Sales[Net Amount])` is simpler and may be more efficient. Iterators are not automatically slow; their cost depends on the table size, expression and engine plan. Define what happens with discounts, taxes, rounding, blanks and currency conversions before selecting either formula. A useful interview response states the required grain and compares the source calculation with the model calculation. Test result totals against known transactions rather than assuming two mathematically similar expressions have identical business semantics.
+  tags: [sumx, iterators, dax]
+- id: pbi-basic-006
+  topic: measures and columns
+  difficulty: beginner
+  question: How does a measure differ from a calculated column?
+  answer: |
+    A calculated column is evaluated for each row during model processing and stored in the model. It can be useful for a grouping attribute, a relationship key or a row-level value that genuinely belongs in the model, but it consumes memory and must be recalculated on refresh. A measure is evaluated at query time in the current filter context, so the same formula can respond to slicers, matrix rows and report filters. Measures are typically the right choice for totals, ratios and KPIs. A column cannot naturally change its stored value when a user selects a different date range. Conversely, a measure cannot serve as a physical relationship key. Put static, reusable row attributes upstream when appropriate; use explicit measures for analytical aggregations. Consider model size, refresh, reuse and semantics, not just which formula is easiest to author in the moment.
+  tags: [measures, calculated-columns, model-size]
+- id: pbi-basic-007
+  topic: DAX ratios
+  difficulty: intermediate
+  question: Why might a percentage total not equal the sum of visible percentages?
+  answer: |
+    A measure is recalculated in the total's filter context. If a row displays `DIVIDE([Profit], [Sales])`, the grand total normally computes total profit divided by total sales. It does not add each category's displayed percentage, because that would rarely be a meaningful aggregate. If the desired result is the average of category percentages, specify whether that average is unweighted or weighted and define its population. A weighted average may be represented as total numerator divided by total denominator, while an unweighted average may require an iterator over categories. These are different business metrics. Explain the grain at which the ratio is defined and what the total should mean before changing DAX. Avoid adding a visual-only total workaround that conceals the measure's semantics. Check subtotals, blank categories and zero denominators, using DIVIDE or another deliberate error policy where appropriate.
+  tags: [totals, ratios, dax]
+- id: pbi-basic-008
+  topic: storage modes
+  difficulty: beginner
+  question: Compare Import and DirectQuery storage modes.
+  answer: |
+    Import copies and compresses data into the semantic model. Queries are generally served from the in-memory VertiPaq engine, which supports a rich model and fast interactions, but freshness depends on refresh and model memory must fit the service environment. DirectQuery leaves data at the source and translates report queries into source queries. It can reduce the need to import large or frequently changing data, but every interaction can add source load, network latency and dependency on source performance. DirectQuery does not guarantee real-time data, and connector capabilities can constrain transformations and DAX. Compare the modes with a representative report, including concurrent users, refresh, source query load, model size and required freshness. Import often fits curated snapshots; DirectQuery can fit large or changing data when the source is designed for the query pattern. A hybrid design may use composite models, but adds complexity.
+  tags: [import, directquery, storage-modes]
+- id: pbi-basic-009
+  topic: storage modes
+  difficulty: intermediate
+  question: What is Dual storage mode, and when can it help?
+  answer: |
+    Dual mode is used in supported composite-model scenarios where a table can be treated as Import for queries answered locally or as DirectQuery when the query requires source access. A common design uses shared dimensions in Dual mode alongside imported aggregations and DirectQuery detail facts. That may let summary queries use cached data while drill-through reaches the source. Dual is not a universal checkbox that provides full freshness and fast queries without cost: routing depends on query shape and relationships, and the table may still consume memory. Test simple summaries, cross-fact queries, detail navigation and security under the actual model. Check current connector and composite-model support before designing around it. Document which paths are expected to hit the source and what happens if the source is slow or unavailable. If the design is difficult to explain, a simpler Import or DirectQuery model may be easier to support.
+  tags: [dual, composite-model, storage-modes]
+- id: pbi-basic-010
+  topic: storage modes
+  difficulty: intermediate
+  question: What is Direct Lake, and how is it different from DirectQuery?
+  answer: |
+    Direct Lake is a Microsoft Fabric storage mode for semantic models that read suitable Delta tables stored in OneLake. It aims to provide an analytical engine experience over lake data without the conventional full-import process or translating every query into a DirectQuery request against a remote database. DirectQuery instead sends queries to the source through the connector, making source query performance and concurrency central. Direct Lake is not a generic connection to arbitrary cloud files and does not remove the need for curation, relationships, measures, governance or capacity planning. Exact supported features, behavior and fallback paths depend on the Fabric configuration and evolve over time. Validate Delta table structure, schema changes, model functionality, permissions, capacity use and freshness in the target environment. Choose Direct Lake when a suitable Fabric/OneLake architecture exists and the end-to-end query behavior has been tested, not just because the name suggests low latency.
+  tags: [direct-lake, fabric, delta]
+- id: pbi-basic-011
+  topic: Power Query
+  difficulty: beginner
+  question: What is query folding and why should you care?
+  answer: |
+    Query folding is Power Query translating compatible transformation steps into a query that runs at the source, such as SQL filtering or projection. Folding can reduce rows and columns transferred over the network and let a database use its query optimizer. It matters especially for large tables, refresh windows and incremental refresh. Whether a step folds depends on connector and operation; later steps may execute in the mashup engine after folding stops. Filter early, remove unneeded columns and inspect folding indicators or diagnostics where available. Do not assume a preview proves folding: it may use a small sample or cache. If folding is lost, determine whether the remaining data volume is acceptable or move a durable transformation upstream. Query folding is not always possible or always required; correctness and measured end-to-end refresh matter. Validate source queries and row counts for representative data rather than optimizing based solely on an editor indicator.
+  tags: [power-query, query-folding, refresh]
+- id: pbi-basic-012
+  topic: Power Query
+  difficulty: intermediate
+  question: What is Dataflows Gen2, and when is it useful?
+  answer: |
+    Dataflows Gen2 is a Fabric-managed Power Query data-preparation capability that can execute transformations in the service and persist results to supported destinations. It can centralize reusable, cleaned entities for multiple semantic models or teams, separating shared preparation from report-specific logic. Unlike a Desktop query that loads directly into one PBIX model, a dataflow is an upstream artifact with its own owner, refresh, credentials, destination and dependency chain. It is useful when transformation reuse and managed execution outweigh the added operational layer. It is not a universal refresh accelerator; measure its runtime and downstream refresh impact. Confirm destination availability in the tenant and region, and define failure alerting, schema-change handling and lineage. For broad engineering workflows, a Fabric warehouse or lakehouse may provide better testing and code governance. Avoid duplicating the same cleanup in the dataflow and every consuming report without a clear contract.
+  tags: [dataflows-gen2, power-query, fabric]
+- id: pbi-basic-013
+  topic: refresh
+  difficulty: intermediate
+  question: How should RangeStart and RangeEnd be used for incremental refresh?
+  answer: |
+    Create DateTime parameters named exactly `RangeStart` and `RangeEnd`, then filter the fact timestamp with a half-open interval: greater than or equal to RangeStart and less than RangeEnd. Adjacent partitions then do not include the same boundary record twice. Configure an incremental refresh policy specifying historical storage and the period to refresh, and publish and refresh in the service so partitions are managed there. Query folding of the range predicate is important for large sources; inspect the actual source query. Test the first service refresh, partition boundaries, row counts and totals. Think about corrections and deletions: refreshing only recent partitions can leave older changed rows stale, and a deleted old row may not be rediscovered. A reliable modification timestamp can support change detection in eligible scenarios, but only if it updates consistently. Confirm timezone semantics and late-arriving data. The Desktop preview alone does not prove service partitioning works.
+  tags: [incremental-refresh, rangestart, rangeend]
+- id: pbi-basic-014
+  topic: gateway
+  difficulty: beginner
+  question: What does an on-premises data gateway do?
+  answer: |
+    An on-premises data gateway provides a managed bridge between the Power BI service and eligible data sources that the service cannot reach directly, such as a database on a private network. The standard gateway mode is commonly deployed on an always-on managed Windows host and can participate in a cluster for availability. The gateway forwards service requests using configured connections and credentials; it does not make a source database highly available or grant users database permissions by itself. Production setup includes registration, recovery-key custody, data-source mapping, credentials, DNS, routes, firewall, drivers, patching and monitoring. Test refresh from the actual service identity and gateway host. A developer's successful Desktop preview is not evidence of service connectivity. Personal mode is intended for an individual's use, not a shared production bridge. Cloud sources may not need a gateway, so check connector and network requirements before deploying one.
+  tags: [gateway, refresh, connectivity]
+- id: pbi-basic-015
+  topic: security
+  difficulty: beginner
+  question: How does row-level security work in Power BI?
+  answer: |
+    Row-level security defines role filters that restrict which rows a model query returns for a user assigned to the role. A static role might filter a Region table to one code. Dynamic RLS often uses an entitlement table mapping user identities to allowed keys, with a filter based on USERPRINCIPALNAME(), and relationships propagate that filter to facts. Validate the identity format and test users with one, multiple and no assignments. RLS is primarily for consumers; workspace Admin, Member and Contributor roles have editing privileges that are not constrained like read-only viewers. Thus RLS is not a boundary against workspace authors or model owners. Test effective permissions in the service using actual groups and audience paths, including drill-through and export where allowed. Use least privilege, keep identity mapping current, and consider object-level security separately when tables or columns themselves must be hidden in supported configurations.
+  tags: [rls, security, identity]
+- id: pbi-basic-016
+  topic: governance
+  difficulty: intermediate
+  question: How do deployment pipelines support Power BI release management?
+  answer: |
+    Deployment pipelines support promoting content across development, test and production stages in eligible Power BI/Fabric environments. They can compare artifacts and apply deployment rules for supported settings, helping teams make environment transitions more repeatable. They do not replace review, source control, release approvals or validation. After deployment, verify data source bindings, parameters, credentials, refresh schedules, gateway mappings, role assignments and app audiences. Test the production refresh and user access instead of treating a successful deployment status as proof that the report works. Keep changes to shared semantic models backward compatible where possible and communicate breaking measure or field changes to report owners. The pipeline design should match the organization's capacity and tenant capabilities. Record the owner, rollback approach and evidence for each release. Automated deployment can reduce manual mistakes, but production security and business correctness remain responsibilities of the team.
+  tags: [deployment-pipelines, release, governance]
+- id: pbi-basic-017
+  topic: endorsements
+  difficulty: beginner
+  question: What do promoted and certified endorsements mean?
+  answer: |
+    Endorsements are discoverability and trust signals for content. Promoted generally indicates an author or owner recommends an item for broader use, while certified is a stronger designation governed by an organization's designated certification process and criteria. Exact management depends on tenant configuration. Neither label is a mathematical proof that every measure is correct or that the content is current. A certification process should check ownership, documentation, lineage, data quality and reconciliation, security, refresh reliability and support contacts. Endorsement should be revisited when source definitions or owners change. Users still need context about a KPI's grain, time period and exclusions. A polished report should not be certified solely for appearance, and an unendorsed report may still be useful for exploration. Governance combines technical controls, documented definitions, review and accountability; labels help users navigate that system but do not replace it.
+  tags: [endorsement, certification, governance]
+- id: pbi-basic-018
+  topic: performance
+  difficulty: beginner
+  question: How does VertiPaq compression influence model design?
+  answer: |
+    VertiPaq stores imported model data in a columnar form and compresses repeated values. Columns with fewer distinct values often compress well, while unique identifiers, detailed timestamps and long text can have large dictionaries. Model memory depends on row count, data types, cardinality, relationships and encoding, not just the source file's size. Remove unused columns and rows, avoid importing unnecessary text and preserve correct numeric types. Reduce granularity only when business requirements permit; do not truncate keys or round values that are needed for reconciliation. A star schema can also reduce repeated descriptive data in facts. A measure generally consumes less persistent storage than a calculated column, although query-time cost must still be evaluated. Use model metadata and memory tools to identify actual large columns before optimizing. The goal is a smaller, clear model with correct analytical grain, not compression at the expense of meaning.
+  tags: [vertipaq, cardinality, model-size]
+- id: pbi-basic-019
+  topic: performance
+  difficulty: intermediate
+  question: What can Performance Analyzer and DAX Studio tell you?
+  answer: |
+    Performance Analyzer in Power BI Desktop records timing for visuals as they refresh and can expose the DAX query associated with a visual. It helps distinguish query time from some rendering or other overhead, and provides a reproducible starting point. DAX Studio can connect to a model to inspect queries, server timings, query plans and model metadata, including the balance of storage-engine and formula-engine work where available. Neither tool automatically declares a formula bad: interpret the output with the visual context, storage mode and workload. Compare cold and warm runs and use the same filters. For DirectQuery, correlate model timings with source telemetry and actual SQL execution; for Import, consider model memory and capacity. Measure before and after a targeted change and recheck correctness. A single warm test with a tiny dataset is not a production benchmark. Use tools to test hypotheses, not to optimize by superstition.
+  tags: [performance-analyzer, dax-studio, diagnosis]
+- id: pbi-basic-020
+  topic: workspace governance
+  difficulty: intermediate
+  question: How should workspace roles differ from report consumer access?
+  answer: |
+    Workspace roles grant varying levels of collaboration and item management. Admin, Member and Contributor roles are intended for people who create or manage workspace content and are not constrained by RLS as ordinary viewers are. Consumers should generally receive access through a published app or appropriate view permissions, with Build permission granted separately only when they need to create new reports or query the semantic model. Build can enable broader data reuse, so consider classification and intended use. An app audience can organize what consumers see without making them workspace editors. Establish separate development and production workspaces or an explicit release boundary, use identity groups, review reshare rights and assign backup owners. Maintain a matrix of workspace role, app access, Build access and RLS assignment. Test access using a consumer identity, not an administrator account. Least privilege reduces accidental edits and exposure while preserving a supported self-service path.
+  tags: [workspaces, permissions, build]
+- id: pbi-basic-021
+  topic: report design
+  difficulty: beginner
+  question: What makes a Power BI report different from a semantic model?
+  answer: |
+    A semantic model defines tables, relationships, measures, metadata and security that a report can query. A report is a presentation artifact containing pages, visuals, filters, navigation and interactions. Separating them enables multiple reports to reuse a centrally governed model, reducing repeated metric definitions. It also means that a report's correct-looking visual does not prove the underlying measure is valid; the model and source lineage still need review. Conversely, a well-designed model can serve different audiences with different report layouts. Keep business logic that should be consistent in the model rather than recreating it in every visual. A report author needs appropriate model permissions, which may include Build depending on the workflow. Changes to model fields or measure semantics can affect dependent reports, so document ownership and coordinate releases. Treat model and report as related but separately managed artifacts with clear dependencies.
+  tags: [semantic-model, reports, reuse]
+- id: pbi-basic-022
+  topic: model design
+  difficulty: intermediate
+  question: How should you model multiple date roles such as order date and ship date?
+  answer: |
+    First make the business roles explicit: order date and ship date answer different questions even though both reference a date. A common model uses one Date dimension with an active relationship to OrderDate and an inactive relationship to ShipDate. Measures can activate the ship relationship with USERELATIONSHIP inside CALCULATE for a particular calculation. Another design duplicates the date dimension as role-playing dimensions, such as Order Date and Ship Date, which can make simultaneous slicers and report use easier to understand but adds model objects. Choose based on the required report interactions and usability. Ensure the Date table has the needed continuous range, calendar and fiscal attributes. Test totals when dates are blank, outside the dimension range or filtered by multiple roles. Avoid a single ambiguous active path or a bidirectional workaround. Document which date a standard measure uses so users do not mistake order trends for shipment trends.
+  tags: [date-dimension, relationships, userelationship]

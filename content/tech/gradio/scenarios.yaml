@@ -1,0 +1,124 @@
+- id: gradio-scn-001
+  title: GPU memory fails after adding a second Gradio callback
+  technologies: [gradio, python]
+  difficulty: advanced
+  prompt: |
+    An internal Gradio app initially has one button that runs a vision model on a single GPU. After adding a second tab with a similar inference callback, users report intermittent CUDA out-of-memory errors during busy periods. Each tab works alone, the model weights are loaded once at module import, and the team proposes adding more ASGI workers to increase capacity. Queueing is currently enabled, but each event has its own concurrency setting. What would you investigate and change?
+  approach: |
+    Treat this first as a shared-resource concurrency problem, not evidence that the model suddenly became too large. Measure peak VRAM, preprocessing copies, active inference calls and queue wait under simultaneous use. Verify whether both callbacks use the same model and whether their listener limits coordinate; independent limits can permit overlapping GPU work.
+
+    1. Reproduce with two callbacks and realistic input sizes, recording active calls and memory.
+    2. Route both events through a shared inference boundary with a measured GPU concurrency policy, potentially one active call initially.
+    3. Check if batching improves throughput within memory headroom; measure latency and memory before keeping it.
+    4. Do not add web workers until verifying their model lifecycle. Each process may load another model copy and worsen VRAM pressure.
+    5. Report queue time and inference time separately, then set a clear overload policy.
+  red_flags:
+    - Increasing worker count without checking per-process model allocation.
+    - Assuming each event's independent concurrency limit is a global GPU semaphore.
+    - Tuning from a single request instead of simultaneous realistic inputs.
+    - Treating queueing as a way to increase model throughput.
+
+- id: gradio-scn-002
+  title: A public demo's upload callback can expose server files
+  technologies: [gradio, fastapi]
+  difficulty: advanced
+  prompt: |
+    A Gradio app is shared with an external review group. It accepts a document upload, writes a converted file into a shared output directory using the uploaded filename, and returns that path through a file component. A reviewer reports seeing another person's output in the download list. The team believes the share URL is obscure enough to prevent abuse. Explain the risks and propose a safer design.
+  approach: |
+    The URL is not an authorization control, and filenames are user-controlled. Shared paths can collide, be guessed, or escape the intended directory if joined carelessly. File serving can expose artifacts across users even when the interface is otherwise simple.
+
+    1. Stop public access while investigating and preserve only necessary audit evidence without copying sensitive contents into logs.
+    2. Generate server-side random identifiers and store each artifact in an isolated private location, never using the original name as a path.
+    3. Validate decoded file content and enforce application-specific size/format policy.
+    4. Bind artifacts to an authenticated identity or access token and check ownership before download; use expiring signed URLs or protected routes if appropriate.
+    5. Configure Gradio/FastAPI file-serving paths narrowly, clean up temporary data, and test direct unauthenticated API and file requests.
+    6. Add rate/resource controls and remove confidential examples before sharing.
+  red_flags:
+    - Keeping the public app live because the URL is hard to guess.
+    - Sanitizing a filename but still using a shared predictable artifact path.
+    - Relying only on file extensions or browser MIME types.
+    - Fixing the UI list while leaving direct download routes unprotected.
+
+- id: gradio-scn-003
+  title: Mounted Gradio interface loses assets behind a proxy prefix
+  technologies: [gradio, fastapi]
+  difficulty: intermediate
+  prompt: |
+    A team mounts a Blocks app into FastAPI at `/tools/model` and serves the combined ASGI app behind a reverse proxy that publishes it at `/platform/tools/model`. The page HTML loads, but some assets return 404 and the generated API client fails. Local tests at `/tools/model` pass. The team suggests copying Gradio static files into the frontend build. How should you debug and resolve this?
+  approach: |
+    Suspect disagreement among mount path, externally visible prefix, ASGI root path and proxy forwarding. Copying framework assets is a brittle workaround and risks breaking after upgrades.
+
+    1. Trace browser network requests and redirects to identify which URLs omit or duplicate the prefix.
+    2. Check proxy configuration for forwarded prefix/root-path behavior and the ASGI server's supported root path settings.
+    3. Confirm the deployed Gradio version's `mount_gradio_app` options and serve the combined ASGI app rather than a separate `launch()` server.
+    4. Test assets, generated API calls, auth redirects and file upload/download through the external URL.
+    5. Add an end-to-end test at the proxy-equivalent path and avoid custom asset copying unless supported by framework guidance.
+    6. Review auth middleware coverage for mounted routes as a separate check.
+  red_flags:
+    - Debugging only the local mount path.
+    - Copying Gradio internals into the frontend without understanding URL generation.
+    - Assuming the root FastAPI docs working proves the mounted app is correct.
+    - Ignoring API and file endpoints while fixing only the page rendering.
+
+- id: gradio-scn-004
+  title: Long-running generation continues after users close the tab
+  technologies: [gradio, python]
+  difficulty: advanced
+  prompt: |
+    A Gradio app runs a 12-minute report-generation callback. Users close their browsers when the page appears stuck, then resubmit later, occasionally creating duplicate reports and extra GPU costs. The team enabled `demo.queue()` and added a spinner, assuming that queued jobs would be cancelled on disconnect. What should the design do instead?
+  approach: |
+    Distinguish an interactive event queue from durable job lifecycle. Browser disconnect or UI cancellation does not necessarily stop native model work or undo side effects. Duplicate submissions need an application-level identity and idempotency policy.
+
+    1. Measure queue wait, first useful output and total runtime. Add meaningful progress or streaming if the user benefits, without presenting it as cancellation.
+    2. If work must survive disconnects, create a durable job record and dispatch to a worker/broker with explicit queued/running/completed/failed/cancelled states.
+    3. Give a submission idempotency key and return the existing job for repeated submissions rather than starting another report.
+    4. Store outputs durably with ownership and expiry policy; let Gradio display job status through polling or a refresh action.
+    5. Implement cooperative cancellation checkpoints and cleanup if cancellation is supported; otherwise explain that a request cannot be interrupted immediately.
+    6. Apply queue caps, cost/rate limits and safe retry handling.
+  red_flags:
+    - Claiming the queue persists work through restarts without verifying its lifecycle.
+    - Treating a spinner or generator as a durable job monitor.
+    - Assuming browser close interrupts GPU kernels.
+    - Retrying on timeout without idempotency for billable work.
+
+- id: gradio-scn-005
+  title: Multi-user chat histories appear in the wrong session
+  technologies: [gradio, python]
+  difficulty: intermediate
+  prompt: |
+    A prototype stores chat history in a module-level Python list because callbacks need to append turns. During a workshop, a user sees another participant's message in the conversation. The team changes to one global dictionary keyed by browser IP and believes the issue is solved. Explain why this remains unsafe and outline a correct state model.
+  approach: |
+    A module-level mutable object is shared by users in one process and can race under concurrent events. IP is not a stable identity: users can share NAT addresses, change networks, and spoof some forwarded-header arrangements. A global dictionary also has cleanup, privacy and cross-worker consistency problems.
+
+    1. Remove cross-user global chat data and inspect logs/state access for unintended exposure.
+    2. Use `gr.State` for bounded transient conversation context scoped to the interaction, returning updated values explicitly.
+    3. For history that must persist or be retrieved across devices/workers, use durable storage keyed by authenticated user ID and conversation ID with authorization checks.
+    4. Bound in-memory context by turn or token count; store an audit history separately if required.
+    5. Test concurrent users, multiple tabs, process restart and multiple workers.
+    6. Avoid storing secrets or large media in UI state; keep model instance at its own service/process scope.
+  red_flags:
+    - Using IP address or a client-supplied session ID as identity.
+    - Keeping the global dictionary and merely adding a lock.
+    - Assuming `gr.State` is durable and cross-worker without testing.
+    - Clearing the visible chat while leaving persisted records accessible to another user.
+
+- id: gradio-scn-006
+  title: Model API clients break after an event is added
+  technologies: [gradio, fastapi]
+  difficulty: intermediate
+  prompt: |
+    A Python automation script calls a Gradio app using `Client.predict(..., fn_index=0)`. A developer adds a new event listener near the top of the Blocks file. The automation now invokes the wrong function, and the consumer team wants a guarantee that existing clients will never break. How should the teams address endpoint discovery and contract stability?
+  approach: |
+    Numeric function indexes are positional coupling to the app's event declaration order. Adding an event can change what index identifies. The team should use an explicit endpoint name and inspect the generated API contract, then decide whether Gradio's event API provides the compatibility guarantees the consumer needs.
+
+    1. Identify current endpoints from the app's API page or version-supported inspection method and communicate the changed contract.
+    2. Replace index-based invocation with a named endpoint and add an integration test that checks input/output shape.
+    3. Avoid exposing internal callbacks that are not intended for callers; protect and validate all endpoints.
+    4. If external clients require durable versioning, stable error semantics and a deprecation policy, provide a versioned FastAPI route over shared inference logic.
+    5. Keep `gradio_client` versions compatible, set timeouts and make side-effecting calls idempotent.
+    6. Document rollout and rollback behavior so UI changes do not silently alter integration behavior.
+  red_flags:
+    - Keeping `fn_index=0` and asking consumers to guess new indexes.
+    - Assuming button labels are stable API names.
+    - Promising no breaking changes without a versioned contract or tests.
+    - Duplicating model logic inside both Gradio and FastAPI callbacks.

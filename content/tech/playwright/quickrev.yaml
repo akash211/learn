@@ -1,0 +1,90 @@
+concepts:
+  - title: Browser, context and page
+    detail: "Browser is the launched process; a context is an isolated browser session; a page is a tab-like target inside that context."
+  - title: Context isolation
+    detail: "Fresh contexts isolate cookies and storage, not server-side records, accounts or machine resources."
+  - title: Actionability
+    detail: "Before an action, Playwright waits for relevant conditions such as unique resolution, visibility, stability, enabled state and event reception."
+  - title: Locators are queries
+    detail: "A locator is resolved when used, so it can find a current element after re-rendering; it is not a frozen DOM handle."
+  - title: Semantic locator preference
+    detail: "Prefer `get_by_role` and accessible names, then labels or text; use explicit test IDs when semantics cannot provide a stable unique target."
+  - title: Strict mode
+    detail: "Single-target actions fail when the locator matches multiple elements. Narrow by meaningful scope rather than selecting the first result blindly."
+  - title: Web-first assertions
+    detail: "`expect(locator).to_be_visible()` retries until success or timeout; `is_visible()` is an immediate snapshot."
+  - title: Pytest boundary
+    detail: "Python browser automation typically uses pytest plus `pytest-playwright`; Playwright Test is a separate JavaScript/TypeScript runner."
+  - title: Fixture lifecycle
+    detail: "Let pytest fixtures own plugin-managed browser resources; use function-scoped mutable contexts to keep cases independent."
+  - title: Trace value
+    detail: "A trace can connect actions, snapshots, screenshots and network events into a timeline, but may contain sensitive page data."
+  - title: Route interception
+    detail: "Register a narrow route before the request; `fulfill`, `continue_` and `abort` make the simulated boundary explicit."
+  - title: Storage state
+    detail: "`browser_context.storage_state()` saves cookies and local storage; the file is credential material and is not a full browser profile."
+  - title: Independent actors
+    detail: "Use distinct contexts and identities for multi-user tests; two pages in one context normally share browser session state."
+  - title: Download lifecycle
+    detail: "Wait with `expect_download()` around the trigger, then save important files explicitly before the context closes."
+  - title: Bounded parallelism
+    detail: "Workers consume memory and load the app; choose concurrency from measurements and isolate backend data per case or worker."
+  - title: Authorized collection
+    detail: "Use the least costly permitted method, minimize data, honor rate limits and stop rather than evade access controls."
+
+traps:
+  - "Assuming a successful click means the asynchronous save or navigation it triggered has completed."
+  - "Using `.first` to silence strict mode without proving that order is part of the requirement."
+  - "Treating a mocked API response as evidence that the backend integration works."
+  - "Committing or publicly uploading a storage-state file that may contain session credentials."
+  - "Increasing xdist workers based only on CPU count while ignoring browser memory and shared test data."
+  - "Treating public reachability as permission to scrape or bypassing rate limits and anti-bot controls."
+
+advanced:
+  - "CDP is Chromium-specific; `connect_over_cdp` is not the portable path for a cross-engine test suite and has feature limitations."
+  - "Service workers can intercept requests before route handlers see them; blocking them changes the tested environment."
+  - "Separate browser contexts isolate client storage but not backend identity, account data, rate limits or host resource contention."
+  - "The Python `page.pdf()` API is Chromium-specific; validate the artifact and print-media behavior, not just method completion."
+  - "A retry that passes remains flakiness evidence; preserve first-run results and diagnose isolation, timing or infrastructure causes."
+  - "Official browser containers still need version alignment, controlled security settings, adequate resources and sensitive-artifact handling."
+
+comparisons:
+  - a: Browser context
+    b: Page
+    difference: "Session/profile boundary with cookies and storage vs one tab-like document target within that boundary."
+  - a: Role locator
+    b: CSS selector
+    difference: "User-facing semantics and accessible name vs DOM structure; use CSS when structure is intentional, not as a default."
+  - a: Web-first assertion
+    b: Immediate snapshot
+    difference: "Retries until a page condition passes vs returns current state once and can race with rendering."
+  - a: Mocked route
+    b: Integration test
+    difference: "Deterministic UI behavior against a simulated response vs verification of the real service boundary. Both answer different questions."
+  - a: Playwright
+    b: Selenium
+    difference: "Contexts, auto-wait locators and integrated tracing vs WebDriver protocol, broad ecosystem and established Grid; compare project constraints."
+  - a: Browser automation
+    b: HTTP client plus parser
+    difference: "Executes browser rendering and interaction at higher cost vs direct retrieval for authorized stable endpoints."
+  - a: Parallel workers
+    b: CI sharding
+    difference: "Concurrent pytest processes within an invocation vs partitioning the suite among separate jobs or machines."
+
+commands:
+  - label: Install Python browser automation dependencies
+    code: pip install playwright pytest-playwright
+  - label: Install Chromium browser binary
+    code: playwright install chromium
+  - label: Install browsers and Linux dependencies
+    code: playwright install --with-deps
+  - label: Run pytest suite
+    code: pytest -q
+  - label: List plugin options for the pinned environment
+    code: pytest --help
+  - label: Run a focused test file
+    code: pytest -q tests/test_checkout.py
+  - label: Run tests with bounded xdist workers
+    code: pytest -n 4
+  - label: Launch Python synchronous API
+    code: "from playwright.sync_api import sync_playwright"

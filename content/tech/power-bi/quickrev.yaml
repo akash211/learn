@@ -1,0 +1,79 @@
+concepts:
+  - title: Star schema and grain
+    detail: State the fact grain first; dimensions describe and filter facts, while each fact represents one business process at a defined grain.
+  - title: Relationship cardinality
+    detail: One-to-many is common from unique dimension keys to repeating fact foreign keys; investigate duplicates before using many-to-many.
+  - title: Single-direction filtering
+    detail: Dimension-to-fact filtering is the predictable default in a star model; use bidirectional only for a tested reason.
+  - title: Filter context
+    detail: The rows visible to a measure after visual groups, slicers, relationships and DAX filters are applied.
+  - title: Row context
+    detail: The current row in a calculated column or iterator; it does not itself filter related tables.
+  - title: CALCULATE
+    detail: Evaluates an expression in modified filter context and performs context transition when row context exists.
+  - title: SUMX
+    detail: Iterates a table, evaluates an expression for each row and aggregates results; use SUM for an existing amount column.
+  - title: Import
+    detail: VertiPaq-compressed in-model data, usually fast for interactions; freshness depends on refresh and memory on model size.
+  - title: DirectQuery
+    detail: Queries source data through translated requests; source load, latency and connector capabilities shape behavior.
+  - title: Dual and composite models
+    detail: Dual tables can serve imported or source-routed queries in supported designs; composite models mix modes with additional complexity.
+  - title: Direct Lake
+    detail: Fabric mode for suitable Delta tables in OneLake; validate capacity, feature support and behavior in the target setup.
+  - title: Query folding
+    detail: Power Query translates eligible steps to source execution, reducing transfer; verify for the real connector and query.
+  - title: Incremental refresh
+    detail: RangeStart/RangeEnd half-open time filters partition refresh; late changes and deletes need an explicit strategy.
+  - title: Dynamic RLS
+    detail: Identity-to-entitlement filters should propagate through the model; workspace editors are not equivalent to report viewers.
+traps:
+  - Making every relationship bidirectional to make slicers “work.”
+  - Assuming a measure's grand total must add displayed percentages or ratios.
+  - Treating DirectQuery as guaranteed real-time or Direct Lake as arbitrary file access.
+  - Assuming a successful refresh revisits old incremental-refresh partitions.
+  - Treating RLS as protection from workspace Admin, Member or Contributor roles.
+  - Equating a smaller source file with a smaller VertiPaq model or faster report.
+advanced:
+  - A measure reference inside an iterator gets implicit context transition; reason through the row and filter contexts separately.
+  - A many-to-many bridge still needs an explicit counting or allocation rule to prevent double-counted facts.
+  - Old corrections and deletions may evade incremental refresh; change-detection metadata must be reliable and tested.
+  - DirectQuery query fan-out, source execution plans and concurrency can dominate a seemingly simple visual.
+  - Endorsement is a trust signal; certification criteria should include lineage, reconciliation, security, refresh and ownership.
+  - Deployment pipelines do not prove production credentials, RLS membership, app audience or refresh configuration.
+comparisons:
+  - a: Import
+    b: DirectQuery
+    difference: In-memory refreshed model vs source-executed queries; compare freshness, query latency, memory and source load.
+  - a: DirectQuery
+    b: Direct Lake
+    difference: Connector-translated source queries vs Fabric OneLake Delta-table semantic-model access; prerequisites differ.
+  - a: SUM
+    b: SUMX
+    difference: Aggregates one numeric column vs iterates a table and sums an expression evaluated per row.
+  - a: Measure
+    b: Calculated column
+    difference: Query-time and filter-responsive vs refresh-time stored row value with persistent model cost.
+  - a: Power BI
+    b: Tableau
+    difference: Both BI platforms; compare modeling, authoring, governance, data fit and organizational operations on real workflows.
+  - a: BI platform
+    b: Custom dashboard code
+    difference: Managed analytics workflows vs bespoke control that transfers security, accessibility and lifecycle ownership to the team.
+commands:
+  - label: Net sales measure
+    code: 'Net Sales := SUM ( Sales[Net Amount] )'
+  - label: Row-wise extended amount
+    code: 'Extended Sales := SUMX ( Sales, Sales[Quantity] * Sales[Net Unit Price] )'
+  - label: Safe margin ratio
+    code: 'Margin % := DIVIDE ( [Net Sales] - [Cost], [Net Sales] )'
+  - label: Remove product filters
+    code: 'Sales All Products := CALCULATE ( [Net Sales], REMOVEFILTERS ( Product ) )'
+  - label: Activate ship-date relationship
+    code: 'Sales by Ship Date := CALCULATE ( [Net Sales], USERELATIONSHIP ( Sales[ShipDate], Date[Date] ) )'
+  - label: Dynamic identity filter
+    code: 'UserAccess[UPN] = USERPRINCIPALNAME()'
+  - label: Incremental refresh boundaries
+    code: 'Timestamp >= RangeStart and Timestamp < RangeEnd'
+  - label: Inspect visual query timings
+    code: Performance Analyzer; DAX Studio server timings

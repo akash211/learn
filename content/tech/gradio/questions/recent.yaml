@@ -1,0 +1,167 @@
+- id: gradio-recent-001
+  topic: Gradio 4/5 API
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: How does the event-driven Blocks model differ from a rerun-oriented app model?
+  answer: |
+    In Blocks, Python constructs a layout and registers event listeners such as `.click()` or `.submit()`. The construction code runs to define the interface; a browser event later invokes the associated callback with declared inputs and sends its outputs to declared components. The visual component tree and event dependency graph are explicit.
+
+    A rerun-oriented model commonly re-executes a script in response to user interaction, using framework-managed state to preserve selected values. That can make dashboards concise, while Gradio's listener graph is natural for model calls and workflows where particular events trigger particular work. Neither model is automatically faster or more secure.
+
+    The practical question is which mental model best explains the app's interactions. Avoid expensive work on every change if users expect explicit submission, and test how state behaves across repeated or concurrent events. Keep model logic separate from either UI execution model.
+  tags: [Blocks, events, architecture]
+
+- id: gradio-recent-002
+  topic: Gradio 4/5 API
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: What should you verify before depending on an event's `concurrency_limit`?
+  answer: |
+    Verify the option's availability and semantics in the exact Gradio version deployed, and configure the desired behavior explicitly rather than assuming a default. A listener-level concurrency limit governs executions in the app's queue-aware event path; it does not necessarily cap every callback that accesses the same model, another process, another replica or external inference service.
+
+    Map the shared resource first. If several listeners invoke one GPU, use a common event concurrency grouping or move inference behind a shared service that owns scheduling. Measure peak VRAM and throughput with realistic input sizes. A limit that is safe for one model version may not be safe after a larger model or longer context is deployed.
+
+    Also distinguish active concurrency from queued backlog. Decide how to handle overload and stale requests, then monitor wait time separately from execution time. Treat the setting as one part of capacity control, not a universal GPU mutex.
+  tags: [concurrency, queue, API]
+
+- id: gradio-recent-003
+  topic: streaming
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: Why can a generator callback improve perceived latency but not throughput?
+  answer: |
+    A generator callback can yield a partial output before the whole computation finishes, so users receive an early signal or usable text. This lowers time to first output and can make a model feel responsive. It does not reduce the computation required to produce the final result, nor automatically increase the number of requests the service can handle.
+
+    A stream may even add overhead if it yields too frequently, repeatedly serializes an expanding result or holds resources open longer. Measure time to first token, total duration, bytes transferred and concurrency under load. Yield at a cadence that balances responsiveness with transport and rendering costs.
+
+    Also account for cancellation and cleanup: a generator's suspended frame may retain memory or a GPU-side stream, and a disconnected browser may not interrupt native inference. Streaming is an output protocol and product behavior, not a substitute for resource scheduling.
+  tags: [generators, latency, streaming]
+
+- id: gradio-recent-004
+  topic: state architecture
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: What deployment issue arises when `gr.State` is combined with multiple workers?
+  answer: |
+    `gr.State` is intended for session interaction values managed by the Gradio app, but application architecture should not assume arbitrary Python objects are shared across independent worker processes. Each process has separate memory, and a request routed to another process may not see module-level data or caches created in the first. Deployment routing and version behavior also affect session continuity.
+
+    Keep state small and use it for transient UI context, not durable records. If a value must survive a restart or be available from any replica, store it in shared durable infrastructure with explicit identity and authorization. A sticky-session mechanism may help a particular deployment, but it is not data durability and should be verified rather than inferred.
+
+    Test multiple workers, reloads and concurrent tabs. For model weights, decide separately whether each process should hold a copy or call a shared inference service. Session state and model lifecycle have different scopes.
+  tags: [state, workers, deployment]
+
+- id: gradio-recent-005
+  topic: API clients
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: When is `gradio_client` preferable to calling a generated endpoint with raw HTTP?
+  answer: |
+    `gradio_client` understands Gradio's invocation and file-transfer conventions, so it is often convenient when one Python application needs to call another Gradio app. It can discover or use endpoint names and provides prediction/job handling APIs. This reduces manual implementation of Gradio-specific request details, especially when component inputs include files.
+
+    Raw HTTP can be appropriate when integrating from a non-Python environment or when a service needs a very deliberate transport contract. In either case, inspect the running app's generated API documentation and test its schema. Do not assume callback Python types equal wire payload types.
+
+    Pin or test client/server versions, set timeouts, protect credentials and handle retries carefully. A timeout does not prove the server failed to complete work. If external clients need a stable, versioned API with carefully defined errors, a dedicated FastAPI endpoint may be a better public contract than an interface event endpoint.
+  tags: [gradio_client, API, HTTP]
+
+- id: gradio-recent-006
+  topic: FastAPI integration
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: What can go wrong when mounting a Blocks app under a FastAPI subpath?
+  answer: |
+    The integration can fail through path-prefix mismatches: static assets, redirects, API calls or file responses may resolve against the root instead of the mount path, especially behind a reverse proxy that adds another prefix. A browser page that loads locally does not prove all routes work under the production ingress.
+
+    Mount through the supported helper for the installed Gradio version, serve the combined ASGI app, and avoid also launching a separate Gradio server unless that is an intentional architecture. Exercise the app at its real prefix, including generated endpoints, authentication redirects, uploads and downloads. Review how proxy headers and root-path settings are configured in the hosting stack.
+
+    Also check middleware and auth coverage for mounted routes rather than assuming FastAPI policies apply identically. Test direct requests to API and file routes. Worker processes may each load a model, so path correctness is only one aspect of the integration.
+  tags: [FastAPI, ASGI, deployment]
+
+- id: gradio-recent-007
+  topic: media handling
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: How should an image upload boundary be designed for reliable inference?
+  answer: |
+    Configure the image component's input `type` deliberately, then normalize the received value into the model's explicit contract. Gradio may provide a PIL object, NumPy array or filepath depending on settings and version. Convert color mode, orientation, dtype, range and dimensions in one tested preprocessing function rather than scattering assumptions through callbacks.
+
+    Validate decoded content and pixel dimensions; filenames and browser MIME values are not trusted. Compressed files can expand substantially when decoded. Choose a size policy based on workload and model requirements, and avoid retaining multiple full-size intermediates in session state. Return safe validation errors and keep raw file paths private.
+
+    Test the uploaded image through the browser-to-callback route and through the deployment's temporary-file lifecycle. If a generated result must persist, copy it into controlled storage and authorize future downloads. A temporary Gradio path should not be used as a permanent artifact reference.
+  tags: [Image, preprocessing, files]
+
+- id: gradio-recent-008
+  topic: sharing and security
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: Why should a temporary share link be treated as a security boundary change?
+  answer: |
+    A share link makes an app reachable by people beyond the local machine or trusted network. Even if the purpose is a quick review, external users can submit input to callbacks, upload files and potentially invoke exposed API functions. This changes the threat model for accessible data, internal network reachability and compute consumption.
+
+    Before enabling it, remove secrets and sensitive example data, validate inputs, review file-serving paths, apply appropriate authentication and consider rate or concurrency restrictions. An access password may reduce casual access but does not create tenant-level authorization or product-grade audit behavior.
+
+    Treat the link as a demonstration mechanism, not a stable hosting or uptime guarantee. For longer-term use, deploy through infrastructure with TLS, identity, monitoring, resource controls and a planned update process. Verify current sharing behavior for the installed version rather than assuming link lifetime or relay guarantees.
+  tags: [sharing, security, deployment]
+
+- id: gradio-recent-009
+  topic: model serving
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: How do you decide whether to keep inference in the Gradio process or use a separate model service?
+  answer: |
+    In-process inference is often simplest for a prototype or low-volume internal tool: it avoids an extra network hop and keeps deployment compact. It works best when process count is controlled, model lifecycle is clear and measured concurrency fits available CPU/GPU memory. Account for import/startup time and one model allocation per worker.
+
+    A separate inference service becomes attractive when UI workers need to scale independently, multiple applications share a model, specialized scheduling or batching is required, or model deployment needs its own rollout and observability. It adds network contracts, authentication, timeout and failure handling, so it is not automatically better for a small demo.
+
+    Measure request patterns, queue wait, VRAM, startup and utilization under realistic load. Make the choice reversible by keeping preprocessing and domain logic in testable modules. Gradio can remain the UI even after inference moves to a dedicated service.
+  tags: [inference, architecture, GPU]
+
+- id: gradio-recent-010
+  topic: batching
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: What trade-offs come with enabling batch processing for a Gradio event?
+  answer: |
+    Batching can improve accelerator utilization when the model efficiently processes a group of inputs in one forward pass. In Gradio's batch callback pattern, the function receives collections of inputs and must return aligned collections of outputs. This changes function semantics, validation and error handling compared with one request at a time.
+
+    Batches may wait to accumulate, increasing latency for early arrivals, and larger batches use more memory. Variable input sizes can complicate padding or image batching; one malformed item may affect the batch unless isolation is designed. Measure throughput and tail latency across realistic arrival patterns and batch sizes rather than assuming the largest batch is best.
+
+    Ensure that the event configuration and callback signature match the installed version. Batching is a model-serving optimization, not a replacement for queue policy, resource limits or fairness between users.
+  tags: [batching, performance, queue]
+
+- id: gradio-recent-011
+  topic: durability
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: When is a Gradio queue insufficient for a long-running workflow?
+  answer: |
+    A Gradio event queue is insufficient when a job must survive process restart or deployment, remain available after the browser closes, be retried with durable status, coordinate across replicas, or support audit and ownership guarantees. An in-process interactive queue is designed to support app events, not necessarily to be a durable job system.
+
+    In that case, create a job record in a database, enqueue work to a durable broker or managed task service, and execute it in workers. Store results durably and expose status through a protected route or polling callback. Make job submission idempotent so a retry does not duplicate an expensive operation.
+
+    Gradio can still provide a good submission and review UI. Its role becomes the user-facing control plane, while durable execution and state live in infrastructure designed for those properties. Document failure, cancellation and retention policies explicitly.
+  tags: [queue, durability, jobs]
+
+- id: gradio-recent-012
+  topic: compatibility
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: What should a team test when upgrading between Gradio 4 and 5 releases?
+  answer: |
+    Test behavior at the component boundary and integration surface, not just whether the package imports. Exercise event callback signatures, component preprocessing and postprocessing, generator outputs, file uploads and downloads, API endpoint names/schemas, authentication and the actual mount path. Review release notes for changed or deprecated options used by the app.
+
+    Also test queue and concurrency behavior, session state across realistic events, and worker startup with the model loaded. A minor UI display change can hide a changed Python data representation or file lifecycle assumption. Pin the new version in a branch and run a small end-to-end suite using representative data.
+
+    Do not assume every Gradio 4/5 option has the same default or that an API page remains identical after adding listeners. Make important settings explicit, compare generated API contracts, and deploy with rollback available. Validate under the actual proxy and browser combination.
+  tags: [upgrades, compatibility, testing]

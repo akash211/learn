@@ -1,0 +1,79 @@
+concepts:
+  - title: Dimensions and measures
+    detail: Dimensions segment or identify records; measures are typically aggregated in a view. A numeric field can be a dimension when summing it has no meaning.
+  - title: Source grain
+    detail: State what one row represents before joining, relating, or aggregating tables; mismatched grains can multiply facts.
+  - title: Discrete and continuous
+    detail: Blue pills are discrete headers; green pills are continuous axes. This is independent of dimension versus measure role.
+  - title: Marks and Detail
+    detail: Fields on Detail participate in defining marks and can increase mark count or change the view's grain.
+  - title: Default aggregation
+    detail: SUM is not right for every metric. Balances, ratios, snapshots, and counts require aggregation that matches the business definition.
+  - title: Relationships
+    detail: Logical relationships preserve table-level grain for view-aware queries; validate keys, cardinality, unmatched rows, and totals.
+  - title: Live connection
+    detail: Interactive queries run against the source; latency, source load, generated SQL, network, and concurrency affect experience.
+  - title: Extract
+    detail: A Tableau-managed snapshot of selected source data; it needs a refresh strategy and may be scoped or aggregated.
+  - title: Refresh semantics
+    detail: Incremental refresh is safe only when its key and source change pattern account for updates, deletes, and late arrivals.
+  - title: FIXED
+    detail: FIXED uses named dimensions, independent of view dimensions, but responds to data-source, extract, and context filters before it.
+  - title: INCLUDE and EXCLUDE
+    detail: INCLUDE adds dimensions to the calculation grain; EXCLUDE removes view dimensions for the expression.
+  - title: Table calculations
+    detail: They run over marks in the view; addressing, partitioning, sort, and available marks determine the result.
+  - title: Context filter
+    detail: A context filter runs before FIXED and can establish the subset for dependent computations; it is not a generic speed switch.
+  - title: Parameters, sets, actions
+    detail: Parameters store values, sets represent member subsets, and actions connect user selections to views or controls.
+traps:
+  - Assuming blue means dimension and green means measure.
+  - Using a normal dimension filter when a FIXED value must respond to it without context or a different model.
+  - Summing duplicated facts after a many-to-many join or summing repeated FIXED results at finer grain.
+  - Assuming incremental refresh captures corrections or deletions behind its watermark.
+  - Treating dashboard filters, hidden sheets, or parameters as row-level security.
+  - Claiming extracts, context filters, or fewer marks always improve performance by a fixed amount.
+advanced:
+  - Use Tableau's order-of-operations as a working model: extract/data source, context, FIXED, dimension, INCLUDE/EXCLUDE, measure, table calcs, table-calc filters.
+  - FIXED is evaluated before ordinary dimension filters; INCLUDE and EXCLUDE are evaluated after dimension filters.
+  - A table-calculation filter can hide marks after the calculation, whereas an ordinary dimension filter can remove them earlier.
+  - Test Top N ties and state whether rank is global, within a selected subset, or per pane.
+  - For shared-credential connections, verify which identity the database actually sees before relying on source-side user-specific policies.
+  - Reconcile extracts and critical dashboard metrics against source queries after schema, model, or refresh changes.
+comparisons:
+  - a: Dimension
+    b: Measure
+    difference: Category or identifier used to segment versus a field usually aggregated; role is semantic, not determined solely by numeric type.
+  - a: Discrete pill
+    b: Continuous pill
+    difference: Blue headers/categories versus green axis/range; unrelated to dimension-versus-measure status.
+  - a: Relationship
+    b: Physical join
+    difference: Logical tables retain their grain for view-aware queries versus row-level combination within a logical table.
+  - a: Live connection
+    b: Extract
+    difference: Queries execute at the source versus analysis over a Tableau-managed snapshot that must be refreshed.
+  - a: LOD expression
+    b: Table calculation
+    difference: Computes at an explicit dimensional grain versus operating on marks with addressing and partitioning.
+  - a: Parameter
+    b: Filter
+    difference: Stores a value consumed by logic versus selecting data members or marks from a view.
+commands:
+  - label: View-level ratio of totals
+    code: 'SUM([Profit]) / SUM([Sales])'
+  - label: Customer sales at fixed customer grain
+    code: '{ FIXED [Customer ID] : SUM([Sales]) }'
+  - label: Include order grain in calculation
+    code: '{ INCLUDE [Order ID] : SUM([Sales]) }'
+  - label: Exclude Sub-Category from calculation grain
+    code: '{ EXCLUDE [Sub-Category] : SUM([Sales]) }'
+  - label: Prior mark in table-calculation direction
+    code: 'LOOKUP(SUM([Sales]), -1)'
+  - label: Running sum over marks
+    code: 'RUNNING_SUM(SUM([Sales]))'
+  - label: Null-safe display example
+    code: 'IFNULL([Region], "Unknown")'
+  - label: Mark a threshold selection
+    code: 'SUM([Sales]) >= [Sales Threshold]'

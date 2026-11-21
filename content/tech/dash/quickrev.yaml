@@ -1,0 +1,90 @@
+concepts:
+  - title: Component properties are the callback contract
+    detail: Dash connects component IDs and properties; Input triggers, State is sampled, and Output is updated.
+  - title: Browser and server boundary
+    detail: Python callbacks execute server-side; browser values are untrusted and cross a serialization and network boundary.
+  - title: Trigger context
+    detail: Use dash.ctx.triggered_id to identify which input triggered a callback instead of inferring from old argument values.
+  - title: Initial call behavior
+    detail: prevent_initial_call suppresses an initial invocation for its dependency set; dynamic insertion still needs lifecycle handling.
+  - title: Selective no-update
+    detail: PreventUpdate preserves all outputs; no_update preserves one selected output while others may change.
+  - title: Multi-output callback
+    detail: Return values in the exact order of declared outputs; one owner per output property is easiest to reason about.
+  - title: Pattern-matching IDs
+    detail: Dictionary IDs plus ALL, MATCH, and ALLSMALLER handle dynamic repeated components; use stable keys.
+  - title: Graph interactions
+    detail: dcc.Graph renders a Plotly figure; clickData, hoverData, selectedData, and relayoutData can drive interactions.
+  - title: Figure payload cost
+    detail: Figures are serialized to the browser; aggregate and bound data before optimizing Python code.
+  - title: Client-side storage
+    detail: dcc.Store is JSON state in the browser, not a server cache or vault; keep it small and non-sensitive.
+  - title: Process-local cache scope
+    detail: lru_cache is per worker; use bounded keys and shared storage when cross-worker consistency is required.
+  - title: Background callbacks
+    detail: background=True requires a configured manager and operational queue and backend; it is not a job system by itself.
+  - title: URL as app state
+    detail: dcc.Location and Dash Pages support deep links; validate URL data and enforce access server-side.
+  - title: Data access boundaries
+    detail: Parameterize SQL values, allowlist dynamic identifiers, bound results, set timeouts, and manage pooled connections.
+  - title: Deployment object
+    detail: Serve app.server with a production WSGI server such as Gunicorn; app.run() is for development.
+  - title: Reverse-proxy prefixes
+    detail: Keep proxy path forwarding and Dash pathname prefix configuration aligned; test assets and callbacks through ingress.
+
+traps:
+  - Hiding a control and calling it authorization; callbacks and data services must enforce permissions server-side.
+  - Treating dcc.Store as shared, secure, or suitable for large datasets.
+  - Assuming each Gunicorn worker shares module globals, memoized values, or database pools.
+  - Turning every form field into an Input when a submit button should commit a State snapshot.
+  - Believing background=True configures a worker queue or makes side effects idempotent.
+  - Using list position or ALL value order as a stable identity for dynamic records.
+
+advanced:
+  - Cache keys for protected results must include the authorized scope, or the cached data must be scope-neutral.
+  - Database pool capacity multiplies across web workers; tune the pool and worker count as one system.
+  - A slow dcc.Interval callback may overlap later ticks; use a shared refresh job or explicit concurrency control.
+  - Cancellation of background work does not necessarily roll back external writes or sent messages.
+  - Proxy-provided identity is trustworthy only when the trusted proxy strips client-supplied identity headers and injects verified claims.
+  - Use a stable row key in pattern IDs and re-associate wildcard values with that key after reorder or deletion.
+
+comparisons:
+  - a: Input
+    b: State
+    difference: Input changes trigger the callback; State contributes its current value only when another input triggers.
+  - a: PreventUpdate
+    b: no_update
+    difference: PreventUpdate stops every output update; no_update preserves one selected output while others may change.
+  - a: Full figure return
+    b: Patch
+    difference: A full figure is simple and handles structural changes; Patch targets small property changes when supported and truly smaller.
+  - a: dcc.Store
+    b: Shared server cache
+    difference: Browser-scoped and user-modifiable versus server-side, potentially cross-worker storage with explicit TTL and authorization.
+  - a: Dash
+    b: Streamlit
+    difference: Explicit component callback graph and UI control versus a script-rerun model optimized for quick analyst workflows.
+  - a: Dash
+    b: JavaScript SPA
+    difference: Python-led component app versus highly custom client-side UX with an API contract and frontend stack.
+  - a: Web callback
+    b: Background callback
+    difference: Request-bound quick interaction versus queued long work requiring a configured manager, workers, and job lifecycle.
+
+commands:
+  - label: Run the Dash development server
+    code: python app.py
+  - label: Serve the Flask server with Gunicorn
+    code: gunicorn app:server
+  - label: Run focused Python tests
+    code: pytest -q tests/test_callbacks.py
+  - label: Inspect installed Dash version
+    code: "python -c 'import dash; print(dash.__version__)'"
+  - label: Install browser testing extras
+    code: pip install dash[testing]
+  - label: Check dependency versions
+    code: python -m pip show dash plotly dash-bootstrap-components dash-mantine-components
+  - label: Run a focused test and stop on first failure
+    code: pytest -x -q
+  - label: Build and run the app container locally
+    code: docker build -t analytics-dash . && docker run --rm -p 8050:8050 analytics-dash

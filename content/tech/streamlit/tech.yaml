@@ -1,0 +1,119 @@
+slug: streamlit
+title: Streamlit
+category: python-ecosystem
+summary: Build interactive Python data apps with a rerun-driven UI model, session state, caching, and straightforward deployment.
+level: core
+relations:
+  - to: python
+    type: foundation
+    note: Streamlit apps are Python programs; Python's data, exception, I/O, and packaging behavior applies directly.
+  - to: dash
+    type: alternative
+    note: Both build Python data apps; Dash uses a component and callback graph while Streamlit reruns scripts around widget state.
+  - to: fastapi
+    type: alternative
+    note: Streamlit is a UI-oriented application framework; FastAPI is for HTTP APIs and service contracts, and can complement a Streamlit front end.
+intro:
+  what: |
+    Streamlit is an open-source Python framework for building interactive data applications. A
+    developer writes a script using `streamlit` commands such as `st.write`, `st.dataframe`, and
+    `st.selectbox`; Streamlit turns those calls into a browser interface and connects browser
+    widget values back to the Python session. It is especially effective when the people building
+    analysis and the people using it can share one Python codebase.
+
+    Its key abstraction is execution rather than a manually wired UI tree. A widget interaction
+    updates its value and normally reruns the script from top to bottom. Session State carries
+    explicitly chosen values across reruns; caching avoids repeating expensive functions. This
+    model is easy to learn, but it is not equivalent to a persistent server process holding local
+    variables for each browser tab. Correct apps make state, side effects, and data ownership
+    explicit.
+  why: |
+    Data teams often need a useful internal tool before a separate frontend team or a full web
+    product is justified. Streamlit makes a chart, filter, model control, or review workflow
+    deployable using ordinary Python. The short path from analysis to an interactive app reduces
+    duplicated logic and helps domain experts expose their work. The trade-off is a framework
+    optimized for script-driven data interfaces, not unrestricted client-side interaction,
+    complex public websites, or durable background-job orchestration.
+  problems:
+    - Turn Python analyses and models into shareable interactive browser apps.
+    - Let users filter, inspect, compare, and download data without writing a JavaScript frontend.
+    - Build internal dashboards, prototypes, review tools, and lightweight decision support.
+    - Reuse Python libraries and domain logic directly instead of translating them into a second stack.
+    - Add app-level state and caching around repeated interaction-driven execution.
+  where_used:
+    - Internal analytics, operations, and model-exploration tools.
+    - Data science demonstrations and proof-of-concept apps.
+    - Human-in-the-loop labeling, review, and configuration interfaces.
+    - Small authenticated utilities where a Python-first delivery path matters.
+  ecosystem: |
+    Streamlit sits beside the Python data stack: pandas, Polars, NumPy, Altair, Plotly, and
+    database or HTTP clients supply data and visualizations; Streamlit supplies widgets, layout,
+    execution, and a browser-facing runtime. It can be deployed on Streamlit Community Cloud or
+    run as a Python process in a container behind appropriate network and identity controls.
+    Dash is a related Python data-app framework with an explicit component/callback model. FastAPI
+    is a service framework and often a better fit for a stable API, while a Streamlit UI can call
+    that API when separation is useful.
+  alternatives:
+    - name: Dash
+      note: Prefer it when an explicit callback graph and fine-grained component interactions fit the application better.
+    - name: Panel
+      note: A flexible Python dashboarding framework useful across notebooks and multiple rendering backends.
+    - name: FastAPI plus a frontend
+      note: Better when a durable public API, custom browser experience, or independent front end is a primary requirement.
+  related: [python, dash, fastapi]
+chapters:
+  - id: execution-model
+    title: The Rerun Execution Model and State
+    file: chapters/01-execution-model.md
+    minutes: 12
+    level: core
+  - id: widgets-forms-callbacks
+    title: Widgets, Forms, and Callbacks
+    file: chapters/02-widgets-forms-callbacks.md
+    minutes: 12
+    level: core
+  - id: session-state
+    title: Session State Patterns
+    file: chapters/03-session-state.md
+    minutes: 12
+    level: core
+  - id: caching-invalidation
+    title: Caching and Invalidation
+    file: chapters/04-caching-invalidation.md
+    minutes: 13
+    level: core
+  - id: layout-navigation
+    title: Layout and Page Navigation
+    file: chapters/05-layout-navigation.md
+    minutes: 12
+    level: core
+  - id: data-display
+    title: Data Display and Charts
+    file: chapters/06-data-display.md
+    minutes: 12
+    level: core
+  - id: uploads-long-jobs
+    title: Uploads, Downloads, and Long Jobs
+    file: chapters/07-uploads-long-jobs.md
+    minutes: 13
+    level: core
+  - id: databases-apis
+    title: Connecting to Databases and APIs Safely
+    file: chapters/08-databases-apis.md
+    minutes: 13
+    level: core
+  - id: performance-memory
+    title: Performance and Memory on Large Data
+    file: chapters/09-performance-memory.md
+    minutes: 13
+    level: advanced
+  - id: deployment-fit
+    title: Deployment, Security, and Choosing the Right Tool
+    file: chapters/10-deployment-fit.md
+    minutes: 14
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

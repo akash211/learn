@@ -1,0 +1,110 @@
+- id: n8n-recent-001
+  topic: AI workflow design
+  difficulty: intermediate
+  question: How would you design an n8n workflow that uses an LLM to classify incoming support tickets?
+  answer: |
+    Start with an authenticated trigger and validate the ticket schema, size and source before calling a model. Minimize the fields sent, remove secrets, and include clear instructions plus an explicit allowed-label set. Ask for a structured response, parse it and validate that the label is permitted and the evidence is present. A syntactically valid response is not necessarily a correct classification, so retain the source ticket ID and provide a confidence or uncertainty route only if the model and evaluation support it.
+
+    Apply the classification through deterministic business rules. Low-confidence, ambiguous or high-impact tickets should go to human review rather than trigger an irreversible action. Make ticket updates idempotent, handle provider throttling with bounded retries, and preserve the original data needed for audit without retaining unnecessary prompt text. Evaluate representative and adversarial examples, including prompt injection embedded in ticket content, before activation. Monitor classification quality and model/version changes over time.
+  tags: [LLM, classification, human-review]
+  period: '2024-2026'
+  type: representative
+- id: n8n-recent-002
+  topic: AI agent safety
+  difficulty: advanced
+  question: What controls would you put around an AI Agent node that can use external tools?
+  answer: |
+    Treat each connected tool as an explicit capability. Give the agent a narrow allowlist, minimal credentials and constrained parameters; avoid arbitrary URL, SQL, shell or unrestricted write tools. Bound iterations, runtime and output size, and define a clear failure outcome when the agent cannot finish. Retrieved or user-provided text is untrusted and may contain prompt injection, so do not assume a system prompt can enforce authorization.
+
+    Validate tool arguments and model results in ordinary workflow nodes. Keep consequential writes behind deterministic checks and, when needed, authenticated human approval. Use idempotency keys for actions that can be retried, and inspect whether a tool already ran before retrying an interrupted agent execution. Separate users' memory and retrieval contexts, log tool decisions appropriately while minimizing sensitive data, and test malicious input, tool errors and malformed output. Monitor cost, latency and task-level quality rather than only successful execution status.
+  tags: [agents, least-privilege, tools]
+  period: '2024-2026'
+  type: representative
+- id: n8n-recent-003
+  topic: data flow
+  difficulty: intermediate
+  question: An expression referring to a prior node fails after you add an aggregation. Why might item linking be responsible?
+  answer: |
+    A prior expression may depend on n8n's paired-item lineage: the current output can be associated with the input item that produced it. A one-to-one mapping preserves a direct relationship, but aggregation may turn many inputs into one output. That output has no unambiguous single partner unless the node or transformation explicitly describes the relationship. A later lookup of a paired prior item can therefore fail or resolve differently than before.
+
+    Inspect the current node's item count, output shape and linking behavior. Carry the needed stable identifiers into the aggregated result, or explicitly construct output with appropriate source references when the Code node API supports it. Avoid relying on `$itemIndex` after filtering or reordering. Add tests for zero, one and many input records, and make the aggregation's output contract explicit so downstream expressions do not assume one-to-one cardinality.
+  tags: [paired-items, aggregation, expressions]
+  period: '2024-2026'
+  type: representative
+- id: n8n-recent-004
+  topic: reliability
+  difficulty: advanced
+  question: A workflow times out after creating a remote record. How do you prevent duplicate records on retry?
+  answer: |
+    A timeout does not prove the remote request failed; the service may have committed the record while its response was lost. Before repeating the write, determine whether the destination supports an idempotency key or a unique external reference. Generate that key from the business event, not the n8n execution ID, and reuse it across retries. If supported, query by a stable correlation ID to reconcile an ambiguous result before issuing another create.
+
+    Persist an intent or deduplication key durably, preferably with an atomic uniqueness constraint, and record the destination's returned identifier after success. Design workflow order to close the gap between remote write and local recording, and test interruption at that boundary. If the API offers neither idempotency nor lookup, route ambiguous outcomes to reconciliation rather than blindly retrying. Keep retry attempts bounded and differentiate transient faults from permanent validation errors.
+  tags: [idempotency, retries, APIs]
+  period: '2024-2026'
+  type: representative
+- id: n8n-recent-005
+  topic: deployment
+  difficulty: intermediate
+  question: What would you verify before scaling a self-hosted n8n deployment with queue mode?
+  answer: |
+    Confirm that the deployment has a measured execution-capacity need and that the main instance and workers use compatible n8n versions, the same database and the same `N8N_ENCRYPTION_KEY`. Set `EXECUTIONS_MODE=queue`, configure Redis using the supported `QUEUE_BULL_REDIS_*` settings, and verify workers can reach both services. In Docker or an orchestrator, keep configuration and secret delivery consistent across replicas; do not rely on an ephemeral container filesystem for state.
+
+    Choose worker concurrency based on memory, database throughput and downstream API limits, then scale gradually. Check queue depth, worker failures, database connection use, Redis availability and execution latency. Test worker restart and Redis interruption behavior, and verify retry/idempotency semantics for side effects. Ensure backups cover the database and encryption key, and document restore steps. Queue mode distributes execution; it does not make external operations exactly-once or remove the need to monitor triggers and the main process.
+  tags: [queue-mode, self-hosted, operations]
+  period: '2024-2026'
+  type: representative
+- id: n8n-recent-006
+  topic: webhook security
+  difficulty: advanced
+  question: How should an n8n webhook validate signed events behind a reverse proxy?
+  answer: |
+    Configure the public webhook URL and trusted proxy count correctly, using `WEBHOOK_URL` and `N8N_PROXY_HOPS` for a self-hosted deployment as appropriate to the topology. Terminate TLS at a trusted proxy, preserve the provider's required headers and keep editor access separately protected. Validate the request method, content type, size and event schema before any side effect.
+
+    For signature verification, follow the provider's precise canonicalization and HMAC or signing procedure, using the original request bytes when required rather than re-serialized JSON. Compare signatures safely, validate timestamps or nonces if the provider specifies replay protection, and store event IDs for deduplication. Avoid bearer secrets in query strings. IP allowlists can supplement but not replace cryptographic verification. Test valid, altered, expired and duplicate events, and confirm that proxy header handling cannot let an untrusted caller spoof the source or scheme.
+  tags: [webhooks, signatures, security]
+  period: '2024-2026'
+  type: representative
+- id: n8n-recent-007
+  topic: workflow promotion
+  difficulty: intermediate
+  question: What should a team verify when promoting workflow changes from development to production?
+  answer: |
+    Review a version-controlled diff and test the workflow with representative positive, negative, empty and multi-item inputs. Confirm node versions, expressions, output shapes, retry settings and destinations rather than assuming a visual change is harmless. Keep development credentials separate from production, then explicitly map the production credential reference during promotion. Ensure no secret or customer sample has entered the exported JSON or Git history.
+
+    Before activation, check webhook production URLs, schedule timezone, expected overlap, access permissions and which workflow copy is active. Run a controlled canary or harmless test, inspect execution evidence and monitor the first production runs. Document the release owner and recovery path. A workflow rollback may restore a prior definition but cannot reverse emails or external writes already completed. If two environment copies could receive the same event, deactivate or isolate the unintended copy and verify registrations after promotion.
+  tags: [version-control, environments, deployment]
+  period: '2024-2026'
+  type: representative
+- id: n8n-recent-008
+  topic: execution retention
+  difficulty: intermediate
+  question: How do you balance execution history for debugging against sensitive-data retention?
+  answer: |
+    Start by identifying what fields are needed to diagnose failures and what data is sensitive, then minimize payloads before they enter later nodes. Configure execution saving for successful, failed and manual runs according to the debugging need, available storage and retention policy; settings such as `EXECUTIONS_DATA_SAVE_ON_SUCCESS` and `EXECUTIONS_DATA_SAVE_ON_ERROR` are deployment-specific controls to verify against the current version. Use pruning to limit accumulation, but do not mistake pruning for a complete privacy program.
+
+    Avoid sending full inputs to alerts, and redact secrets or personal information in logs where possible. Keep durable business audit records in the appropriate system rather than relying on n8n execution history, which may be pruned. Restrict who can inspect executions and test whether exported or diagnostic data contains sensitive values. In cloud deployments, review the provider's current retention and access controls; self-hosted operators must configure and protect storage themselves.
+  tags: [execution-data, retention, privacy]
+  period: '2024-2026'
+  type: representative
+- id: n8n-recent-009
+  topic: API integration
+  difficulty: intermediate
+  question: How would you make an HTTP Request node robust against pagination and rate limits?
+  answer: |
+    Read the API's pagination contract: it may use page numbers, cursors, continuation links or a next-page token. Follow the documented mechanism until the service signals completion, and preserve a checkpoint if a long scan must resume. Avoid assuming that a single “latest results” page contains every change. Keep stable item IDs and deduplicate when overlapping windows or retries are used.
+
+    For rate limits, inspect status codes and headers such as `Retry-After`, then use bounded waits or retries consistent with the provider's policy. Limit concurrency and batch size so a larger n8n worker pool does not overwhelm the API. Treat 4xx validation or authorization errors differently from transient 429 and 5xx responses. For writes, use idempotency keys or reconciliation because timeouts can be ambiguous. Test empty pages, repeated cursors, malformed responses and partial failures; alert on stalled pagination rather than looping forever.
+  tags: [http-request, pagination, rate-limits]
+  period: '2024-2026'
+  type: representative
+- id: n8n-recent-010
+  topic: tool selection
+  difficulty: advanced
+  question: How would you decide whether a growing n8n workflow should be split or replaced by code or Airflow?
+  answer: |
+    Identify the pain rather than counting nodes alone. Split a workflow when a stable sub-process has a clear input/output contract, independent ownership or a distinct failure boundary. Use Execute Sub-workflow to reuse bounded logic, but define permissions, waiting behavior and error propagation. Extract domain logic to a service when it needs substantial tests, custom dependencies, a stable API, strict performance behavior or normal software release practices. FastAPI plus a scheduler can provide those boundaries at the cost of code and service operations.
+
+    Consider Airflow for scheduled, dependency-heavy data pipelines where DAG retries, backfills and data-platform conventions are central. It is usually not a direct replacement for low-latency webhook handling. Keep n8n where connectors and visible operational steps are valuable. Compare volume, latency, idempotency, observability, team skill, deployment burden and recovery needs. A migration should preserve event semantics and side-effect safeguards; moving a graph into code does not itself solve duplicate delivery or partial completion.
+  tags: [architecture, airflow, fastapi]
+  period: '2024-2026'
+  type: representative

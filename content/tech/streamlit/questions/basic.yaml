@@ -1,0 +1,343 @@
+- id: st-basic-013
+  topic: navigation
+  difficulty: intermediate
+  question: What is the role of `st.navigation` and `st.Page`?
+  answer: |
+    `st.Page` describes a page, including its source, title, icon, URL path, and visibility. The
+    entrypoint passes page definitions to `st.navigation`, which returns the currently selected
+    Page object. The app must call that object's `.run()` once to execute the selected page. The
+    entrypoint itself runs again on reruns, so it can hold common layout or app-wide controls
+    before invoking the selected page.
+
+    This explicit routing model is useful when page titles, grouping, visibility, or dynamic page
+    definitions need more control than the conventional `pages/` directory. When a session uses
+    `st.navigation`, Streamlit ignores the `pages/` directory for that app; do not expect both
+    systems to combine. Navigation only controls presentation. A hidden page remains no substitute
+    for authorization checks around data and actions. Use unique URL paths, especially when page
+    filenames would otherwise infer the same name.
+  tags: [navigation, multipage]
+
+- id: st-basic-014
+  topic: data display
+  difficulty: beginner
+  question: How do `st.dataframe` and `st.table` differ?
+  answer: |
+    `st.dataframe` presents an interactive dataframe, commonly allowing users to inspect, sort,
+    and resize tabular results. It suits exploratory data where the user needs to work with the
+    rows. Column configuration can clarify labels, formats, links, and value types. `st.table` is
+    a static rendering, useful for compact results that should be read but not manipulated.
+
+    Neither element makes a huge dataset cheap. Large frames still need to be queried, serialized,
+    sent to the browser, and rendered. For high row counts, aggregate, paginate, or filter at the
+    database/service layer rather than loading everything into a widget. Build a display dataframe
+    containing only fields the user may see; hidden application data can leak if it is passed to
+    the browser. Use stable IDs for selections because row order can change during sorting.
+  tags: [dataframe, table]
+
+- id: st-basic-015
+  topic: charts
+  difficulty: beginner
+  question: When would you choose a built-in Streamlit chart versus Plotly or Altair?
+  answer: |
+    Built-in chart elements such as `st.line_chart` and `st.bar_chart` are convenient for common
+    exploratory plots with little configuration. They are quick to author and work well when the
+    intended chart is simple. Altair offers a declarative grammar of marks, encodings, and
+    transformations, useful for tailored statistical visualizations. Plotly provides rich
+    interactive figures with hover, zoom, and a wider set of chart types.
+
+    Choose based on the interaction and explanation the user needs, not just the library's
+    feature count. Every option still needs correct units, sorting, labels, and aggregation.
+    Richer client-side charts can send large payloads and feel slow with too many points. Aggregate
+    or sample data when appropriate, and provide a table or text summary for consequential values.
+    Pin chart dependencies and test the deployed browser behavior when upgrading integrations.
+  tags: [charts, plotly, altair]
+
+- id: st-basic-016
+  topic: uploads
+  difficulty: beginner
+  question: Why is `st.file_uploader`'s file-type filter not a security check?
+  answer: |
+    The `type` argument communicates allowed extensions or MIME categories to the browser and
+    provides a best-effort filter. It does not prove that the uploaded bytes match the claimed
+    format, nor does it guarantee that a file is safe. A user can rename a file or supply
+    unexpected content. The app must parse and validate the actual contents using an appropriate
+    library, reject malformed structures, and limit file size and processing effort.
+
+    Treat filenames and cell values as untrusted input. Avoid writing a client-supplied filename
+    directly to disk; generate a server-side name and use controlled storage. Be careful with
+    personally identifiable data in logs and with spreadsheet formula injection in generated
+    downloads. Upload limits must also align with proxy and hosting limits. The uploader's
+    convenience controls improve UX, but content validation, authorization, scanning, and
+    retention remain application responsibilities.
+  tags: [uploads, security]
+
+- id: st-basic-017
+  topic: long jobs
+  difficulty: beginner
+  question: What does `st.spinner` do, and what does it not do?
+  answer: |
+    `st.spinner` shows users that a block of synchronous work is in progress. It improves
+    feedback for a query or transformation that takes a short, bounded time. Similar status or
+    progress elements can communicate stages when the function can report meaningful progress.
+
+    A spinner does not make the function asynchronous, cancellable, or durable. The work still
+    occupies the script execution while it runs; a session or process interruption may lose
+    in-memory progress. If a task must continue after the user leaves, survive a restart, or be
+    retried reliably, submit it to a background worker or queue and persist its status externally.
+    The Streamlit app can show a job ID and poll for results with reasonable intervals. Do not
+    display a fake progress percentage when no progress measurement exists; an honest indeterminate
+    status is better. For consequential work, use idempotency so retries do not duplicate effects.
+  tags: [long-jobs, spinner]
+
+- id: st-basic-018
+  topic: fragments
+  difficulty: intermediate
+  question: What problem does `st.fragment` solve?
+  answer: |
+    `st.fragment` decorates a function so interactions with widgets rendered inside it can rerun
+    that fragment without rerunning the whole app script. It can isolate a dashboard panel whose
+    controls and data are independent from other page content. A fragment can also use `run_every`
+    for periodic refresh while the session is active, which is suitable for modest live status
+    displays.
+
+    A fragment is not a separate process or job scheduler. Its code still consumes application
+    resources, and periodic polling should respect freshness needs and upstream capacity. Shared
+    state and side effects still need careful handling; parallel fragments can execute concurrently
+    and must not unsafely mutate shared resources. Some writes to containers created outside the
+    fragment are restricted in parallel execution. Use fragments after defining dependencies, not
+    as a reflexive optimization for every widget.
+  tags: [fragments, rerun]
+
+- id: st-basic-019
+  topic: databases
+  difficulty: intermediate
+  question: How should a Streamlit app manage database access across reruns?
+  answer: |
+    A common pattern is to cache a database engine or connection pool with `st.cache_resource`,
+    then acquire and release a short-lived connection or transaction inside each operation using
+    the driver's context manager. The engine is a reusable resource; a cursor or transaction is
+    temporary state and should not be kept globally between user interactions. Configure pool
+    size and timeouts in coordination with the database and the app's concurrency.
+
+    Use parameterized SQL for widget values, select only needed columns, and apply row limits or
+    pagination. Ensure connection cleanup runs even on exceptions. Cache query results with
+    `st.cache_data` only when freshness and tenant isolation are correct; include relevant
+    parameters in the cache key and invalidate after writes when needed. A widget's tenant choice
+    does not establish permission. Derive authorization from trusted identity and enforce it in
+    the query or service layer.
+  tags: [database, resources]
+
+- id: st-basic-020
+  topic: APIs
+  difficulty: intermediate
+  question: What reliability controls should an app use for external HTTP APIs?
+  answer: |
+    Set explicit connection and response timeouts so a slow upstream does not hold a session
+    indefinitely. Check status codes and validate response structure before rendering it. Reuse an
+    HTTP client when its library supports safe sharing, and bound connection pools and concurrency.
+    Retry only errors that are plausibly transient, use a capped backoff, and avoid retrying
+    non-idempotent writes unless the service supports idempotency keys.
+
+    Widget interactions can cause repeated script runs, so an uncontrolled API call at top level
+    may create unnecessary traffic. Use a cache for suitable read results with a deliberate
+    freshness policy, or put expensive work behind a form/button. Respect rate limits and provide
+    a useful error state, perhaps showing last-known data with its age. Do not show raw upstream
+    exception bodies or credentials to users, and do not disable TLS verification to work around
+    certificate configuration problems.
+  tags: [http, reliability]
+
+- id: st-basic-021
+  topic: security
+  difficulty: intermediate
+  question: Why are hidden pages and Session State not authorization controls?
+  answer: |
+    Hiding a page or conditionally rendering a button changes what the current UI displays; it
+    does not prevent a user from requesting a page path or invoking a data operation by another
+    route. Session State is mutable session-associated data, not a verified identity token. A
+    widget value such as `is_admin=True` is under application control and cannot prove that a
+    principal has a role.
+
+    Authentication must come from a trusted identity provider or identity-aware deployment
+    layer, and authorization must be checked at the service or data boundary for every sensitive
+    operation. Derive tenant scope from verified identity, not a dropdown alone. Use least-
+    privilege credentials, restrict secrets, and ensure cached results cannot cross user or tenant
+    boundaries. UI visibility is still useful for clarity, but security must hold even if a user
+    accesses a page directly or changes request parameters.
+  tags: [security, authorization]
+
+- id: st-basic-022
+  topic: performance
+  difficulty: intermediate
+  question: Why can rendering a dataframe be slow even when the query is fast?
+  answer: |
+    After the database returns results, Python may still transform and serialize them, Streamlit
+    must transmit the payload, and the browser must construct and render the interactive table.
+    These costs grow with row count, column count, object-heavy data types, and duplicate copies.
+    Thus a query that finishes quickly can still produce a slow app interaction or an unresponsive
+    browser.
+
+    Measure the whole path, not only database duration. Select only display columns, aggregate or
+    paginate large result sets, and apply filters at the data source when possible. Avoid sending
+    millions of records to `st.dataframe` and expecting the UI to solve data volume. Do not retain
+    multiple full copies in locals, cache, and Session State. Build a display projection that also
+    excludes sensitive columns. For charts, aggregate or sample at a meaningful visual resolution.
+  tags: [performance, dataframe]
+
+- id: st-basic-023
+  topic: deployment
+  difficulty: intermediate
+  question: What should be checked when running Streamlit behind a reverse proxy?
+  answer: |
+    The proxy must correctly route the app's HTTP traffic and support the persistent WebSocket
+    connection used by Streamlit. Verify upgrade headers, public base path if mounted below a
+    prefix, forwarded host/protocol settings, and idle/read timeouts. Restrict direct access to the
+    backend port when traffic is meant to pass through the trusted proxy. Misconfigured forwarded
+    headers can also create security problems if untrusted clients can spoof them.
+
+    Test the actual deployment path for login, page navigation, file uploads and downloads,
+    reconnects, and long-lived sessions; localhost success is not enough. Terminate TLS at a
+    trusted edge and integrate authentication there or through another trusted identity provider.
+    Do not assume a proxy provides authorization simply because it terminates TLS. Set limits
+    consistently across the app, proxy, and host, and confirm the chosen platform's current
+    requirements rather than copying old numeric settings.
+  tags: [deployment, proxy]
+
+- id: st-basic-024
+  topic: tool choice
+  difficulty: intermediate
+  question: When is Streamlit a poor fit for an application?
+  answer: |
+    Streamlit is strongest when a Python-first team needs an interactive data interface and the
+    app can follow a rerun-driven model. It may be a poor fit when requirements center on highly
+    custom responsive client interactions, collaborative editing, offline browser behavior, a
+    complex public identity model, precise low-latency request handling, or a large amount of
+    custom frontend state. It is also not a durable job scheduler or a replacement for a stable
+    public API.
+
+    Compare needs rather than framework popularity. Dash offers an explicit component/callback
+    model for dashboards. FastAPI can provide an API behind a dedicated frontend, and a BI platform
+    may suit governed self-service reporting. A notebook may be enough for a trusted, analyst-only
+    workflow. Streamlit can still serve as a prototype or internal interface while heavy computation
+    and authorization move to backend services. The choice should account for UX, concurrency,
+    security, operations, data size, and the team's ability to own each layer.
+  tags: [architecture, alternatives]
+
+- id: st-basic-001
+  topic: execution model
+  difficulty: beginner
+  question: What happens when a user changes a widget?
+  answer: |
+    In the normal execution model, Streamlit updates the widget's value for the current session and reruns the app script from top to bottom. The script reads the new value, recomputes downstream Python code, and emits the resulting UI. This differs from a traditional frontend where a small browser event handler updates one component without running server code again.
+
+    Local variables are recreated during each run. If a computed result must remain visible after another interaction, store it in Session State, a cache, or durable storage according to its lifetime. External effects such as database writes are not undone by a rerun, so put mutations behind explicit actions and make them safe to retry. A rerun is normal behavior, not evidence that the user submitted twice.
+  tags: [rerun, execution]
+
+- id: st-basic-002
+  topic: state
+  difficulty: beginner
+  question: Why does a local Python variable not persist across widget interactions?
+  answer: |
+    Each interaction normally starts a new execution of the app script. Python executes the top-level statements again and creates fresh local bindings; it does not resume the old script at the line after the widget. A name such as `result` exists only for that execution unless its value is stored somewhere with a longer lifetime.
+
+    Use `st.session_state` for per-session UI or workflow values, `st.cache_data` for reusable computed data, and `st.cache_resource` for a shared long-lived resource. Use a database or object store for important information that must survive process restarts or be shared across devices. Choosing among these depends on privacy, size, and persistence. Keeping a large value in session state can multiply memory use for concurrent sessions, while a shared cache can accidentally expose user-specific data if its key omits identity or tenant.
+  tags: [state, rerun]
+
+- id: st-basic-003
+  topic: widgets
+  difficulty: beginner
+  question: What is the difference between a widget value and a button event?
+  answer: |
+    Most input widgets return a value that represents the current choice: for example, a slider returns a number and a select box returns a selected option. That value is available on each run and can drive calculations. A button is an event: its return value is true for the run triggered by the click, then false on later runs. It is not a persistent “clicked” flag.
+
+    If a button starts a calculation whose result should remain visible, save the result in Session State or another suitable store, then render that saved value outside the button branch. For actions that have side effects, make duplicate submissions safe and persist important status externally. Do not rely on the user clicking only once; refreshes, retries, or double-clicks can happen. A form submit button is similarly an event, but it commits the form's pending widget values together.
+  tags: [widgets, buttons]
+
+- id: st-basic-004
+  topic: widgets
+  difficulty: beginner
+  question: Why should you assign explicit keys to widgets?
+  answer: |
+    A key gives a widget a stable identity, particularly when labels are duplicated, widgets are generated in a loop, or layout conditions change. It also makes the current value accessible through `st.session_state[key]`. Descriptive keys separate internal identity from user-facing labels, so copy changes do not necessarily change the meaning of the value.
+
+    Keys must be unique among widgets that exist together in a run. In a loop, use a stable record identifier rather than a row index if data can be sorted or reordered; otherwise a value may become associated with a different row. A widget key is not a security feature and should not contain secrets. Widget state is tied to widget lifecycle: if the widget is not rendered, its value may be removed. If a selection must outlive a conditional branch or page, copy it into an application-owned Session State key and manage it intentionally.
+  tags: [widgets, keys]
+
+- id: st-basic-005
+  topic: forms
+  difficulty: beginner
+  question: When should inputs be placed inside `st.form`?
+  answer: |
+    Put related controls in a form when users should edit several values and submit them as one group, especially when each intermediate change would trigger an expensive query or transformation. Widgets in a form hold pending browser values until the user presses the submit button. The app then receives the submitted values and performs one rerun with the complete set.
+
+    For immediately reactive exploration, keep controls outside a form so each change can update the view. A form is a UI batching mechanism, not a database transaction: it does not provide rollback, atomic writes, or server-side authorization. Validate submitted values in Python, and use a real transaction for database mutations. A form needs a submit button. Individual widget changes inside it should not be treated as independent immediate callback events; put the submit handling on `st.form_submit_button` and process the values after that control returns true.
+  tags: [forms, widgets]
+
+- id: st-basic-006
+  topic: callbacks
+  difficulty: intermediate
+  question: In what order does a widget callback run relative to the main script?
+  answer: |
+    When a widget with an `on_change` or `on_click` callback is triggered, Streamlit executes the callback first and then reruns the app script from top to bottom. This is useful for changing Session State before the widgets and output are constructed again. A reset callback can update several keys, and the next run will render using those updated values.
+
+    Keep callbacks small and deterministic. For a changing widget value, read the current value from its Session State key rather than passing a local variable captured during an earlier execution. Do not place complex business logic or a non-idempotent external write in a callback without explicit retry handling. A callback is part of the rerun flow, not a background task. Also avoid assigning a widget's key after the widget has already been instantiated in the same run; update it in a callback or before creating the widget.
+  tags: [callbacks, state]
+
+- id: st-basic-007
+  topic: session state
+  difficulty: beginner
+  question: What is `st.session_state`, and what does it not guarantee?
+  answer: |
+    `st.session_state` is a dictionary-like mapping for values associated with one Streamlit session. It keeps chosen values across normal script reruns, making it useful for filters, temporary results, wizard steps, and flags. It can be initialized with keys before reading them; accessing a missing key raises an exception that identifies the missing entry.
+
+    It is not durable storage. A lost session, process restart, or new browser session should not be assumed to retain those values. It is also not proof of identity, an authorization system, or a cross-user communication channel. Persist important workflow records in a database, and check access against a trusted authenticated principal at the service/data boundary. Store compact state rather than large duplicate dataframes because each active session can retain its own objects. For shared computed results use a carefully scoped cache, not session state.
+  tags: [session-state, persistence]
+
+- id: st-basic-008
+  topic: session state
+  difficulty: intermediate
+  question: How do widget-owned keys differ from application-owned Session State keys?
+  answer: |
+    When a widget is created with `key="region"`, Streamlit associates that key with the widget's current value and manages it according to the widget's lifecycle. An application-owned key is a value your code stores for its own purpose, independent of whether a particular widget is present. The mapping itself is flat; dotted key names are naming conventions, not nested objects.
+
+    This distinction matters when a widget disappears because the user changes pages or a conditional branch. Widget-associated state may be cleaned up when the widget is not rendered. If the selected region must survive, copy it into a separate app-owned key and initialize the widget from that state when it returns. Do not mutate the keyed state after instantiating the widget during the same run; set it before rendering or in a callback. Using separate ownership avoids confusing UI lifecycle with workflow persistence.
+  tags: [session-state, widgets]
+
+- id: st-basic-009
+  topic: caching
+  difficulty: beginner
+  question: When should you use `st.cache_data`?
+  answer: |
+    Use `st.cache_data` for computed data results that can be identified by function code and input arguments—for example, a dataframe loaded from a query, a parsed file, or a deterministic transformation. A cache hit avoids running the function body again. The cached result is serialized and returned as a copy, which reduces the risk that one caller mutates the shared stored result and affects another caller.
+
+    The function should expose all meaningful dependencies as arguments. If it reads a file or global setting that changes without the arguments changing, the cache may return stale data. Include a version or explicit input when needed, select a TTL that matches freshness requirements, and bound entries where practical. `max_entries` limits the number of entries, not their total bytes. Do not cache sensitive results across users unless the cache key and authorization design correctly isolate them.
+  tags: [cache-data, caching]
+
+- id: st-basic-010
+  topic: caching
+  difficulty: beginner
+  question: When should you use `st.cache_resource` instead of `st.cache_data`?
+  answer: |
+    `st.cache_resource` is for long-lived objects whose identity should be reused, such as a database engine or pool, API client, or loaded model. Calls return the same resource instance, rather than an isolated copy of a computed result. It avoids expensive initialization on each rerun and can share one object across sessions.
+
+    That sharing is also a responsibility: the resource must be safe for concurrent use and must not contain mutable user-specific state that can leak between sessions. Cache a connection pool, not a transaction or cursor that belongs to one operation. Use `st.cache_data` for ordinary computed values such as query result data. If a resource depends on a tenant, credential, or version, represent that dependency explicitly or choose a narrower lifetime. Neither cache decorator provides authorization, so enforce permissions before accessing sensitive data.
+  tags: [cache-resource, caching]
+
+- id: st-basic-011
+  topic: caching
+  difficulty: intermediate
+  question: What is a cache invalidation trap in a Streamlit app?
+  answer: |
+    A common trap is caching a function that reads changing data from a global or external system while accepting no argument that represents that change. Streamlit can reuse a result when the function code and hashed inputs appear unchanged, even though a file, database row, or feature flag has changed. The app then appears stale until a TTL expires or someone clears the cache.
+
+    Make dependencies explicit: pass query parameters, a data version, or another stable marker into the cached function. After a successful write, clear the narrow relevant cached function if immediate refresh is required. TTL is a reuse policy, not a consistency guarantee. Also include tenant or user boundaries when results differ by identity; otherwise shared cache entries can cross data boundaries. A good cache key captures what makes the result different, while capacity and freshness settings bound how long results remain useful.
+  tags: [cache-invalidation, caching]
+
+- id: st-basic-012
+  topic: layout
+  difficulty: beginner
+  question: When are `st.columns` a good layout choice?
+  answer: |
+    Use `st.columns` for content that benefits from side-by-side comparison: a chart beside a summary metric, a small group of related controls, or two equally important views. Column width ratios can give the main visualization more space than supporting details. The default vertical layout is often easier to read and adapts more naturally to narrow screens.
+
+    Columns are not a general responsive grid system. Deeply nesting them or using many narrow columns can make an app cramped on mobile and difficult to scan. Do not force every section into a dashboard row. If two views are alternatives rather than things users need to compare simultaneously, tabs or a selection control may be clearer. Test with realistic text and viewport sizes, and keep the primary task accessible. Layout should express the information hierarchy rather than mimic a static desktop mockup.
+  tags: [layout, columns]

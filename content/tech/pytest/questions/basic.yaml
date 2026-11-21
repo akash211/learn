@@ -1,0 +1,517 @@
+- id: pytest-basic-001
+  topic: discovery and test structure
+  difficulty: beginner
+  question: How does pytest discover tests, and what does a good test function look like?
+  answer: |
+    By default, pytest searches for `test_*.py` and `*_test.py` files, then collects functions
+    named `test_*` and methods of that name in `Test*` classes. A good test exercises one
+    understandable behavior through a public seam: arrange inputs, act, and assert an observable
+    result. The AAA pattern is useful, but comments for each phase are not required when the code
+    is already clear.
+
+    Keep module imports free of side effects because pytest imports test modules during collection.
+    Do not start servers or connect to production systems at import time. Use descriptive names
+    that say what contract is tested, and split unrelated assertions when one test has several
+    independent reasons to fail. Run `pytest --collect-only -q` when discovery is unclear. A test
+    is evidence only for the behavior it checks; mirroring implementation details can make the
+    suite brittle without increasing confidence.
+  tags: [discovery, test-structure, contracts]
+
+- id: pytest-basic-002
+  topic: fixtures
+  difficulty: beginner
+  question: What is a pytest fixture, and how does a test request one?
+  answer: |
+    A fixture is a function decorated with `@pytest.fixture` that provides a value or manages
+    setup and cleanup. A test requests the fixture by naming it as a parameter; pytest resolves
+    dependencies, runs setup before the test, and performs teardown afterward. This is dependency
+    injection with lifecycle management rather than a global setup function.
+
+    ```python
+    @pytest.fixture
+    def account():
+        return Account(balance=0)
+
+    def test_deposit(account):
+        account.deposit(5)
+        assert account.balance == 5
+    ```
+
+    Fixtures can request other fixtures, but keep the dependency graph comprehensible. Put
+    behavior-specific data in the test and share setup only when reuse genuinely improves clarity.
+    Never call a fixture directly as a normal function or import fixtures from `conftest.py`;
+    pytest must manage the request for correct setup, caching, and teardown. If production code
+    needs the same construction logic, move it into a regular helper and call that helper from
+    the fixture.
+  tags: [fixtures, dependency-injection]
+
+- id: pytest-basic-003
+  topic: fixture scopes
+  difficulty: beginner
+  question: What do pytest fixture scopes control, and why is function scope the default?
+  answer: |
+    Scope sets how long a fixture value is reused: `function` (the default), `class`, `module`,
+    `package`, or `session`. Function scope gives each test fresh setup and teardown, which makes
+    isolation the default. Broader scope can amortize expensive work, such as starting a database
+    container once, but it means multiple tests may observe the same object or service state.
+
+    Scope is a correctness decision, not just a speed setting. A session-scoped mutable client,
+    database, or cache can create order-dependent tests unless data is reset at a narrower scope.
+    A fixture also cannot depend on a shorter-scoped fixture because the dependency would expire
+    too soon; pytest reports a scope mismatch. Use broad scope for immutable configuration or
+    shared infrastructure with an explicit reset boundary, and keep mutable test data function
+    scoped when practical. Measure setup cost before broadening lifetime, then verify teardown
+    happens on failure as well as success.
+  tags: [fixture-scopes, isolation]
+
+- id: pytest-basic-004
+  topic: fixture teardown
+  difficulty: beginner
+  question: How should a fixture acquire and clean up a resource safely?
+  answer: |
+    A yield fixture puts setup before `yield` and cleanup after it. Pytest runs the cleanup during
+    fixture teardown after the consumer test finishes, including when its assertion fails. Pair
+    acquisition with cleanup as soon as each resource is successfully acquired; otherwise a later
+    setup exception can leave earlier resources open before pytest has a finalizer to call.
+
+    ```python
+    @pytest.fixture
+    def connection():
+        conn = open_connection()
+        try:
+            yield conn
+        finally:
+            conn.close()
+    ```
+
+    Context managers inside fixtures can make ownership even clearer. For multiple independent
+    resources, use nested context managers or register finalizers immediately after each
+    successful acquisition. `request.addfinalizer` is useful for dynamic cleanup, but registration
+    should not be delayed until setup is entirely complete. Teardown should be idempotent where
+    possible and should not hide the original test failure. For external resources, also consider
+    interrupted processes and add infrastructure-level expiry or cleanup safeguards.
+  tags: [teardown, resource-management]
+
+- id: pytest-basic-005
+  topic: built-in fixtures
+  difficulty: beginner
+  question: When would you use `tmp_path`, `monkeypatch`, and `caplog`?
+  answer: |
+    `tmp_path` provides a per-test temporary directory as a `pathlib.Path`, useful for files that
+    should not touch the repository or depend on an existing local path. `monkeypatch` temporarily
+    changes attributes, environment variables, mappings, or the working directory and restores
+    those changes after the test. `caplog` captures Python logging records so a test can inspect
+    level, logger, message, or structured record fields.
+
+    ```python
+    def test_config_reads_env(monkeypatch, caplog):
+        monkeypatch.setenv("APP_MODE", "test")
+        ...
+    ```
+
+    These built-ins manage cleanup, but they do not make every assertion valuable. Prefer testing
+    behavior affected by an environment value rather than only asserting a private helper was
+    called. Inspect logs only when logging behavior is a real contract, such as a security audit
+    event. Do not log or capture secrets into CI artifacts accidentally. Other useful fixtures
+    include `capsys` for captured output and `tmp_path_factory` for temporary directories with a
+    broader lifetime.
+  tags: [built-in-fixtures, monkeypatch, caplog]
+
+- id: pytest-basic-006
+  topic: parametrization
+  difficulty: beginner
+  question: When should you use `pytest.mark.parametrize`?
+  answer: |
+    Use parametrization when one behavior should hold for several meaningful input/output cases.
+    Each parameter set becomes a separately collected test item, so a failing boundary or input
+    is reported independently. Good examples include empty versus populated input, inclusive
+    limits, valid and invalid encodings, and regression cases for previously fixed bugs.
+
+    ```python
+    @pytest.mark.parametrize("text, expected", [(" a ", "a"), ("", "")])
+    def test_normalize(text, expected):
+        assert normalize(text) == expected
+    ```
+
+    Avoid huge Cartesian products unless every combination matters. Too many combinations slow
+    feedback and obscure the policy being tested. Give cases semantic IDs with
+    `pytest.param(..., id="empty-input")` when default representations are unstable or unclear.
+    Pytest passes parameter objects as-is; it does not copy mutable lists or dictionaries, so
+    mutation in one case can affect another. Parameterize behavior, not merely to reduce repeated
+    source lines, and split cases with different expected failure types when that improves
+    diagnostics.
+  tags: [parametrization, test-cases]
+
+- id: pytest-basic-007
+  topic: test ids
+  difficulty: beginner
+  question: Why and how should you provide IDs for parameterized tests?
+  answer: |
+    Parameter IDs become part of pytest's node IDs and appear in reports. Clear, stable IDs make
+    CI failures easier to locate and allow targeted selection with `-k`. For example,
+    `missing-name` explains the condition more clearly than a generated dictionary representation
+    or `case2`.
+
+    ```python
+    @pytest.mark.parametrize("value", [
+        pytest.param("", id="empty"),
+        pytest.param("abc", id="normal"),
+    ])
+    def test_parse(value):
+        ...
+    ```
+
+    IDs can be set on each `pytest.param`, with the decorator's `ids=` list, or with an ID
+    callable. Prefer explicit semantic labels when each example represents a domain case. Do not
+    include credentials, personal data, huge values, or environment-dependent text; IDs are written
+    to logs and report files. Stable names also make `--last-failed` and test selection more
+    predictable. If a parameter is too complex to name, consider whether the test combines
+    separate policies or should use a smaller, clearer input model.
+  tags: [test-ids, parametrization]
+
+- id: pytest-basic-008
+  topic: assertions
+  difficulty: beginner
+  question: What does pytest assertion rewriting provide?
+  answer: |
+    Pytest rewrites assertions in collected test modules so a failed expression can report
+    intermediate values. A plain `assert actual == expected` can show the mismatched values
+    without a custom assertion API. This is one reason simple Python assertions are idiomatic in
+    pytest tests.
+
+    Rewriting works best for direct comparisons and simple expressions. If a test says
+    `assert check_everything(order)`, pytest cannot explain which internal condition was false.
+    Split the contract into meaningful assertions or make the helper return diagnostic data. Use
+    `pytest.approx` for floating-point tolerances rather than exact equality, and use `Decimal`
+    where the business domain requires decimal arithmetic. Assertion messages can add context but
+    should not replace useful comparisons. Avoid testing implementation details that change during
+    harmless refactors. A failure report should identify an observable contract mismatch and
+    enough context to understand the input without exposing sensitive values.
+  tags: [assertions, diagnostics]
+
+- id: pytest-basic-009
+  topic: expected exceptions
+  difficulty: beginner
+  question: How do you test that code raises an expected exception?
+  answer: |
+    Use `pytest.raises(ExpectedType)` as a context manager around only the operation expected to
+    fail. This checks that an exception of that type or a subclass is raised. The context exposes
+    `exc_info.value` for checking useful attributes. Optionally, `match=` applies a regular
+    expression to the exception's string representation.
+
+    ```python
+    with pytest.raises(ValueError, match="positive"):
+        set_limit(-1)
+    ```
+
+    Avoid wrapping setup and unrelated calls in the same context: an unexpected `ValueError` from
+    setup could satisfy the test. Avoid broad `Exception`, which can accept programming bugs such
+    as `AttributeError`. Message matching is useful when wording is part of a contract, but exact
+    text assertions can become brittle; prefer structured attributes where available and escape
+    regex punctuation for literal matches. For async code, put the awaited call inside the context.
+    An exception raised by a task group may be an `ExceptionGroup`, so assert the concurrency
+    contract rather than assuming a single exception.
+  tags: [raises, exceptions]
+
+- id: pytest-basic-010
+  topic: skip and xfail
+  difficulty: beginner
+  question: How are `skip` and `xfail` different?
+  answer: |
+    A skip means the test is not applicable or cannot meaningfully run in the current environment.
+    Use `pytest.skip()` for a condition found at runtime or `@pytest.mark.skipif` for a known
+    condition, and provide a clear reason. A skipped test is not a passing test and should remain
+    visible in the test summary.
+
+    Xfail records an expected failure, typically for a known issue or intentionally unsupported
+    behavior. It should have a reason and a condition that can be resolved. `strict=True` makes an
+    unexpected pass fail the suite, helping teams remove obsolete xfails. `pytest.xfail()` marks
+    the current test at runtime and stops it immediately. Do not use xfail as a soft way to accept
+    a defect in your own code; an ordinary failing regression test is better when the behavior is
+    required. Keep skip and xfail conditions narrow, review them periodically, and do not use them
+    to hide setup failures or flaky behavior without diagnosis.
+  tags: [skip, xfail]
+
+- id: pytest-basic-011
+  topic: conftest
+  difficulty: beginner
+  question: What is `conftest.py`, and how does pytest find fixtures in it?
+  answer: |
+    `conftest.py` is a local pytest plugin discovered based on a test's directory tree. Fixtures
+    defined in a parent conftest can be requested by tests below it without imports; a nested
+    conftest can add fixtures for its subtree. Sibling directories do not see each other's nested
+    conftest files.
+
+    Put shared fixtures near the tests that use them and move them upward only when reuse is real.
+    A root file containing every fixture creates a large implicit namespace and can hide expensive
+    dependencies. Do not import `conftest.py` as an ordinary module or call its fixtures directly;
+    pytest handles their lookup, caching, and teardown. If setup logic is useful outside tests,
+    place it in a normal helper module and let the fixture call that helper. Running a single test
+    file from a different root can change fixture discovery, so use the repository's documented
+    invocation and inspect setup with `pytest --setup-show` when resolution is surprising.
+  tags: [conftest, fixtures]
+
+- id: pytest-basic-012
+  topic: configuration and plugins
+  difficulty: beginner
+  question: How should a project configure pytest and manage plugins?
+  answer: |
+    Keep project-level options in one authoritative configuration file, commonly
+    `pyproject.toml` under `[tool.pytest.ini_options]`. Set test paths, default options, and
+    registered custom markers there. Registering markers documents their meaning and prevents
+    misspellings from being silently treated as new labels.
+
+    Plugins add fixtures, command-line options, hooks, and reporting integrations. Examples include
+    `pytest-cov`, `pytest-asyncio`, `pytest-xdist`, and `pytest-timeout`. Declare plugin
+    dependencies in the project's environment or lock strategy; relying on someone's globally
+    installed plugin makes local and CI behavior differ. Prefer installed entry-point plugins
+    over ad hoc loading from deep conftest files. Pin versions when plugin semantics affect async
+    fixtures, coverage, or collection. Keep custom hooks small and use built-in features before
+    implementing new collection rules. A configuration change should be exercised with collection
+    and representative tests in a clean environment, not only on the author's machine.
+  tags: [configuration, plugins]
+
+- id: pytest-basic-013
+  topic: mocking and monkeypatch
+  difficulty: beginner
+  question: Where should you patch a function used by the code under test?
+  answer: |
+    Patch the symbol where the system under test looks it up. If a module uses
+    `from gateway import fetch`, it has its own bound `fetch` name; replacing `gateway.fetch`
+    after import may not change the reference already stored in the consumer module. Patching the
+    consumer's lookup site is generally the correct choice.
+
+    Pytest's `monkeypatch` fixture provides temporary `setattr`, `setenv`, `setitem`, and related
+    operations, restoring changes automatically. Keep patches narrow and prefer dependency
+    injection or a small fake when that makes the boundary clearer. A mock should not simply return
+    the exact final result if the test claims to cover parsing or transformation. Ask what could
+    be broken in production while the test still passed. Interaction assertions are appropriate
+    when the interaction itself matters, but should not replace checking the externally observable
+    outcome. Mocking is isolation, not proof that an integration works.
+  tags: [mocking, monkeypatch]
+
+- id: pytest-basic-014
+  topic: unittest.mock
+  difficulty: intermediate
+  question: What do `autospec` and `AsyncMock` help prevent?
+  answer: |
+    `unittest.mock` provides `Mock`, `patch`, and related tools. `autospec=True` or
+    `create_autospec` constrains mock attributes and call signatures against a real callable or
+    object, catching misspelled attributes and invalid argument lists that an unconstrained mock
+    might accept. `spec_set` can further prevent assigning attributes not present in the spec.
+
+    A spec does not implement the real dependency's behavior; the mock still returns configured
+    values. Use it to check a relevant interaction and pair it with assertions about the result.
+    `AsyncMock` represents an async dependency and supports await assertions such as
+    `assert_awaited_once_with`. A regular mock may be called but not awaited, so it can misrepresent
+    coroutine semantics. Use mocks at a clear boundary and avoid long chains of configured return
+    values that mirror private implementation structure. If several tests need realistic behavior,
+    a small fake implementing the interface may be easier to trust and maintain.
+  tags: [unittest-mock, autospec, async]
+
+- id: pytest-basic-015
+  topic: HTTP tests
+  difficulty: intermediate
+  question: When is the `responses` library appropriate, and what does it not prove?
+  answer: |
+    `responses` intercepts HTTP calls made through the `requests` library. Tests register expected
+    URLs, methods, status codes, headers, and bodies, then exercise the application's request
+    construction and response parsing without contacting a real service. It is useful for
+    deterministic unit-level coverage of requests-based clients, including error responses.
+
+    ```python
+    with responses.RequestsMock() as mocked:
+        mocked.add(responses.GET, url, json={"ok": True}, status=200)
+        result = client.fetch()
+    ```
+
+    It does not establish DNS, TLS, provider availability, live authentication, or schema
+    compatibility with the real service. It also does not automatically intercept HTTPX. For
+    HTTPX, use an appropriate transport such as `httpx.MockTransport` or a suitable library such
+    as `respx`. Ensure unmatched requests fail rather than reaching a live network. Name the test
+    according to its scope and retain a smaller integration or contract check for important
+    external assumptions. Never place real credentials in recorded fixtures or test logs.
+  tags: [responses, requests, HTTP]
+
+- id: pytest-basic-016
+  topic: async testing
+  difficulty: intermediate
+  question: How does pytest run an async test, and why should a project choose one plugin policy?
+  answer: |
+    Pytest core does not run coroutine tests by itself; a plugin such as `pytest-asyncio` or AnyIO
+    supplies an async test runner and loop/backend management. With pytest-asyncio, a test can use
+    `@pytest.mark.asyncio`; AnyIO commonly uses `@pytest.mark.anyio` and its backend fixture.
+
+    Choose a deliberate plugin configuration and pin a compatible version. Auto mode can be
+    convenient in a repository committed to one async ecosystem; explicit markers and strict mode
+    help distinguish tests when multiple frameworks coexist. Overlapping automatic modes can
+    compete to run the same coroutine or manage fixtures with different loop lifetimes. Loop-bound
+    clients and servers must be created, used, and closed on compatible loops. Await work that the
+    test starts, cancel or join background tasks, and synchronize with events rather than arbitrary
+    sleeps. For API contract tests, a synchronous client may be sufficient; async syntax is only
+    needed when the test itself exercises async behavior.
+  tags: [async, pytest-asyncio, anyio]
+
+- id: pytest-basic-017
+  topic: markers and selection
+  difficulty: beginner
+  question: How do `-m` and `-k` differ when selecting pytest tests?
+  answer: |
+    `-m` selects tests by marker expression, such as `pytest -m 'not slow and not integration'`.
+    It is appropriate for categories deliberately marked in the suite. Custom markers should be
+    registered in configuration and documented; a marker itself does not provision a database or
+    isolate external resources.
+
+    `-k` selects by substring or boolean expression over test names and parent node IDs, for
+    example `pytest -k 'payment and not timeout'`. It is flexible but can match more items than
+    expected. Use a full node ID for exact selection and `--collect-only -q` to verify the
+    collected set. `--ignore` and related options exclude paths rather than classify individual
+    tests. Avoid making the default CI job omit important integration checks, and guard against a
+    marker expression that selects zero tests. Keep category policy visible through copyable
+    commands so developers and CI agree about what was actually run.
+  tags: [markers, selection]
+
+- id: pytest-basic-018
+  topic: pytest-cov
+  difficulty: intermediate
+  question: What does coverage measure, and how should teams interpret it?
+  answer: |
+    `pytest-cov` integrates pytest with coverage.py to report executed lines and, with branch
+    measurement enabled, control-flow branches. A command such as
+    `pytest --cov=myapp --cov-branch --cov-report=term-missing` can reveal unvisited code. Configure
+    the source package explicitly and check that reports include the expected files.
+
+    Coverage does not prove that assertions are meaningful, that inputs match production, or that
+    behavior is correct. A line can execute without its output being checked; unmeasured subprocesses
+    or generated files can also affect reports. Use missing lines and branches to find risk areas,
+    not to declare correctness. A threshold can prevent a large regression, but raising it
+    mechanically can encourage shallow tests. Exclusion pragmas should have specific reasons.
+    Pair coverage with behavior-focused review, integration checks, and, when useful, mutation or
+    property-based testing. Preserve reports on CI failures and confirm that a test job did not
+    silently measure an empty or unintended package.
+  tags: [coverage, pytest-cov]
+
+- id: pytest-basic-019
+  topic: property-based testing
+  difficulty: intermediate
+  question: What is a property-based test, and how does Hypothesis help?
+  answer: |
+    A property-based test states an invariant that should hold for many values instead of listing
+    only hand-selected examples. Hypothesis generates inputs from strategies, runs the test, and
+    attempts to shrink a failure to a smaller counterexample. For a normalizer, a property might
+    assert idempotence; for a sort function, it could check ordering and preservation of elements.
+
+    ```python
+    @given(st.lists(st.integers()))
+    def test_sort_is_idempotent(values):
+        assert sorted(sorted(values)) == sorted(values)
+    ```
+
+    The test property must be independently meaningful. Repeating the same algorithm in the
+    assertion can reproduce its defect. Build strategies that directly generate valid domain
+    values rather than filtering heavily with `assume()`. Hypothesis can store and replay failing
+    examples, and `@example` can preserve a known boundary. Do not depend on the exact generated
+    sequence. Property tests complement example-based regression cases; they do not remove the
+    need to test named business requirements or external integration boundaries.
+  tags: [hypothesis, property-testing]
+
+- id: pytest-basic-020
+  topic: mutation testing
+  difficulty: advanced
+  question: What does mutation testing reveal that coverage alone does not?
+  answer: |
+    Mutation testing makes small changes to code—such as changing a comparison or removing a
+    statement—and checks whether the test suite fails. A mutant that is killed means some test
+    detected that change; a surviving mutant suggests the tests did not distinguish the altered
+    behavior under the selected run. Tools such as `mutmut` can automate mutation generation and
+    reporting.
+
+    Coverage records execution, not whether assertions would catch a defect. Mutation testing
+    challenges assertion strength, but its score is not a correctness measure. Equivalent mutants
+    can behave identically for relevant inputs, and tool limitations or incorrect test selection
+    can create misleading survivors. Inspect representative results and add tests for real missing
+    behavioral distinctions, not incidental implementation details. Mutation runs can be expensive,
+    so focus on critical modules and use a time budget. If deleting a validation check survives,
+    add a rejection case; if changing a log string survives, decide whether the wording is actually
+    a contract before adding a brittle test.
+  tags: [mutation, test-quality]
+
+- id: pytest-basic-021
+  topic: integration testing
+  difficulty: intermediate
+  question: When should an integration test use a real database rather than a fake?
+  answer: |
+    Use a real database when the claim depends on database behavior: SQL dialect, constraints,
+    migrations, transaction isolation, driver conversion, or commit visibility. A fake repository
+    can efficiently test domain logic and error handling, but it cannot prove that the actual engine
+    enforces uniqueness or executes the generated SQL correctly.
+
+    Keep tests isolated with a dedicated test instance, transaction rollback where all work shares
+    the same connection, unique schemas, or deliberate cleanup. Rollback does not undo commits on
+    another connection and may not reset sequence values. Test migrations against a known schema
+    state rather than creating tables only from ORM metadata. Never use a production URL, and fail
+    closed if the configured database name or host is unsafe. A real database test costs more, so
+    use it for boundary confidence and retain fast unit tests for logic that does not require the
+    engine. The test name and suite category should state which boundary is real.
+  tags: [integration, database, isolation]
+
+- id: pytest-basic-022
+  topic: Testcontainers
+  difficulty: intermediate
+  question: What does Testcontainers add, and what must a test still handle?
+  answer: |
+    Testcontainers for Python can start disposable containers for services such as PostgreSQL,
+    allowing tests to exercise a real server without requiring a shared long-lived test instance.
+    A fixture can start the container, yield its connection details, and stop it during teardown.
+    Pin an image version and use readiness checks rather than assuming the service is ready as
+    soon as a container process starts.
+
+    Containers still require a compatible runtime, image availability, ports, and cleanup. A CI
+    environment without Docker access may fail before the test body begins; do not convert every
+    startup failure into a silent skip. Shared containers also require test data isolation, especially
+    under xdist, where fixtures generally exist per worker process. A container is not identical to
+    production unless its engine version, extensions, and configuration match relevant assumptions.
+    Protect real services with explicit test URLs and safety checks. Provisioning a real service
+    strengthens a specific integration claim; it does not test deployment orchestration or
+    production credentials by itself.
+  tags: [testcontainers, containers]
+
+- id: pytest-basic-023
+  topic: flaky tests
+  difficulty: intermediate
+  question: How should you investigate a flaky test rather than simply retrying it?
+  answer: |
+    First preserve the failing node ID, original traceback, seed, worker, environment versions,
+    and relevant logs. Reproduce the failure under the same conditions and narrow the run to the
+    test or smallest group that still exposes it. Identify the uncontrolled input: ordering,
+    scheduling, wall clock, random data, network, shared external state, filesystem assumptions,
+    or CI resource pressure.
+
+    Replace fixed sleeps with explicit synchronization, uncontrolled network calls with controlled
+    transports, and shared rows or files with isolated names. A race may indicate a production bug,
+    not merely a test issue. Reruns can temporarily contain an infrastructure incident, but keep
+    the first failure visible, report retry counts, assign an owner, and set a removal condition.
+    Do not mark a flaky test xfail just to make the suite green; xfail means failure is expected
+    under a known condition. Reproducibility and removal of nondeterminism are the real fix, not
+    repeatedly executing until one run passes.
+  tags: [flaky-tests, debugging]
+
+- id: pytest-basic-024
+  topic: CI integration
+  difficulty: intermediate
+  question: What makes a pytest CI job trustworthy and useful to developers?
+  answer: |
+    A trustworthy job uses declared, reproducible Python and plugin versions, runs the canonical
+    project command from a clean checkout, and makes the selected tests visible. It should return
+    pytest's exit status, preserve JUnit or coverage artifacts on failures, and fail if an intended
+    suite unexpectedly collects zero tests. Local instructions should match CI closely enough to
+    reproduce a failing node ID.
+
+    Split fast and environment-heavy tests when that improves feedback, but ensure required merge
+    checks include every critical boundary suite. Caching should affect install speed only, never
+    test state or correctness. Parallel execution can expose shared-state bugs and multiplies
+    resource usage, so measure it and namespace data. Do not hide pytest failures behind a reporting
+    or pipe command; preserve shell failure behavior. Limit credentials to jobs that need them and
+    avoid exposing them to untrusted pull requests. CI is evidence only when the intended tests ran
+    and the first failure remains available for diagnosis.
+  tags: [CI, reproducibility]

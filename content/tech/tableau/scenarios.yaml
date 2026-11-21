@@ -1,0 +1,133 @@
+- id: tab-scn-001
+  title: Diagnose an inflated sales total after adding returns data
+  technologies: [tableau, sql]
+  difficulty: intermediate
+  prompt: |
+    A regional sales dashboard reconciles to the warehouse until an analyst adds return reason and
+    return date from a second table. Sales then increases by roughly three times for some regions,
+    while other measures look unchanged. The source contains one row per order line and one row per
+    return event; an order line can have multiple return events. How would you investigate and fix
+    the data model without hiding the discrepancy?
+  approach: |
+    Establish the grain and keys in both tables, count return events per order line, and inspect
+    unmatched keys. Determine whether the workbook uses a physical join, relationship, or blend.
+    Reproduce the increase in a small crosstab with and without return fields and compare to source
+    SQL. Decide whether the requested analysis needs return-event detail or only a line-level return
+    indicator/summary. Use a relationship where flexible analysis across different grains is
+    appropriate, or pre-aggregate returns to order-line grain for a row-level join. Validate sales,
+    return counts, and null behavior at regional and product cuts. Document the chosen grain and
+    test totals in the published workbook.
+  red_flags:
+    - Hiding the duplicate-looking values with a table calculation or formatting change.
+    - Assuming relationships guarantee correct totals without checking keys and grain.
+    - Dropping return detail before confirming the business question.
+- id: tab-scn-002
+  title: Make a FIXED customer metric respond to a selected region
+  technologies: [tableau, sql]
+  difficulty: intermediate
+  prompt: |
+    A workbook displays customer lifetime sales alongside a Region filter. The business expects
+    the lifetime figure to include only sales in the selected region, but it remains unchanged when
+    Region changes. The calculation is `{ FIXED [Customer ID] : SUM([Sales]) }`. Explain the result
+    and propose a testable correction.
+  approach: |
+    Explain that FIXED is evaluated before ordinary dimension filters. Confirm whether the desired
+    lifetime metric is all-region or selected-region sales. If it should be scoped to the selected
+    region, promote Region to context or redesign the calculation/source model to encode that rule.
+    Validate using a crosstab with Region, Customer, base Sales, and the FIXED result before and
+    after selection. Compare to SQL filtered by the selected Region and check that the relationship
+    or join does not duplicate sales. Evaluate the effect of context on query behavior and document
+    why it is needed. If filter scope is expected to be the same across sheets, confirm the context
+    filter is applied consistently.
+  red_flags:
+    - Claiming FIXED always responds to every dashboard filter.
+    - Adding context filters without validating the desired calculation semantics.
+    - Treating the filter as a security boundary.
+- id: tab-scn-003
+  title: Show the top products within the user's selected category
+  technologies: [tableau]
+  difficulty: intermediate
+  prompt: |
+    A dashboard has a Category selector and a Top 10 Products view based on SUM(Sales). Selecting
+    some categories leaves only four products, even though more than ten products exist within the
+    selected category. Describe likely filter-order causes and how you would validate the fix,
+    including ties.
+  approach: |
+    Clarify whether ranking is global, per selected category, or per pane. If the requirement is
+    Top 10 within the selected category using a dimension Top N filter, make Category a context
+    filter so the Top N is computed over the selected subset. Test categories with more and fewer
+    than ten products and sales ties. Decide whether ties may yield more than ten or define a
+    stable secondary key if exactly ten are required. Compare the selected products with a SQL
+    control query. Consider a table-calculation rank if the ranking must be per pane, but verify
+    its partitioning and filter stage. Document the ranking measure and behavior in the dashboard.
+  red_flags:
+    - Confusing a table-calculation rank with a dimension Top N filter.
+    - Promising exactly ten results without a tie-breaking rule.
+    - Using context as a generic speed improvement without confirming meaning.
+- id: tab-scn-004
+  title: Choose a refresh approach for a correcting source system
+  technologies: [tableau, sql, redshift]
+  difficulty: advanced
+  prompt: |
+    A Tableau extract refresh currently runs incrementally using an increasing transaction ID.
+    The source team now says that transactions can be corrected or deleted several days later.
+    The dashboard must reflect changes by the next business day. Recommend a refresh design and
+    operational checks without inventing a performance target.
+  approach: |
+    Explain that an append-oriented watermark can miss updates and deletes to older IDs. Clarify
+    how corrections and deletions are represented and what freshness window is required. Options
+    include periodic full refresh, source-side change capture/a curated current-state table, or a
+    bounded reprocessing window if the source semantics make it complete. Validate with test
+    corrections, late arrivals, and deletions against a full source query. Coordinate refresh after
+    ingestion completes, monitor duration and failures, and reconcile counts and totals. State the
+    last successful refresh to consumers and define recovery ownership. Select based on observed
+    volume, capability, and operational constraints; test the proposed path before changing
+    production.
+  red_flags:
+    - Assuming an increasing ID captures all later corrections.
+    - Treating a successful refresh status as proof of completeness.
+    - Selecting a refresh cadence from a made-up universal benchmark.
+- id: tab-scn-005
+  title: Secure regional dashboards with user-specific entitlements
+  technologies: [tableau, snowflake]
+  difficulty: advanced
+  prompt: |
+    Regional managers should see only regions in an entitlement table. Workbooks connect to
+    Snowflake using a shared service account, and some managers can download crosstab data. Design
+    a security review and test plan that addresses identity, data policy, Tableau permissions, and
+    bypass paths.
+  approach: |
+    Determine which identity Snowflake sees; with a shared credential it may see only the service
+    account, so user-specific warehouse policies need a supported identity propagation design or
+    another enforcement point. Evaluate centralized data policies or a governed published data
+    source with user-entitlement logic, subject to deployment capabilities. Use stable region keys,
+    fail closed for unmapped users, and review duplicate or stale entitlements. Restrict publishing,
+    editing, downloads, and alternate source access to least privilege. Test authorized, denied,
+    multi-region, and unmapped users in the published environment, including allowed exports and
+    alternate workbooks. Compare visible row keys to expected entitlements and record evidence.
+  red_flags:
+    - Assuming the warehouse identifies individual viewers behind a shared service credential.
+    - Using a dashboard filter as the only access control.
+    - Ignoring downloads, alternate workbooks, or packaged data.
+- id: tab-scn-006
+  title: Plan a Tableau-to-Power BI migration for critical reports
+  technologies: [tableau, power-bi, sql]
+  difficulty: advanced
+  prompt: |
+    A team is moving a portfolio of Tableau reports to Power BI. The most-used workbooks contain
+    FIXED customer metrics, table-calculation ranks, extract filters, user filters, and dashboard
+    actions. Propose a phased approach that prevents semantic or security regressions.
+  approach: |
+    Inventory workbooks, owners, users, sources, usage, dependencies, calculations, filters, actions,
+    extract scope, refresh, permissions, and data classification. Remove obsolete assets with owner
+    agreement. Define shared metric grain and semantics, then select pilot reports covering each
+    difficult pattern. Translate calculations into the target model's idiom rather than rewriting
+    syntax mechanically; compare results at detail, total, filtered, tied, and null cases against a
+    trusted query. Rebuild RLS and test denied identities and export paths. Pilot with users, monitor
+    refresh and performance in the target environment, then migrate by domain with a defined
+    coexistence and cutover date. Train authors on DAX filter context and Tableau-specific
+    differences where relevant. Keep a rollback path and retire old content only after acceptance.
+  red_flags:
+    - Treating visually similar charts as proof of semantic equivalence.
+    - Copying user filters without testing security and export access.
+    - Running two competing sources of truth indefinitely.

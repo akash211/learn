@@ -1,0 +1,287 @@
+- id: gradio-basic-001
+  topic: interface design
+  difficulty: beginner
+  question: When should you use `gr.Interface` versus `gr.Blocks`?
+  answer: |
+    Use `gr.Interface` when the workflow is fundamentally one Python function with a known list of inputs and outputs. It provides a concise form-like UI and conveniences such as examples and descriptive text. It is a good starting point for a classifier, translator or other single-step demo.
+
+    Use `gr.Blocks` when you need explicit layout, several callbacks, state, tabs, staged processing or more control over event relationships. Blocks lets you construct components and bind listeners such as `.click()` and `.change()`. Both approaches use Gradio components and can expose functions to clients; Blocks is not a different model runtime.
+
+    Prefer the simpler API until the interaction needs the lower-level composition. In either case, keep model logic in ordinary Python functions so it remains testable without launching the UI.
+  tags: [Interface, Blocks, design]
+
+- id: gradio-basic-002
+  topic: event model
+  difficulty: beginner
+  question: What happens when you write `button.click(fn=..., inputs=..., outputs=...)` in Blocks?
+  answer: |
+    The statement registers an event listener while the Blocks app is being constructed. It does not call the Python function immediately. When a browser user clicks the button, Gradio sends the declared input component values to the server, invokes the function, then serializes its result back to the declared output components.
+
+    Inputs are passed in the order declared, and returned values must correspond to the output list. A single output can generally receive one value; multiple outputs require a compatible collection. Component preprocessing and postprocessing mean the Python value can differ from the browser's raw representation.
+
+    This event graph is why a callback should return values rather than directly manipulate page elements. Keep dependencies explicit, test callback signatures independently, and remember that a hidden or disabled button does not authorize a request.
+  tags: [events, callbacks, Blocks]
+
+- id: gradio-basic-003
+  topic: components
+  difficulty: beginner
+  question: What is a Gradio component, and how does it affect a callback?
+  answer: |
+    A component describes a browser-side control or display and the Python-side boundary for its data. `Textbox`, `Image`, `Audio`, `Dropdown`, `Dataframe` and `Label` are examples. In the layout, a component is visible; in an event binding, its value can be an input to a function or a returned output.
+
+    Components may preprocess uploads and postprocess results. For example, image input can be configured to arrive as a PIL image, NumPy array or filepath. Therefore the callback contract depends on component configuration and installed Gradio version, not merely on the component's name. Inspect actual types during development and normalize them at an application boundary.
+
+    Component settings such as labels, choices, slider bounds and visibility improve user experience, but are not server-side validation or access control. Validate important values again in Python before expensive or sensitive operations.
+  tags: [components, data-boundary]
+
+- id: gradio-basic-004
+  topic: function results
+  difficulty: beginner
+  question: How should a callback return values for multiple output components?
+  answer: |
+    Return values in the same order as the `outputs` list registered for the event. If an event has two outputs, such as a generated summary and a status string, the function should return a two-item result whose first value maps to the summary component and second to status. The values also need to be compatible with each output component's expected Python representation.
+
+    A common bug is returning the right values in the wrong order or returning one value when several outputs were declared. Test the function directly, then exercise it through Gradio because serialization and component processing happen at that boundary. Use explicit tuples or lists to make multi-output intent obvious.
+
+    Do not return arbitrary internal exceptions or secret objects as UI output. Handle expected errors with safe messages and log diagnostic details on the server. A callback's return shape is part of the interface contract, so treat changes to it as API changes.
+  tags: [callbacks, outputs, validation]
+
+- id: gradio-basic-005
+  topic: event choices
+  difficulty: intermediate
+  question: What is the difference between `.click()`, `.submit()` and `.change()` listeners?
+  answer: |
+    These methods register events associated with different user actions. `.click()` commonly attaches work to a button or clickable component. `.submit()` is useful for form-like components such as a textbox when Enter submits a value. `.change()` responds to a component value change according to the event semantics of that component and Gradio version.
+
+    Choose the event that matches the user's intent. A costly model call often belongs behind an explicit button or submit action rather than firing after every keystroke. A lightweight dependent dropdown update may be appropriate for a change event. Reactive behavior can feel immediate, but it can also trigger repeated work or feedback loops if outputs update components that trigger listeners again.
+
+    Test the actual browser sequence, not only the Python function. Event names do not define authorization, idempotency or transaction behavior; those remain application responsibilities.
+  tags: [events, UX, callbacks]
+
+- id: gradio-basic-006
+  topic: streaming
+  difficulty: intermediate
+  question: How does a generator callback stream output to a Gradio app?
+  answer: |
+    A generator function uses `yield` to provide successive values rather than returning one final value. Gradio can send those yielded outputs to the browser as the event progresses, making it useful for generated text, partial results or staged work. The yielded values must match what the output component can display.
+
+    Streaming affects perceived latency, not the model's raw computation time. The generator remains suspended between yields with its local variables and referenced resources alive, so it can retain memory, files or connections. Use cleanup logic and consider disconnect or cancellation paths; do not rely on the generator always reaching its final statement.
+
+    Yield at a useful cadence. Too few updates look like a hang, while excessive updates can increase transfer and rendering overhead. Test first-output time, total duration, mid-stream exceptions and behavior when a client disconnects.
+  tags: [generators, streaming, events]
+
+- id: gradio-basic-007
+  topic: state
+  difficulty: beginner
+  question: What is `gr.State` intended for, and what should not be stored in it?
+  answer: |
+    `gr.State` is a non-visible component used to carry a value between events for a browser session. Include it in a callback's inputs to read the current value, then return an updated value in the corresponding outputs. It is useful for lightweight interaction context such as a bounded conversation history or a selected workflow step.
+
+    It is not a durable database, cross-worker shared memory or verified identity. State may be lost when sessions end, processes restart or deployment routing changes. Do not store secrets, open files, generators, database connections, large tensors or unbounded histories there. Keep model weights at a deliberate process or service scope, and persist user work that must survive in an authorized durable store.
+
+    Prefer returning a new state value rather than mutating shared global objects. Also test concurrent events and multiple tabs instead of assuming updates are transactional.
+  tags: [state, sessions, persistence]
+
+- id: gradio-basic-008
+  topic: state scope
+  difficulty: intermediate
+  question: Why is a module-level global list a poor way to store each user's conversation?
+  answer: |
+    A global list belongs to the Python process, not to an individual browser session. Different users can append to or read the same object, producing cross-user leakage and confusing conversation histories. Concurrent callbacks can interleave updates, and multiple worker processes may each have a different copy of the list.
+
+    Use `gr.State` for small per-session UI values when its lifecycle is sufficient. If conversations must survive restarts, be available across workers, support user ownership or be audited, store them in a database or other shared durable service. Resolve the authenticated user server-side and enforce authorization when reading or writing records.
+
+    A global can be appropriate for an immutable model instance or shared configuration with controlled lifecycle; it is not appropriate for mutable user-specific data. Keep each piece of information at the scope matching its lifetime and security requirements.
+  tags: [state, concurrency, security]
+
+- id: gradio-basic-009
+  topic: queueing
+  difficulty: intermediate
+  question: What does calling `demo.queue()` do, and what does it not guarantee?
+  answer: |
+    Enabling the queue lets Gradio coordinate queued event executions and communicate their progress or status to browser clients, depending on the event and configuration. It is useful when callbacks take time or should not all execute at once. Event-level concurrency options in Gradio 4/5 can further control particular listeners; check the installed version and set required behavior explicitly.
+
+    Queueing does not make inference faster, does not automatically create a durable job broker, and should not be assumed to coordinate independent replicas or survive process restarts. It also does not guarantee a global GPU cap if different callbacks or processes call the same model outside a shared limit.
+
+    Tune concurrency according to the constrained resource and observe queue wait separately from execution time. If jobs must survive browser disconnects or deployments, use durable job storage and a worker system.
+  tags: [queue, concurrency, jobs]
+
+- id: gradio-basic-010
+  topic: concurrency
+  difficulty: intermediate
+  question: How would you choose a concurrency limit for a GPU-backed callback?
+  answer: |
+    Measure the actual model and deployment rather than selecting a generic number. Run representative inputs concurrently and observe throughput, per-request latency, GPU memory, utilization, CPU preprocessing and failure rate. One request may fit in VRAM while several concurrent requests exhaust it, and models differ in batching and memory behavior.
+
+    Apply the limit where all work using the same scarce resource passes through it. A per-listener limit does not necessarily coordinate another event that calls the same GPU, nor another process or replica. Consider an inference service or shared scheduler when the UI has multiple workers. Separate cheap validation from expensive inference so unrelated work is not unnecessarily serialized.
+
+    Include headroom, test overload and define what happens when users wait too long. A limit trades throughput and utilization against latency and safety; it is not merely a UI preference.
+  tags: [GPU, concurrency, performance]
+
+- id: gradio-basic-011
+  topic: progress
+  difficulty: beginner
+  question: How is a progress indicator different from streaming partial model output?
+  answer: |
+    Progress reports an estimate or stage of completion—for example, preprocessing, inference and saving. Gradio's progress callback mechanism can update a user while a function is working, if the function can report meaningful progress. It helps explain waiting but does not itself return partial inference results.
+
+    Streaming yields usable output values over time, such as successive text generated by a model. It changes the output protocol and can reduce perceived latency, but it does not automatically tell the user what percentage remains. A callback can use one or both approaches when they are appropriate, but the semantics should be clear.
+
+    Avoid invented percentages for work with unknown duration. For a long workflow, show queued/running/completed/failed states and provide actionable errors. Progress and streaming do not by themselves make a task durable or cancellable.
+  tags: [progress, streaming, UX]
+
+- id: gradio-basic-012
+  topic: files
+  difficulty: beginner
+  question: Why should a Gradio uploaded filepath not be treated as permanent storage?
+  answer: |
+    Gradio may place an upload in a managed temporary location and pass a path to the callback, depending on component configuration. That path supports processing but its lifetime is connected to the app's handling and cleanup. It is not a durable URL or stable artifact identifier that can safely be saved for later use.
+
+    If an output or upload must persist, copy it to an authorized durable store and retain an application-level identifier. Return or serve it through a controlled download path, with ownership checks and appropriate expiry if needed. Avoid exposing a broad filesystem path to make a file visible.
+
+    Use generated filenames in private workspaces; the original upload name is user-controlled. Validate actual file contents and consider size and parser risks. Test file downloads and cleanup through the deployed application, not only a local demo.
+  tags: [files, lifecycle, storage]
+
+- id: gradio-basic-013
+  topic: image component
+  difficulty: beginner
+  question: What controls whether `gr.Image` gives a callback a PIL image, array or filepath?
+  answer: |
+    The image component's configuration, including its `type` option, determines the Python-side representation for input. Common choices include a PIL image, NumPy array or filepath, but exact options and behavior should be checked for the installed Gradio version. Image mode and preprocessing settings can also influence dimensions and channels.
+
+    Make the choice explicit and normalize at an application boundary. For example, convert color mode, orientation, dtype and expected size before passing the image to a model. Do not infer callback types from the browser preview. A path is temporary unless the app deliberately persists the file, and an array may be large enough to create significant memory pressure.
+
+    Test normal and malformed images through the real component. Keep the model function accepting a documented Python representation rather than a Gradio component object.
+  tags: [Image, components, preprocessing]
+
+- id: gradio-basic-014
+  topic: file security
+  difficulty: intermediate
+  question: Why is checking an uploaded file's extension not enough to validate it?
+  answer: |
+    Filenames and MIME types are supplied by the client and can be inaccurate or deliberately misleading. A file called `photo.png` is not guaranteed to contain a valid PNG, and even a valid file can exploit bugs or consume excessive CPU and memory in a parser. Archives can add traversal and decompression risks.
+
+    Validate the content with a maintained parser appropriate to the expected format, enforce application-specific size and dimension limits, and reject unexpected structures before expensive processing. Use private temporary directories and generated names rather than concatenating user names into paths. For high-risk formats, consider isolating conversion in a constrained worker.
+
+    The right limit depends on the use case and infrastructure; there is no universal safe upload threshold. Return a concise validation error, log diagnostics safely, and ensure users cannot access another user's artifacts.
+  tags: [uploads, security, validation]
+
+- id: gradio-basic-015
+  topic: audio and video
+  difficulty: intermediate
+  question: What should you verify before connecting `Audio` or `Video` input to a model?
+  answer: |
+    Verify the component's actual callback representation in your Gradio version and configuration. Audio input may be provided as a sample-rate/array pair or as a filepath depending on settings; video is commonly handled as a file workflow. Do not assume a single Python type or that an extension guarantees a codec.
+
+    Normalize media according to the model contract: sample rate, channels, duration, encoding and audio segmentation for sound; container, codecs, frame rate, resolution and frame sampling for video. Decoding can be expensive, so avoid reading an entire long video into memory when the model needs only selected frames. Consider malformed inputs and parser safety.
+
+    Test the full browser-to-model path with representative files and deployment codecs. For streaming media, confirm browser support, chunk framing and cleanup rather than assuming that a Python generator alone provides live playback.
+  tags: [Audio, Video, media]
+
+- id: gradio-basic-016
+  topic: FastAPI integration
+  difficulty: intermediate
+  question: How do you mount a Gradio Blocks app inside FastAPI, and why not call `launch()`?
+  answer: |
+    In Gradio 4/5, a common pattern is to create a FastAPI app and pass it with a Blocks instance to `gr.mount_gradio_app`, specifying a path such as `/demo`. The combined ASGI app is then served by the chosen ASGI server. Check the installed Gradio version for current helper options and lifecycle details.
+
+    Calling `demo.launch()` starts Gradio's own server, which is not the intended serving path when the app is mounted into the FastAPI application. Mounting allows the service to compose API routes and the interface under one ASGI application, but does not automatically resolve middleware, authentication, proxy or process-lifecycle questions.
+
+    Test the mounted prefix, static assets, redirects, files, generated API routes and auth in the real deployment. Ensure model initialization is compatible with the ASGI worker count.
+  tags: [FastAPI, mounting, ASGI]
+
+- id: gradio-basic-017
+  topic: client library
+  difficulty: beginner
+  question: What does the `gradio_client` package provide?
+  answer: |
+    `gradio_client` provides a Python client for calling a running Gradio app's exposed functions. A `Client` can connect to a local or remote app, and methods such as `predict()` invoke an endpoint using its API name or supported index. The client handles Gradio-specific request and file-transfer details more conveniently than hand-written transport code.
+
+    Inspect the app's generated API documentation to learn endpoint names, input schema and output shape. Prefer stable named endpoints over numeric indices in maintained integrations because adding events can affect positional assumptions. Keep client and server versions compatible and test the real authentication and file paths.
+
+    A client does not eliminate network timeouts, retries or security concerns. If a request times out, server-side work might still have completed. Make side-effecting operations idempotent or give them an application-level request identity.
+  tags: [gradio_client, API, integration]
+
+- id: gradio-basic-018
+  topic: endpoints
+  difficulty: intermediate
+  question: Why should you inspect a Gradio app's generated API page before writing a client?
+  answer: |
+    The generated API documentation describes the callable endpoints exposed by the running app, including names, parameters and examples. A button's visible label is not necessarily the endpoint identifier, and components may preprocess files or structured values before the callback sees them. The response may also be a serialized representation rather than the callback's raw Python object.
+
+    Inspecting the live contract prevents assumptions about endpoint indexes, input order, upload procedures and result shapes. It also helps identify whether a listener should be exposed to external callers at all. Treat the generated API page as documentation for the current deployment, then add an integration test to catch changes.
+
+    For a long-lived public API requiring strong compatibility, a dedicated versioned FastAPI route may be more appropriate. Gradio endpoints are convenient for tools that can evolve with the app, but stability and auth remain application responsibilities.
+  tags: [API, endpoint, contract]
+
+- id: gradio-basic-019
+  topic: authentication
+  difficulty: intermediate
+  question: Why is a launch-time username/password gate not a full authorization system?
+  answer: |
+    A basic gate can restrict access to a small demo, but it generally does not by itself model user roles, tenant membership, ownership of individual records, revocation workflows or audit policy. Authentication answers who may enter; authorization decides what that identity may do and which data it may access.
+
+    Protect every entry point, not only the rendered page: generated API endpoints, file routes and mounted FastAPI paths can expose operations or artifacts. Enforce ownership checks in trusted server-side logic. Store credentials in secret management rather than source code, use TLS at the public boundary and avoid logging tokens or passwords.
+
+    Choose identity integration based on sensitivity and audience. For a real multi-user product, use an identity-aware gateway or application auth design and test direct requests from unauthenticated users. Hiding a control in the browser is not an authorization check.
+  tags: [authentication, authorization, security]
+
+- id: gradio-basic-020
+  topic: share links
+  difficulty: beginner
+  question: What is a Gradio share link appropriate for, and what should it not imply?
+  answer: |
+    A share link is a convenient way to let others reach a running app, often for a review or short demonstration. It removes some friction from sharing a prototype, but should be treated as external exposure of the service. It is not a production hosting plan, uptime guarantee, access policy or substitute for identity and network controls.
+
+    Before exposing an app, check what data it can access, whether callbacks can trigger costly model work, whether uploads are safe, and whether secrets or local files could be revealed. Apply authentication or other restrictions where needed, and avoid using real sensitive data in a public demo.
+
+    For a stable service, deploy on infrastructure with explicit networking, TLS, monitoring, resource policies and an update process. Check the installed version's share behavior and current documentation rather than assuming link lifetime or operational guarantees.
+  tags: [sharing, deployment, security]
+
+- id: gradio-basic-021
+  topic: deployment
+  difficulty: intermediate
+  question: Why can adding ASGI worker processes cause a GPU Gradio app to run out of memory?
+  answer: |
+    Each worker is a separate process with its own Python memory. If application import or startup loads model weights into that worker, increasing worker count can create multiple model copies and separate GPU allocations. A model that fits once may not fit several times, even if the machine has multiple CPU cores.
+
+    Before scaling workers, understand model lifecycle and where inference occurs. Measure VRAM under the exact server, worker count and concurrency settings. Consider a single controlled model process behind a web tier or a dedicated inference service when UI/API process scaling should be independent of model replicas.
+
+    Readiness should reflect whether the model is actually available, and startup time should be measured separately. Do not increase worker count based only on general web-server advice. The right topology depends on CPU, GPU, model size and the serving platform.
+  tags: [deployment, GPU, workers]
+
+- id: gradio-basic-022
+  topic: performance
+  difficulty: intermediate
+  question: Which latency measurements help diagnose a slow Gradio interaction?
+  answer: |
+    Break total latency into queue wait, preprocessing, model execution, postprocessing/serialization and browser rendering or transfer. Also measure time to first useful output for streaming interactions, not only final completion. This separates an overloaded queue from a slow model and from large payload overhead.
+
+    Track percentiles under realistic concurrent load, along with CPU, memory, GPU utilization and VRAM. A single local request can miss contention, cold starts and tail behavior. Test representative media dimensions and outputs because decoding or serializing a large result may dominate inference.
+
+    Instrument without unnecessarily logging sensitive prompts or uploads. If queue wait rises while execution remains stable, capacity or arrival policy is the issue; if execution rises, profile the model and data path. Optimize measured bottlenecks rather than guessing that Gradio itself is slow.
+  tags: [performance, latency, observability]
+
+- id: gradio-basic-023
+  topic: app choice
+  difficulty: beginner
+  question: How would you choose between Gradio and Streamlit for a Python application?
+  answer: |
+    Compare the application's interaction model, not a claim that one framework is universally better. Gradio often fits model-centric input/output workflows, media components, explicit event callbacks and exposing callable functions to clients. Streamlit's rerun-oriented approach is often natural for dashboards, exploration and data-centric pages.
+
+    Both can support applications beyond their most common use, and both require deliberate deployment, identity and performance decisions. Prototype the key interaction and check whether the framework's state and execution model stays understandable as steps multiply. Consider design flexibility, component behavior, API needs and who will maintain it.
+
+    If the product requires a highly customized frontend, strict public API contract or complex multi-tenant authorization, a dedicated frontend with FastAPI may be more appropriate than either. Choose the smallest stack that meets user and operational requirements.
+  tags: [comparison, Streamlit, architecture]
+
+- id: gradio-basic-024
+  topic: boundaries
+  difficulty: intermediate
+  question: What responsibilities does Gradio not replace in a production ML application?
+  answer: |
+    Gradio supplies an interface, event execution path, component processing and convenient ways to expose callbacks. It does not automatically provide a model registry, durable job broker, database, user/tenant authorization, secret management, GPU scheduler, audit system or reliable artifact store. Those responsibilities must be designed into the application or delegated to suitable infrastructure.
+
+    A callback queue can help coordinate interactive work but should not be assumed durable or shared across replicas. `gr.State` can hold lightweight session context but should not be treated as persistent records. Basic auth does not define resource-level permissions. These distinctions matter once real data, many users or operational guarantees are involved.
+
+    Gradio can remain valuable as an internal console or demo while inference and identity move into services designed for their scale. Keep domain logic separate so the UI framework does not become the only path to critical business behavior.
+  tags: [limits, architecture, production]

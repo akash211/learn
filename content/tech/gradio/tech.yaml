@@ -1,0 +1,98 @@
+slug: gradio
+title: Gradio
+category: python-ecosystem
+summary: Build shareable Python interfaces for machine-learning models and workflows, from quick demos to mounted application surfaces.
+level: core
+relations:
+  - to: python
+    type: foundation
+    note: Gradio callbacks, generators, file handling and deployment are Python code, so Python's object, concurrency and packaging behavior still applies.
+  - to: streamlit
+    type: alternative
+    note: Both help Python teams ship interactive data and model applications; Gradio emphasizes model-oriented components, event callbacks and API exposure, while Streamlit favors rerun-driven data apps.
+  - to: fastapi
+    type: complements
+    note: Gradio can mount a Blocks app in a FastAPI application, while FastAPI provides the surrounding API, middleware, routing and service composition.
+intro:
+  what: |
+    Gradio is a Python library for building browser-based interfaces around Python functions, machine-learning models and workflows. A minimal `gr.Interface` connects a function to declared input and output components; `gr.Blocks` provides a more explicit layout and event graph for multi-step interfaces, tabs, state, and custom interactions. The same app can run locally, be shared temporarily, or be deployed as part of a larger service.
+
+    Gradio is not a model runtime or a general-purpose frontend framework. It handles the interface, request transport, component serialization and event execution. Your code still owns model loading, validation, authorization policy, resource sizing and durable storage.
+  why: |
+    A working model often exists before a product UI does. Gradio shortens the path from a Python function to a usable, inspectable interface: users can supply text, images, audio or files without a custom JavaScript client. That makes it useful for experimentation, evaluation, human review and internal workflows. It also provides HTTP-facing API behavior, so a prototype can be called by another Python program while a fuller product is being built.
+  problems:
+    - Turn a Python function or model pipeline into a usable browser interface without building a frontend from scratch.
+    - Let users submit and inspect text, files, images, audio, video, tables and structured values.
+    - Compose multiple steps and conditional interactions with explicit event dependencies.
+    - Stream partial outputs or progress from long-running inference jobs.
+    - Expose interface functions to other programs through generated endpoints and the Gradio Python client.
+  where_used:
+    - Public model demos and research artifacts where reproducibility and direct interaction matter.
+    - Internal evaluation, labeling, review and operations tools used by small or known groups.
+    - Proofs of concept for chat, image, speech and multimodal systems.
+    - Lightweight workflows around Python models, data science libraries and APIs.
+    - A user-facing interface mounted alongside an existing FastAPI service.
+  ecosystem: |
+    Gradio sits at the Python application layer. It works with model libraries such as PyTorch and Transformers, data and media libraries, and service frameworks such as FastAPI. It can complement a production API by offering an operator or demo surface, but it does not replace model serving infrastructure, an identity system, a database, or a frontend team when those are requirements. Streamlit is a close alternative for data-centric applications; choose based on interaction model and deployment needs rather than assuming either is universally superior.
+  alternatives:
+    - name: Streamlit
+      note: A rerun-oriented Python app framework often preferred for dashboards and exploratory data applications.
+    - name: FastAPI with a custom frontend
+      note: Better when the product needs fully custom UX, access policy, API contracts, and independent scaling of UI and inference.
+related: [python, streamlit, fastapi]
+chapters:
+  - id: interface-and-blocks
+    title: Interface and Blocks
+    file: chapters/01-interface-and-blocks.md
+    minutes: 10
+    level: core
+  - id: components
+    title: Inputs, Outputs and Component Types
+    file: chapters/02-inputs-outputs-components.md
+    minutes: 11
+    level: core
+  - id: events-streaming
+    title: Events, Streaming and Generators
+    file: chapters/03-events-streaming-generators.md
+    minutes: 12
+    level: core
+  - id: state-session
+    title: State and Session Handling
+    file: chapters/04-state-and-sessions.md
+    minutes: 10
+    level: core
+  - id: queues-concurrency
+    title: Queues, Concurrency and Long-Running Jobs
+    file: chapters/05-queues-concurrency-jobs.md
+    minutes: 12
+    level: advanced
+  - id: media-files
+    title: Files, Images, Audio and Video
+    file: chapters/06-files-images-audio-video.md
+    minutes: 12
+    level: core
+  - id: fastapi-client
+    title: FastAPI Mounting and API Clients
+    file: chapters/07-fastapi-mounting-and-api-clients.md
+    minutes: 11
+    level: advanced
+  - id: auth-deployment
+    title: Authentication, Sharing and Deployment
+    file: chapters/08-auth-sharing-deployment.md
+    minutes: 12
+    level: core
+  - id: performance-serving
+    title: Performance, GPU and Model Serving
+    file: chapters/09-performance-gpu-serving.md
+    minutes: 12
+    level: advanced
+  - id: fit-and-limits
+    title: When Gradio Is Right—and Its Limits
+    file: chapters/10-when-gradio-fits-and-limits.md
+    minutes: 10
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

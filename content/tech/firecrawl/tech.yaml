@@ -1,0 +1,92 @@
+slug: firecrawl
+title: Firecrawl
+category: web-automation
+summary: A hosted web data API that renders pages, extracts clean content and discovers URLs for search, crawling and AI ingestion.
+level: core
+relations:
+  - to: playwright
+    type: alternative
+    note: Firecrawl packages rendering and extraction as a managed service; Playwright gives direct browser control when workflows need custom interaction.
+  - to: rest-apis
+    type: uses
+    note: Firecrawl's endpoints, asynchronous jobs, pagination and error handling are ordinary API integration concerns.
+  - to: rag
+    type: complements
+    note: Firecrawl supplies source documents and metadata; a RAG pipeline still owns normalization, chunking, indexing, retrieval and freshness.
+intro:
+  what: |
+    Firecrawl is a web extraction service and API. Give it a URL, query, or site boundary and it can return page content as Markdown, HTML, links, metadata, or schema-shaped JSON. Its managed pipeline handles much of the unglamorous work around fetching: JavaScript rendering when needed, page cleanup, URL discovery, pagination of job results, and common site variability. The result is designed to be easier to feed into a search index or language-model workflow than raw browser HTML.
+
+    The central operations are distinct: scrape one known URL, crawl a set of reachable pages, map a site to discover URLs, and search the public web for candidates and their content. Those are different collection strategies, not interchangeable names for scraping. Firecrawl also supports structured extraction and page interaction options, but it does not remove the need to define scope, validate outputs, respect site rules, or engineer a reliable downstream pipeline.
+  why: |
+    Direct scraping quickly turns into a collection of edge cases: client-rendered text is absent from the initial response, navigation and pagination vary by site, boilerplate swamps useful content, and every source has a different HTML shape. Firecrawl trades some control for a managed abstraction that can shorten the time from URL to usable content. It is especially useful when many sites must be processed consistently or when an AI system needs readable page text rather than DOM plumbing.
+
+    The service is not a universal browser or a guarantee of access. A failed render, access restriction, unusual interaction, or legal constraint can still require a human decision or a custom browser workflow. Treat extraction as fallible input, inspect source status and metadata, and budget requests according to the plan and features in use; credits and limits depend on plan.
+  problems:
+    - Render many JavaScript-driven pages without building a browser fleet for routine collection.
+    - Convert noisy web documents into Markdown, HTML, metadata, links, or schema-guided records.
+    - Discover and collect multiple pages under a site scope using crawl jobs and URL filters.
+    - Search for relevant pages and return their content through one integration surface.
+    - Provide a repeatable input layer for RAG, research assistants, catalogs, and data pipelines.
+  where_used:
+    - Indexing documentation, help centres, policy pages, and product catalogs.
+    - Research and monitoring systems that need cited source URLs and page metadata.
+    - Ingestion jobs that normalize web content before chunking and vector indexing.
+    - Structured collection of fields from a known set of public web pages.
+    - Prototypes that need web access before a team invests in custom scraping infrastructure.
+  ecosystem: |
+    Firecrawl sits between the public web and an application that consumes web data. It can replace a portion of custom fetch-render-parse code, but it does not replace orchestration, durable storage, quality checks, or retrieval design. Playwright is a useful alternative when a team needs exact browser behavior, custom authentication, or direct control of clicks and state. Lightweight HTTP plus a parser such as trafilatura is often cheaper and simpler for stable server-rendered pages. Crawl4AI is an open-source option for teams willing to operate and tune their own extraction stack. For API design, job polling and retries, the same principles as REST APIs apply; for knowledge search, Firecrawl complements rather than replaces a RAG system.
+  alternatives:
+    - name: Playwright
+      note: A general browser automation library with finer control over browser state and custom workflows, but the team owns deployment and extraction.
+    - name: HTTP client plus trafilatura
+      note: Efficient for pages whose content is present in fetched HTML; it does not render JavaScript by itself.
+    - name: Crawl4AI
+      note: An open-source crawler/extractor that can be self-operated, trading managed service convenience for operational ownership.
+  related: [playwright, rest-apis, rag]
+chapters:
+  - id: role-and-architecture
+    title: What Firecrawl Solves and Where It Fits
+    file: chapters/01-role-and-architecture.md
+    minutes: 12
+    level: core
+  - id: scrape-endpoint
+    title: Scrape Endpoint, Formats and Actions
+    file: chapters/02-scrape-endpoint.md
+    minutes: 12
+    level: core
+  - id: crawl-map-search
+    title: Crawl, Map and Search
+    file: chapters/03-crawl-map-search.md
+    minutes: 12
+    level: core
+  - id: structured-extraction
+    title: Schema-Guided and LLM Extraction
+    file: chapters/04-structured-extraction.md
+    minutes: 12
+    level: core
+  - id: dynamic-documents-pagination
+    title: Dynamic Pages, PDFs and Pagination
+    file: chapters/05-dynamic-documents-pagination.md
+    minutes: 12
+    level: core
+  - id: cost-limits-batching
+    title: Cost, Limits and Batching Strategy
+    file: chapters/06-cost-limits-batching.md
+    minutes: 11
+    level: core
+  - id: downstream-pipeline
+    title: RAG and Data Pipeline Integration
+    file: chapters/07-downstream-pipeline.md
+    minutes: 13
+    level: advanced
+  - id: self-hosting-alternatives
+    title: Self-Hosting and Alternatives
+    file: chapters/08-self-hosting-alternatives.md
+    minutes: 12
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

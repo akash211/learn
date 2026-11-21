@@ -1,0 +1,90 @@
+concepts:
+  - title: Discovery
+    detail: "Pytest collects test modules and functions by naming conventions; keep imports safe because collection imports modules."
+  - title: Fixture injection
+    detail: "Tests request fixtures by parameter name; pytest resolves dependencies and manages lifetime and teardown."
+  - title: Fixture scope
+    detail: "Function scope maximizes isolation; broader scopes reuse state and need an explicit reset boundary."
+  - title: Yield teardown
+    detail: "Code after fixture `yield` runs at teardown; register cleanup immediately after resource acquisition."
+  - title: conftest visibility
+    detail: "A conftest fixture is visible to tests beneath its directory; nested conftest files narrow the fixture namespace."
+  - title: Parametrization
+    detail: "Each parameter set is a separate test item; use cases for behavior partitions and boundaries, not arbitrary products."
+  - title: Stable IDs
+    detail: "Semantic IDs improve failure reports and `-k` selection; do not put secrets or unstable values in node IDs."
+  - title: Assertion rewriting
+    detail: "Plain `assert` gives useful intermediate-value diagnostics for collected test modules."
+  - title: Exception assertions
+    detail: "Use `pytest.raises(ExpectedType)` around only the operation expected to fail; `match` is a regular expression."
+  - title: xfail strictness
+    detail: "`xfail(strict=True)` turns an unexpected pass into a failure, prompting removal of stale expected failures."
+  - title: Monkeypatch cleanup
+    detail: "`monkeypatch` restores attributes, environment, mappings, or directory changes after the test."
+  - title: Patch lookup site
+    detail: "Patch the name used by the system under test, not necessarily the module where the function was first defined."
+  - title: Async ownership
+    detail: "Choose pytest-asyncio or AnyIO ownership deliberately; loop-bound resources must be closed on a compatible loop."
+  - title: Marker selection
+    detail: "`-m` selects markers; `-k` matches names and node IDs. Inspect selection with `--collect-only`."
+  - title: Coverage limits
+    detail: "Coverage measures execution, not assertion strength or correctness; use it to find gaps, not prove quality."
+  - title: Hypothesis shrinking
+    detail: "Hypothesis generates strategy values and shrinks failures to counterexamples; properties must be independent of implementation."
+
+traps:
+  - "Calling a fixture function directly instead of requesting it so pytest manages setup and teardown."
+  - "Broadening fixture scope without resetting mutable state, creating order-dependent tests."
+  - "Wrapping setup and an operation in one `pytest.raises` block, allowing the wrong error to satisfy the test."
+  - "Patching the definition rather than the lookup site, leaving the code under test unchanged."
+  - "Claiming HTTP integration coverage when a mock returns the final domain object and skips request parsing."
+  - "Treating line coverage or a mutation score as a correctness guarantee."
+
+advanced:
+  - "A session-scoped Testcontainers service may be initialized per xdist worker; isolate data independently of container lifetime."
+  - "Rollback does not undo writes committed on a different connection, and sequence advancement may survive rollback."
+  - "`responses` intercepts requests; HTTPX requires an HTTPX-compatible transport or tool such as `respx`."
+  - "Async fixtures and loop scopes are plugin-version-sensitive; pin plugins and follow their matching lifecycle rules."
+  - "A surviving mutation may be equivalent or unselected; inspect the mutant before adding tests to chase a score."
+  - "Retry policies must preserve first-failure evidence and counts or they turn flakes into invisible defects."
+
+comparisons:
+  - a: "function-scoped fixture"
+    b: "session-scoped fixture"
+    difference: "Fresh value per test and straightforward isolation vs reuse across the pytest process with shared-state and teardown risks."
+  - a: "-m"
+    b: "-k"
+    difference: "Selects by registered marker expressions vs substring/boolean matches in test names and node IDs."
+  - a: "skip"
+    b: "xfail"
+    difference: "Test is inapplicable or cannot run vs behavior is expected to fail under a known condition."
+  - a: "monkeypatch"
+    b: "unittest.mock.patch"
+    difference: "Pytest-managed temporary changes with fixture cleanup vs standard-library patch context/decorator with explicit target."
+  - a: "fake"
+    b: "mock"
+    difference: "Small implementation with meaningful behavior vs configurable call/return recorder; both need a bounded claim."
+  - a: "coverage"
+    b: "mutation testing"
+    difference: "Measures executed code paths vs tests whether selected code changes cause assertions to fail."
+  - a: "responses"
+    b: "httpx.MockTransport"
+    difference: "Intercepts the requests library vs supplies a mock transport for HTTPX clients."
+
+commands:
+  - label: Run the suite with a useful summary
+    code: pytest -q -ra
+  - label: Inspect collected tests and IDs
+    code: pytest --collect-only -q
+  - label: Run one exact test
+    code: pytest tests/test_api.py::test_create_user
+  - label: Select by registered marker
+    code: pytest -m 'not slow and not integration'
+  - label: Select by test name
+    code: pytest -k 'payment and not timeout'
+  - label: Show fixture setup order
+    code: pytest --setup-show
+  - label: Measure branch coverage
+    code: pytest --cov=myapp --cov-branch --cov-report=term-missing
+  - label: Save a JUnit report
+    code: pytest --junitxml=artifacts/junit.xml

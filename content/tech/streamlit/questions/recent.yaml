@@ -1,0 +1,251 @@
+- id: st-recent-001
+  topic: caching API
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How do you decide between `st.cache_data` and `st.cache_resource` in a current Streamlit app?
+  answer: |
+    Use `st.cache_data` for computed values such as query results, parsed files, or transformed
+    dataframes. Streamlit identifies calls from function code and hashed arguments, stores the
+    result, and returns copies to callers. The copy semantics are useful when callers might mutate
+    the result independently. Add explicit parameters for every meaningful dependency and choose
+    a TTL and entry bound that match freshness and memory constraints.
+
+    Use `st.cache_resource` for identity-sensitive, expensive objects such as an engine/pool, API
+    client, or loaded model. It returns the same object, potentially shared across sessions, so
+    check its thread-safety and avoid storing per-user mutable state in it. Neither decorator is an
+    authorization mechanism. If the function's output depends on a tenant or user, include a
+    trusted identity boundary in the design or do not share the result. The older catch-all `st.cache`
+    is not the current pattern.
+  tags: [cache-data, cache-resource, api]
+
+- id: st-recent-002
+  topic: fragments
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How can `st.fragment` improve a dashboard, and what new risks does it introduce?
+  answer: |
+    A function decorated with `st.fragment` can rerun independently when its contained widgets
+    change, leaving the rest of the app in place. This can reduce unnecessary recomputation when
+    a dashboard has independent sections—for example, a periodically refreshed service-health
+    panel beside a static report. `run_every` can trigger periodic reruns while a session is
+    active, but it should be used only when the freshness requirement justifies repeated work.
+
+    Fragments do not move work into a durable background process. They still consume app resources,
+    and separate regions can share mutable state. With `parallel=True`, fragments may run
+    concurrently with other work, so shared clients and objects need thread-safety or explicit
+    synchronization. Parallel fragments also have restrictions on writing to outside containers.
+    Keep the fragment independent, bounded, and mostly read-only, then test its rerun and failure
+    behavior alongside full-app reruns.
+  tags: [st.fragment, execution]
+
+- id: st-recent-003
+  topic: navigation API
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What is the execution contract of `st.navigation` in a multipage app?
+  answer: |
+    The entrypoint creates `st.Page` definitions and passes them to `st.navigation`. That call
+    returns the Page object currently selected by the user; the entrypoint must call `.run()` on
+    that object to execute the page, and should do so once per app rerun. Since the entrypoint
+    itself reruns, it can provide common layout and shared controls before calling the page.
+
+    The `pages/` directory is a simpler conventional mechanism, but once an app session uses
+    `st.navigation`, Streamlit ignores that directory for the app. Avoid combining both routing
+    systems. Give pages unique URL paths, including across grouped or hidden pages. `st.Page`
+    visibility and navigation menus shape the UI, not access control. Any protected data or action
+    must still check the authenticated principal at the service or data layer, including when the
+    page is opened directly by URL.
+  tags: [st.navigation, multipage]
+
+- id: st-recent-004
+  topic: cache correctness
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: A cached dataframe is stale after a database update. How do you diagnose and fix it?
+  answer: |
+    First inspect the cached function's true dependencies. If it reads a global connection, a file,
+    or a database table but accepts only static parameters, the changing external data may not be
+    reflected in its key. Make the dependency explicit where possible—for example, pass a query
+    version, snapshot ID, or other stable marker—and ensure tenant or identity inputs cannot be
+    omitted. Verify that a rerun actually invokes the cached function with the expected values.
+
+    Decide the desired consistency. If a successful write must be immediately visible, clear the
+    narrow cached function after the write commits; if short staleness is acceptable, choose a
+    deliberate TTL and label data age. Do not clear every cache on every rerun, which discards
+    useful work and can trigger a burst of recomputation. Also confirm that an upstream replica or
+    transaction is not itself returning old data. Cache invalidation cannot repair stale source
+    reads or replace database consistency design.
+  tags: [invalidation, caching]
+
+- id: st-recent-005
+  topic: cache security
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How can a Streamlit cache accidentally leak tenant-specific results?
+  answer: |
+    Streamlit's data cache may be reused across sessions. If a cached query returns rows for a
+    tenant but its key contains only a date range, identical calls from two tenants can reuse the
+    same result. A hidden widget, Session State value, or assumption that each user has a private
+    process does not create a security boundary. The bug is both missing authorization and a
+    cache-key mismatch.
+
+    Obtain tenant identity from a trusted authentication context, enforce access in the query or
+    service layer, and include the relevant tenant/version in the cached function's explicit
+    inputs if sharing is still appropriate. Keep user credentials out of cache keys and logs.
+    Consider session-scoped caching or no caching for private results, but do not use scope as a
+    substitute for access checks. Test by invoking equivalent requests under two principals and
+    verifying that neither cache hits nor UI state return another tenant's data.
+  tags: [security, multitenancy, cache]
+
+- id: st-recent-006
+  topic: forms and callbacks
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How do forms and widget callbacks interact with the rerun model?
+  answer: |
+    Widgets outside a form generally trigger a rerun when their value changes. A callback such as
+    `on_change` runs before the main script body, so it can update Session State that the next run
+    immediately reads. Inside a form, widget edits are buffered in the browser and submitted
+    together with `st.form_submit_button`; the app processes the group after submission rather
+    than reacting to each field as a separate immediate event.
+
+    Keep callbacks small, and for changing values read the current keyed value from Session State
+    rather than capturing a stale local variable. Use forms to avoid repeated expensive queries
+    while a user configures several parameters. A form is not a transaction: validate submitted
+    values and use database transactions for atomic writes. If a callback updates a widget key,
+    do it before the widget is created in the following run, not after instantiating that widget
+    in the current run.
+  tags: [forms, callbacks]
+
+- id: st-recent-007
+  topic: session state
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How do you preserve a filter when its widget is removed by conditional rendering?
+  answer: |
+    Widget-associated state is tied to the widget's lifecycle. If the widget is not rendered during
+    a run—for example, because the user switched page or a condition hid a section—its value may
+    be cleaned up. If that selection must survive, copy it into an application-owned Session
+    State key before the widget disappears, then initialize or synchronize the widget from that
+    key when it returns.
+
+    Keep the two concepts separate: one key is controlled by the widget, while the other represents
+    your app's chosen filter or workflow value. Use a callback or explicit transition before
+    rendering the next branch, and avoid mutating the widget's key after the widget is instantiated
+    in the same run. For persistence across sessions or devices, store the filter in a database or
+    user preference store; Session State only preserves it within the active session context.
+  tags: [session-state, widgets]
+
+- id: st-recent-008
+  topic: performance
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: Why might a Streamlit dashboard remain slow after adding a cache?
+  answer: |
+    A cache only removes work when its key matches and the cached result remains within its
+    freshness and capacity policy. A dashboard may still be slow because each control creates a
+    distinct high-cardinality key, the cached dataframe is large to serialize/copy, transformations
+    happen after the cache, or the browser must render a large table/chart payload. The cache can
+    even increase memory pressure if it retains many large entries.
+
+    Measure query time, Python transformation time, serialization and payload size, browser
+    rendering, and cache hits separately. Push filters, aggregation, and pagination to the source;
+    select only needed columns; batch expensive controls in a form; and aggregate chart points.
+    Bound cache entries, but remember an entry count is not a byte budget. Avoid putting large
+    per-user copies in Session State. Optimize the actual bottleneck and validate with realistic
+    concurrent sessions, not just a single small development dataset.
+  tags: [performance, cache]
+
+- id: st-recent-009
+  topic: upload security
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What validation is still required when `st.file_uploader` has a `type` restriction?
+  answer: |
+    The uploader's type filter is a best-effort user-interface hint, not a security guarantee.
+    Validate the bytes and structure with the parser you intend to use: expected encoding, schema,
+    columns, row counts, content types, and size. Treat the provided filename and extension as
+    untrusted, generate safe server-side filenames if storing uploads, and avoid path construction
+    from user-controlled names. Apply limits to decompressed size and processing time where the
+    format can expand dramatically.
+
+    Consider malware scanning and retention based on your threat model and hosting environment.
+    Keep sensitive file contents out of logs and error messages. Verify that proxy, host, and
+    Streamlit upload limits agree; the widget parameter cannot override a lower upstream limit.
+    If exporting user-controlled values to spreadsheets, guard against formula interpretation.
+    File acceptance is only the beginning of input validation, not the point where a file becomes
+    trusted.
+  tags: [uploads, security]
+
+- id: st-recent-010
+  topic: background jobs
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How should an app handle a task that can outlast a user's Streamlit session?
+  answer: |
+    Do not rely on the script execution or a spinner to keep the work alive. Submit a durable job
+    to a queue or worker, persist its identifier and status externally, and let Streamlit display
+    progress by querying that status. The worker should have bounded retries, timeouts, and
+    idempotent steps so a retry does not duplicate external effects. Store output in durable
+    storage and authorize each download or status lookup.
+
+    Session State can remember a job ID for convenience, but the database or queue is authoritative
+    so the user can reconnect or open the app again. A fragment with `run_every` can poll modestly
+    while the session is active, but it is not a scheduler and should back off or stop when the
+    status is terminal. Distinguish queued, running, succeeded, and failed states, and show a useful
+    retry path without exposing internal stack traces or sensitive job data.
+  tags: [jobs, architecture]
+
+- id: st-recent-011
+  topic: proxy deployment
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What issues commonly appear when deploying Streamlit behind a path-prefixed reverse proxy?
+  answer: |
+    Streamlit needs correctly routed HTTP requests and WebSocket upgrades. When mounted beneath a
+    path prefix, the app and proxy must agree on the public base path and forwarded host/protocol
+    information. Proxy timeouts must accommodate the intended persistent connection, and the
+    backend should not be directly reachable if the design depends on trusted proxy headers.
+    Incorrect settings can make pages load but break navigation, reconnects, uploads, or WebSocket
+    messages.
+
+    Test the deployed route end-to-end instead of treating localhost as representative. Verify
+    TLS termination, login, direct page URLs, uploads/downloads, and behavior through idle time and
+    redeploys. Ensure untrusted clients cannot spoof headers used for identity or scheme decisions.
+    Reverse-proxy configuration does not automatically provide authorization. Exact config keys
+    depend on Streamlit version and topology, so use the documentation for the installed version
+    rather than copying a universal snippet.
+  tags: [deployment, reverse-proxy]
+
+- id: st-recent-012
+  topic: architecture choice
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How would you decide whether a growing internal Streamlit prototype should remain Streamlit?
+  answer: |
+    Reassess the product's dominant requirements rather than assuming that a successful prototype
+    must become a custom frontend. Streamlit remains appropriate when Python data logic dominates,
+    rerun semantics suit the interactions, the audience is bounded, and deployment/security needs
+    fit the chosen platform. It can continue to be a valuable internal UI even if data processing
+    and authorization are moved behind a service.
+
+    Consider alternatives when custom responsive interaction, extensive client-side state,
+    collaborative editing, a public API, strict latency guarantees, or complex identity and
+    permission workflows become central. Dash may offer a better dashboard callback model; FastAPI
+    plus a frontend may fit a public product; a BI tool may support governed self-service. Evaluate
+    operational ownership, concurrency, data volume, UX, and security. A hybrid split is often
+    reasonable: keep Streamlit for internal exploration while extracting durable jobs and stable
+    contracts to backend services.
+  tags: [architecture, alternatives]

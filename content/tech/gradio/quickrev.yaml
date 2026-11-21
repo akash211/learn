@@ -1,0 +1,92 @@
+concepts:
+  - title: Interface vs Blocks
+    detail: "`Interface` is a concise function-to-components wrapper; `Blocks` composes layouts and explicit event listeners for multi-step interactions."
+  - title: Event graph
+    detail: "A listener such as `.click()` is registered at app construction; the callback runs later with declared inputs and outputs."
+  - title: Component boundary
+    detail: "Components preprocess browser values and postprocess Python results. Configure and test the actual data representation rather than inferring it from a component name."
+  - title: Callback contract
+    detail: "Input order and output order matter. Keep callback functions ordinary and independently testable."
+  - title: Generator output
+    detail: "A generator yields incremental output but keeps its frame and resources alive between yields; cleanup and disconnect behavior matter."
+  - title: Progress vs streaming
+    detail: "Progress communicates stages or estimated completion; streaming yields usable output. Neither makes work durable or inherently cancellable."
+  - title: Session state
+    detail: "`gr.State` carries lightweight session values across events; it is not a database, identity system or shared durable cache."
+  - title: Queueing
+    detail: "A Gradio queue coordinates interactive event execution; do not assume it survives restart or coordinates independent replicas."
+  - title: Concurrency boundary
+    detail: "Limits must cover all callbacks sharing the same scarce GPU, service or other resource, not merely one visible button."
+  - title: File lifecycle
+    detail: "Uploaded paths may be temporary. Persist important artifacts explicitly and authorize retrieval."
+  - title: Media normalization
+    detail: "Normalize image mode/size and audio/video format at a tested boundary before inference."
+  - title: API discovery
+    detail: "Use the app's generated API documentation and named endpoints; avoid coupling clients to positional event indexes."
+  - title: FastAPI mount
+    detail: "`gr.mount_gradio_app` composes a Blocks app with FastAPI; verify prefix, assets, middleware, auth and ASGI lifecycle."
+  - title: Share exposure
+    detail: "A share link exposes a running app; it is not a secure production host or an authorization policy."
+  - title: Model lifecycle
+    detail: "Worker processes may each load a model. Set worker and concurrency counts based on measured memory and serving topology."
+  - title: Framework boundary
+    detail: "Gradio provides UI and event plumbing; durable jobs, identity, storage and GPU scheduling may require separate services."
+
+traps:
+  - "Treating disabled or hidden UI controls as server-side validation or authorization."
+  - "Assuming `gr.State` is durable, globally shared or tied to a verified user identity."
+  - "Believing `demo.queue()` provides a durable broker or cross-replica coordination."
+  - "Assuming an image/audio component always produces one fixed Python type without checking its configuration."
+  - "Trusting uploaded filename, extension or MIME type and joining the name directly into a filesystem path."
+  - "Assuming `share=True` provides stable hosting, uptime or privacy."
+
+advanced:
+  - "A per-event concurrency cap may not control another event or process using the same GPU; centralize inference or coordinate resource access."
+  - "Browser disconnect or cancellation does not forcibly stop arbitrary Python/native inference or roll back side effects."
+  - "A durable long-running workflow needs a persistent job record, worker/broker, idempotent submission and durable result storage."
+  - "Mounting under a reverse-proxy prefix must be tested for static assets, redirects, files and generated API paths."
+  - "Model weights loaded during import can be duplicated once per ASGI worker; scale UI and inference independently when needed."
+  - "Batch callbacks change input/output shape and trade wait time and memory for accelerator utilization; benchmark with real distributions."
+  - "Generated Gradio API endpoints are an API surface; validate/authenticate them even if callers normally use the UI."
+  - "Streaming improves time to first output but may add transfer/render overhead and retain resources across yields."
+
+comparisons:
+  - a: Interface
+    b: Blocks
+    difference: "Concise single-function form vs explicit layout and event graph for multi-step or customized interactions."
+  - a: Gradio
+    b: Streamlit
+    difference: "Gradio often emphasizes model components and event callbacks; Streamlit's rerun model is often natural for dashboards and exploration. Choose by workflow."
+  - a: gr.State
+    b: database
+    difference: "Transient session UI context vs durable, shared, identity-aware records with explicit retention and authorization."
+  - a: progress
+    b: streaming
+    difference: "Progress signals stage/completion estimate; streaming yields partial result values. They solve different UX problems."
+  - a: Gradio queue
+    b: durable task broker
+    difference: "Interactive event coordination vs persistent, cross-process job lifecycle, retries and recovery."
+  - a: in-process inference
+    b: model service
+    difference: "Simple compact deployment vs independent scaling, scheduling and lifecycle at the cost of network and operational complexity."
+  - a: generated endpoint
+    b: versioned FastAPI route
+    difference: "Convenient callback exposure vs an explicitly designed stable public contract with controlled schema and deprecation."
+
+commands:
+  - label: Start local development app
+    code: python app.py
+  - label: Install Gradio in the active environment
+    code: python -m pip install gradio
+  - label: Check installed Gradio version
+    code: python -c "import gradio as gr; print(gr.__version__)"
+  - label: Inspect Gradio client availability
+    code: python -m pip show gradio_client
+  - label: Run app with an ASGI server after exporting `app`
+    code: uvicorn app:api --host 0.0.0.0 --port 8000
+  - label: Run project tests
+    code: pytest -q
+  - label: Inspect GPU status on a CUDA host
+    code: nvidia-smi
+  - label: Locate relevant options in the installed API
+    code: python -c "import gradio as gr; help(gr.Blocks.queue)"

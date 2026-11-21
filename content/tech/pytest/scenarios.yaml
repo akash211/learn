@@ -1,0 +1,174 @@
+- id: pytest-scn-001
+  title: Order-dependent tests after fixture scope optimization
+  technologies: [pytest, python, postgresql]
+  difficulty: advanced
+  prompt: |
+    A team changed a database fixture from function scope to session scope because CI setup was
+    slow. The suite now fails intermittently depending on which module runs first. One test inserts
+    a customer and another expects that customer table to be empty; cleanup is performed only in
+    the first test's assertion path. CI uses pytest-xdist on some branches. How would you diagnose
+    and redesign the suite without discarding the startup-time improvement?
+  approach: |
+    Separate expensive infrastructure lifetime from mutable test data lifetime. Reproduce and
+    capture the failing node order, then inspect fixture execution with `pytest --setup-show`.
+    Check transaction and connection ownership, teardown on assertion failure, and the impact of
+    per-worker fixtures under xdist.
+
+    1. Keep a session-scoped engine or container if startup cost justifies it, but provide a
+       function-scoped transaction, schema, or uniquely named test data boundary.
+    2. Roll back only if application work uses the same transactional connection; otherwise use
+       explicit cleanup or isolated schemas and confirm with a fresh connection.
+    3. Ensure cleanup runs in `finally`/yield teardown and does not depend on assertions passing.
+    4. Namespace resources by worker or test if parallel workers share a service.
+    5. Add a regression test that verifies state is absent after cleanup, then measure CI setup
+       time again.
+  red_flags:
+    - Pinning a test order as the permanent solution.
+    - Assuming a session-scoped container makes rows safe to share.
+    - Assuming rollback undoes commits from another connection.
+    - Disabling xdist without checking worker-specific state.
+    - Moving all fixtures back to function scope without measuring which setup is expensive.
+
+- id: pytest-scn-002
+  title: Green HTTP tests but broken production integration
+  technologies: [pytest, python]
+  difficulty: intermediate
+  prompt: |
+    A service's request client has high test coverage. Every test replaces `requests.get` with a
+    mock that returns a prebuilt domain object, and CI is green. A release reveals malformed URL
+    encoding and incorrect parsing when the provider returns a 429 response. The team says the
+    tests cover the API client. What should change, and how should the test claims be divided?
+  approach: |
+    Identify that the current mock bypasses URL construction, serialization, HTTP response
+    parsing, and status handling. Preserve unit tests for domain logic, but test the client through
+    the real requests interface with `responses` so the boundary being claimed is exercised.
+
+    1. Register expected method, URL, parameters, headers, status, and body; assert on parsed output
+       and relevant outgoing request fields.
+    2. Add separate 429, malformed payload, and timeout cases according to the client contract.
+    3. Make unmatched calls fail and ensure no live network access is possible.
+    4. Keep a controlled integration/contract check for live-provider assumptions not represented
+       by the mock, without running it against production credentials on untrusted CI changes.
+    5. Rename tests to distinguish domain-unit coverage from transport-client behavior.
+  red_flags:
+    - Raising a coverage threshold while retaining the same mock boundary.
+    - Claiming `responses` proves live DNS, TLS, or provider schema compatibility.
+    - Letting an unmatched request reach a live endpoint.
+    - Testing only that a mock was called without checking the resulting behavior.
+    - Replacing requests interception with HTTPX tooling without confirming the client library.
+
+- id: pytest-scn-003
+  title: Async suite emits pending-task warnings
+  technologies: [pytest, python, fastapi]
+  difficulty: advanced
+  prompt: |
+    An async test of a FastAPI background task passes locally but intermittently fails in CI with
+    warnings about unawaited coroutines and pending tasks. The repository uses both pytest-asyncio
+    and AnyIO. A developer proposes increasing the event-loop fixture scope and suppressing the
+    warnings. How do you establish the cause and fix the ownership model?
+  approach: |
+    Treat the warnings as evidence that work or loop-bound resources outlive their owner. First
+    inspect the exact warning location, task creation, plugin versions, test markers, and fixture
+    setup/teardown. Avoid broad loop-scope changes until it is clear which plugin owns the test.
+
+    1. Assign asyncio-specific tests to pytest-asyncio and backend-neutral tests to AnyIO, with
+       explicit configuration/markers that avoid overlapping auto modes.
+    2. Await every coroutine; for tasks, await, cancel and join, or use TaskGroup where appropriate.
+    3. Ensure lifespan startup/shutdown and client/server cleanup happen on the creating loop.
+    4. Replace timing sleeps with an event, queue, or other explicit completion signal.
+    5. Re-run the smallest test with warnings visible and add a regression assertion for completion
+       or cancellation behavior.
+  red_flags:
+    - Suppressing pending-task warnings to make CI green.
+    - Assuming a broader event loop resolves a leaked task.
+    - Mixing plugin auto modes without assigning test ownership.
+    - Using sleeps as a synchronization contract.
+    - Closing a loop-bound client from a different loop.
+
+- id: pytest-scn-004
+  title: Coverage target reached but validation bug survives
+  technologies: [pytest, python]
+  difficulty: intermediate
+  prompt: |
+    A parser module meets the repository's coverage threshold. A production defect allows negative
+    quantities through a validation branch. A mutation run that removes the negative-value check
+    survives. The team wants to add assertions until the score rises. What is the more rigorous
+    investigation and testing approach?
+  approach: |
+    Treat coverage as execution evidence and the surviving mutant as a clue that tests may not
+    distinguish the required behavior. Confirm the mutant and selection are valid, then identify
+    the parser's public contract and add a focused negative-boundary regression case.
+
+    1. Assert the exact observable outcome for negative input: documented error type/attributes or
+       rejection result, not merely that the parser returned.
+    2. Add meaningful valid boundaries and malformed forms as examples with clear IDs.
+    3. Use Hypothesis strategies for the relevant numeric and textual domain and state independent
+       invariants, such as accepted quantities always being non-negative.
+    4. Check whether the mutation is equivalent or the targeted test was excluded before counting it.
+    5. Keep the coverage threshold stable unless policy justifies a change; review correctness of
+       assertions rather than optimizing a metric.
+  red_flags:
+    - Equating 100% line coverage with correctness.
+    - Adding an assertion that repeats the implementation's own predicate.
+    - Treating every surviving mutant as a valid missing-test finding.
+    - Increasing coverage threshold without reviewing the suite.
+    - Generating only positive values in a property test meant to test negative rejection.
+
+- id: pytest-scn-005
+  title: Database rollback fails to isolate integration tests
+  technologies: [pytest, postgresql, testcontainers]
+  difficulty: advanced
+  prompt: |
+    Integration tests use a PostgreSQL Testcontainer and a function-scoped transaction fixture.
+    A repository method opens its own pooled connection and commits, so rows remain after rollback.
+    Under xdist, tests occasionally see one another's rows. How would you preserve realism and
+    restore isolation?
+  approach: |
+    The rollback boundary does not include the repository's separate committed connection, and
+    parallel workers share mutable state. Confirm the connection topology before choosing an
+    isolation mechanism; do not claim a rollback that cannot cover the write path.
+
+    1. Keep a version-pinned PostgreSQL container for realistic SQL and driver behavior, with
+       readiness checks and cleanup logs.
+    2. Give each test or worker a unique database/schema, or add a repository seam to inject the
+       transaction-bound connection when the production contract permits it.
+    3. Where appropriate, truncate or delete data in teardown with foreign-key ordering, but make
+       cleanup idempotent and safe under parallel workers.
+    4. Verify isolation from a fresh connection and test teardown after assertion failures.
+    5. Add explicit safety checks so only the dedicated test container/database can be cleaned.
+  red_flags:
+    - Assuming a transaction can roll back a separate connection's commit.
+    - Sharing one schema among xdist workers without namespacing.
+    - Replacing PostgreSQL with SQLite while claiming to test PostgreSQL behavior.
+    - Catching Testcontainers startup errors and silently skipping required CI tests.
+    - Using a production database URL for cleanup tests.
+
+- id: pytest-scn-006
+  title: Flaky CI test passes only after retry
+  technologies: [pytest, cicd]
+  difficulty: intermediate
+  prompt: |
+    A payment-service test fails on its first CI attempt about once a day and passes when rerun.
+    It uses a fixed sleep before checking a background task and calls a sandbox HTTP endpoint. CI
+    has begun automatically retrying the whole suite, so dashboards show green. How would you
+    triage the failure and choose a safe temporary policy?
+  approach: |
+    Preserve the first failure as evidence and isolate the two uncontrolled boundaries: time-based
+    synchronization and a live network dependency. Determine whether the failure is an application
+    race, sandbox availability, rate limit, or test environment pressure.
+
+    1. Capture node ID, timestamp, response, task state, retry count, and CI environment; rerun the
+       individual test under the same environment.
+    2. Replace the fixed sleep with an explicit task completion event or bounded polling condition.
+    3. Stub the HTTP transport for deterministic unit behavior and create a separately marked,
+       controlled sandbox integration test if the provider contract needs checking.
+    4. If a temporary retry remains necessary for infrastructure, keep first-failure logs, bound
+       retries, report retry outcomes, assign an owner and removal condition.
+    5. Verify that the required test selection still runs and no failures are hidden by a green
+       suite-level rerun.
+  red_flags:
+    - Treating a retry pass as proof that the test is healthy.
+    - Increasing the sleep duration without measuring task completion behavior.
+    - Running a live sandbox call in every unit suite without controls.
+    - Marking the flaky test xfail without a known expected-failure condition.
+    - Discarding first-attempt logs and retry counts.

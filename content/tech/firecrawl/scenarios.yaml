@@ -1,0 +1,78 @@
+- id: fc-scn-001
+  title: A documentation crawl returns too many irrelevant URLs
+  technologies: [firecrawl, rest-apis]
+  difficulty: intermediate
+  prompt: |
+    A team starts a crawl from its public documentation homepage to build an internal RAG index. The job returns a large mixture of documentation, blog posts, changelog entries, marketing pages and external links. The page limit was left at a generous default, results are being written into the vector store as they arrive, and the team's usage dashboard is rising faster than expected. The project owner asks whether to stop the job or let it finish.
+  approach: |
+    Stop or cap the current job if its scope exceeds the approved budget; do not let the default define product policy. Separate discovery from retrieval: map a narrow documentation path, inspect URL patterns and build include/exclude rules. Disable external-link traversal unless explicitly required, set an explicit limit and request only needed formats. Deduplicate candidate URLs before crawl or batch scrape. Preserve already-ingested records but mark the run scope and provenance so they can be reviewed. Pilot the revised filters on representative pages and compare relevant-page yield, status and output size before increasing volume. Track job usage by run and add an approval threshold for future scope expansion.
+  red_flags:
+    - Increasing the page limit before inspecting URL scope.
+    - Assuming a completed crawl is a complete and relevant corpus.
+    - Deleting prior indexed data simply because a URL was absent from one discovery result.
+    - Treating external-link traversal as harmless.
+- id: fc-scn-002
+  title: Hydrated product pages produce empty Markdown
+  technologies: [firecrawl, playwright]
+  difficulty: intermediate
+  prompt: |
+    An ingestion job scrapes 300 product URLs. API calls generally succeed and target status codes are 200, but about one third of Markdown outputs contain only a title and cookie banner. A developer proposes setting `waitFor` to 30 seconds for every URL. The pages use client-side rendering, but some source pages are static and complete on first response. The product team needs a reliable record of name, availability and price.
+  approach: |
+    First separate an extraction failure from a render timing issue. Inspect raw/clean HTML, metadata and screenshots for a small sample of empty and successful URLs. Check whether the data exists in initial HTML, whether hydration is delayed, or whether the page requires interaction or a different route. Use a modest, tested wait or precise supported readiness condition, and consider actions only if the data is actually hidden behind a control. Validate extracted fields and source status rather than relying on response success. Avoid making all pages wait 30 seconds; route only known dynamic domains through heavier rendering. If site-specific state is required, prototype a bounded Playwright workflow. Add empty-content metrics, retries only for plausible transient failures, and human review for suspicious price values.
+  red_flags:
+    - Treating 200 status as proof that required fields exist.
+    - Applying a long fixed wait to all pages without measuring.
+    - Accepting inferred prices without evidence or validation.
+    - Retrying empty pages indefinitely without classifying cause.
+- id: fc-scn-003
+  title: Crawl reports complete but only a fraction of pages are indexed
+  technologies: [firecrawl, rest-apis]
+  difficulty: advanced
+  prompt: |
+    A nightly crawl job is marked `completed` with 1,200 pages. The index contains 600 documents. The API response from the job submission had only the first result segment, and the ingestion worker had no durable cursor. A worker restart occurred during pagination. The team is unsure whether pages were filtered, lost, duplicated or simply not yet fetched.
+  approach: |
+    Distinguish crawl completion from complete result ingestion. Retrieve job status and any crawl-error diagnostics, then follow the result `next` URL or cursor until exhausted. Compare service-reported totals with unique persisted source URLs, successful pages, target-error pages, failed crawl URLs and filtered records. Build a restartable loop: persist each page idempotently, then checkpoint the cursor. Use a stable document key and content hash to make replays safe. Recover from the last committed cursor and reconcile the final counts. For future runs, store job ID, request filters and ingestion status durably, and alert when advertised totals differ from persisted record counts. Do not submit a new full crawl until determining whether the existing job results remain available.
+  red_flags:
+    - Assuming “completed” means all result segments were read.
+    - Re-running the entire crawl without investigating or idempotency.
+    - Advancing a cursor before writing its result page.
+    - Treating all count differences as a crawler defect without checking filters and errors.
+- id: fc-scn-004
+  title: Structured extraction returns valid but misleading dates
+  technologies: [firecrawl, rag]
+  difficulty: advanced
+  prompt: |
+    A release-monitoring service uses a JSON schema with a required `release_date` field. Several source pages have valid JSON results, but the date shown to users is the article publication date rather than the software release date. Some pages do not publish a release date at all. The current prompt says only “extract the release date,” and the team has no saved page evidence or prompt version.
+  approach: |
+    Treat this as a semantic and provenance failure, not a JSON parser issue. Redefine the schema so the release date can be absent or null, and describe how to distinguish a release date from article publication or modification time. Ask for a source quote or evidence locator when supported. Validate date formats and compare extracted evidence against page text; create fixtures for explicit release dates, publication-only pages and ambiguous cases. Version the prompt and schema and save them with each record. Reprocess affected records from retained source content or re-scrape them. For consequential display, mark unknown values honestly or route ambiguous pages for review. Track field-level error rates by domain and change the endpoint path if current docs indicate an older extraction workflow is deprecated.
+  red_flags:
+    - Making the field required and forcing the model to guess.
+    - Treating well-formed JSON as factually correct.
+    - Overwriting records without keeping schema or source provenance.
+    - Solving the symptom with another model prompt but no evaluation fixtures.
+- id: fc-scn-005
+  title: RAG answers cite duplicate and stale pages
+  technologies: [firecrawl, rag]
+  difficulty: advanced
+  prompt: |
+    A RAG assistant indexes a documentation site every night. Search results often include the same article under a trailing slash, a tracking query string and a redirect hostname. Some chunks cite a page retrieved months ago, while the current page has changed. A failed crawl occasionally causes the index to drop pages that are still available. Embedding usage is growing even when documentation has not changed.
+  approach: |
+    Define conservative canonical URL normalization: remove fragments and known tracking parameters only, preserve content-affecting query parameters, and retain requested and canonical URLs. Compute a hash over normalized text and reuse embeddings when content and processing versions are unchanged. Keep document-level fetched time, target status, extractor version, section locator and source URL attached to chunks. Re-embed only changed documents or when chunking/embedding versions require it. Separate a transient crawl failure from a confirmed source deletion; retain the last good snapshot until a deletion policy is satisfied. Add metrics for duplicate rate, changed-content rate, stale age, failed refreshes, embedding reuse and citation coverage. Make deletion fan out idempotently across chunks, vectors and caches.
+  red_flags:
+    - Removing all query strings without knowing their semantics.
+    - Deleting last-good content on a single failed crawl.
+    - Re-embedding every page regardless of content hash.
+    - Dropping source URLs or timestamps during chunk creation.
+- id: fc-scn-006
+  title: Decide whether to retain a managed scraper or self-host
+  technologies: [firecrawl, playwright]
+  difficulty: intermediate
+  prompt: |
+    A team processes several thousand public pages per week. Most pages are static articles, a smaller group requires JavaScript rendering, and a handful need custom interactions. Product leadership wants to reduce operational cost and asks to replace Firecrawl with Playwright plus trafilatura or Crawl4AI. The team has not measured extraction quality by page type, and the managed account's credits and limits vary by plan.
+  approach: |
+    Avoid making a binary decision based on a single invoice or demo. Build a representative benchmark divided into static, dynamic, PDF and interactive groups. Compare useful-page yield, fidelity, failure recovery, latency, resource use, data handling, service limits and engineering maintenance. Test direct HTTP plus trafilatura for static pages, Firecrawl for heterogeneous routine extraction, and Playwright or Crawl4AI for the special interaction set. Calculate total cost including browser infrastructure, patching, monitoring and developer time; verify current plan-specific credits and limits. A hybrid routing strategy may be best. Put collectors behind an adapter and standardize provenance and normalized output so migration is reversible. Pilot one bounded workload before retiring the managed path.
+  red_flags:
+    - Assuming open-source software eliminates operating cost.
+    - Testing only the homepage or a single static article.
+    - Ignoring security, retention and subprocessor requirements.
+    - Migrating every source before measuring quality and maintenance burden.

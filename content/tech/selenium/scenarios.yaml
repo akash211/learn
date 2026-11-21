@@ -1,0 +1,147 @@
+- id: sel-scn-001
+  title: A checkout test fails intermittently after submission
+  technologies: [selenium, python]
+  difficulty: intermediate
+  prompt: |
+    A checkout test passes on a developer laptop but fails in CI about one run in ten. The
+    traceback points to a missing confirmation element after clicking Place order. The team
+    proposes adding a five-second sleep and retrying the click. There is no screenshot, and the
+    test sometimes creates duplicate orders when rerun manually.
+  approach: |
+    Start by protecting the side effect: do not blindly retry a purchase action. Capture the first
+    failure with URL, screenshot, browser/version, session ID and relevant logs before teardown.
+    Determine whether the click occurred and whether the order succeeded by checking an approved
+    test environment's order record or a non-sensitive confirmation state. Replace the sleep with
+    a wait for the expected transition, such as a confirmation view or a known completion marker.
+    Ensure the test uses unique, disposable order data and has a cleanup path. Compare CI and local
+    browser versions, viewport, network and resource load. If the app itself returns an error,
+    report it as a product failure rather than masking it with a retry. A retry is acceptable only
+    after confirming the operation is idempotent or safely guarded.
+  red_flags:
+    - Retrying the order submission without checking if the first click succeeded.
+    - Adding a fixed sleep as the only synchronization.
+    - Discarding the first run's evidence and rerunning until green.
+    - Using a real customer or payment account for a test.
+
+- id: sel-scn-002
+  title: A selector matches the wrong Save button
+  technologies: [selenium, python]
+  difficulty: intermediate
+  prompt: |
+    A settings screen has several cards, each with a Save button. The test uses
+    `find_elements(By.CLASS_NAME, 'save')[0].click()` and sometimes saves the wrong card after a
+    new card is added. A developer suggests a long XPath with multiple `div` ancestors and
+    `nth-child` positions to make the index precise.
+  approach: |
+    Reframe identity around the card and its business key, not global order. Locate the intended
+    card through a stable attribute or displayed setting label, then find its Save control within
+    that component. Ask the application team for an accessible label, stable ID or intentional
+    test hook if the markup exposes no durable identity. Check that the scoped selector matches
+    exactly one card and one button. Avoid encoding the page's entire layout in positional XPath:
+    it will fail on harmless redesigns and still may target the wrong record. Add an assertion
+    that the saved card's visible state or value changed. Keep the locator close to the page or
+    component abstraction so future UI changes have one clear maintenance point.
+  red_flags:
+    - Continuing to use the first global match.
+    - Replacing one brittle positional selector with a deeper positional selector.
+    - Catching selector errors and clicking a different button as a fallback.
+    - Verifying only that some Save button was clicked.
+
+- id: sel-scn-003
+  title: A custom dropdown is not a native select
+  technologies: [selenium, python]
+  difficulty: beginner
+  prompt: |
+    A form contains a country control that looks like a dropdown. The test wraps it in Selenium's
+    `Select` and gets an error that the element is not a `select`. The page uses a button to open
+    a rendered list of options, and its options appear only after a network request completes.
+  approach: |
+    Inspect the DOM and accessible behavior to confirm it is a custom widget rather than a native
+    `<select>`. Keep `Select` for actual native select elements. For the custom control, wait until
+    the trigger is visible and actionable, click it once, wait for the option list to appear, then
+    locate the desired option using stable text or attributes and select it. Verify the final
+    displayed value or submitted result. Do not change the underlying DOM value through JavaScript
+    to bypass the event flow; that can skip the state changes that the application relies on.
+    If options are loaded asynchronously, wait for the specific option, not a guessed delay. A
+    reusable component helper should restore or document its state and should not swallow errors.
+  red_flags:
+    - Forcing `Select` on a non-select element.
+    - Sleeping and assuming the option list has loaded.
+    - Setting an internal value with JavaScript without triggering normal UI events.
+    - Selecting by list index when the option identity is known.
+
+- id: sel-scn-004
+  title: A Grid download exists on the node but not the test runner
+  technologies: [selenium, docker]
+  difficulty: advanced
+  prompt: |
+    A Remote WebDriver test clicks Export. The export completes in the browser, but Python's
+    `Path('/tmp/downloads/report.csv').exists()` is false. The same test passes with a local
+    Chrome session. The team mounts a host directory into the runner container but does not know
+    whether the Grid browser node has the mount.
+  approach: |
+    Identify where the browser process runs. In Remote WebDriver, the download usually lands on
+    the remote node's filesystem, so checking a client-local path does not prove the download
+    failed. Inspect the Grid deployment and use its supported managed-download or file-transfer
+    capability if enabled for the deployed versions. Otherwise configure an intentional shared
+    volume across the browser node and client, with per-session directories and cleanup, or test
+    the approved export endpoint directly after validating UI behavior separately. Wait for
+    completion and validate file size and schema rather than sleeping. Keep the transfer private
+    and avoid mixing output between parallel sessions. Confirm that the requested browser
+    capabilities and Grid image actually support the chosen approach.
+  red_flags:
+    - Repeatedly polling only the client's filesystem without checking node placement.
+    - Making a mutable shared download folder for concurrent tests.
+    - Assuming all Grid versions expose the same download API.
+    - Treating file existence as proof of a complete, correct export.
+
+- id: sel-scn-005
+  title: An extraction run hits rate limits and a challenge page
+  technologies: [selenium, firecrawl]
+  difficulty: advanced
+  prompt: |
+    A scheduled Selenium collector visits a third-party directory at increasing concurrency.
+    It begins receiving 429 responses and occasionally displays an anti-bot challenge instead of
+    results. Some stakeholders suggest proxy rotation; others want to keep retrying because the
+    pages are visible when opened manually. There is no documented API in the current design.
+  approach: |
+    Stop the run or lower traffic while checking authorization, service terms, published limits
+    and the collector's actual request rate. A 429 is a throttling signal; honor documented
+    `Retry-After` guidance and do not amplify it with unbounded retries. Treat the challenge as an
+    access-control boundary, not a technical puzzle to evade. Contact the service operator for an
+    approved API, export, quota or test interface. Evaluate a permitted extraction service such
+    as Firecrawl only if its access model and terms fit the use case; a tool change does not create
+    permission. If collection is authorized, narrow scope, cap concurrency, deduplicate, retain
+    only necessary data, document stop conditions, and ensure partial runs cannot be mistaken
+    for complete data.
+  red_flags:
+    - Proxy rotation, fingerprint manipulation or challenge-solving to bypass controls.
+    - Increasing concurrency after receiving rate limits.
+    - Claiming that manual visibility means automated reuse is authorized.
+    - Saving personal data without minimization, retention or access controls.
+
+- id: sel-scn-006
+  title: Decide whether to keep Selenium or adopt Playwright
+  technologies: [selenium, playwright, python]
+  difficulty: advanced
+  prompt: |
+    A team starting a new web test suite has Python expertise and an existing Selenium Grid shared
+    by other projects. The product uses async dialogs, popups and downloads. Engineers have heard
+    that Playwright has built-in waiting and tracing, and propose switching before any tests are
+    written. The browser matrix and future Grid ownership are not yet settled.
+  approach: |
+    Make the decision from requirements and a representative proof of concept, not headlines.
+    Clarify target browsers, language and runner needs, Grid capacity and ownership, remote
+    download behavior, security and maintenance skills. Implement the hardest flows in both tools:
+    asynchronous rendering, popup or frame handling, download, CI provisioning and failure
+    artifact collection. Compare observed flake rate, runtime, quality of diagnostics, isolation,
+    infrastructure and total maintenance. Playwright may reduce boilerplate through auto-waiting,
+    browser contexts and integrated tracing; Selenium may fit existing WebDriver/Grid expertise
+    and a wider established ecosystem. Neither automatically fixes unstable selectors or shared
+    test data. Choose the least costly option that satisfies the browser and operational contract,
+    and document what would trigger reconsideration.
+  red_flags:
+    - Selecting a framework solely from popularity or a trivial demo.
+    - Ignoring existing Grid cost, remote behavior or browser coverage.
+    - Treating auto-waiting as proof that application state is correct.
+    - Migrating without a proof of concept for downloads and diagnostic artifacts.

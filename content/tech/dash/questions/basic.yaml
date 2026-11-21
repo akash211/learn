@@ -1,0 +1,427 @@
+- id: dash-basic-001
+  topic: architecture
+  difficulty: beginner
+  question: What are the main parts of a Dash application?
+  answer: 'A Dash app has a component layout, callback registrations, and an underlying Flask server.
+    The layout is a tree of components—often `dash.html` elements, `dash.dcc` controls, and third-party
+    components—with IDs and properties. Callbacks declare dependencies between component properties: `Input`
+    values trigger a Python function, and `Output` values receive its result. The browser renders the
+    component tree and reports interactions; Python callbacks run on the server and return updated properties
+    over HTTP. Plotly figures commonly appear in `dcc.Graph`. The `Dash` instance owns app configuration
+    and exposes its Flask server as `app.server` for WSGI deployment. Keep data-access and transformation
+    logic in normal Python functions so it can be reused and tested outside the UI layer. In production,
+    keep the behavior aligned with the installed Dash version, validate values at the server boundary,
+    and test the relevant empty, repeated, and unauthorized cases. This makes the interaction dependable
+    beyond the happy-path demo.'
+  tags:
+  - layout
+  - callbacks
+  - architecture
+- id: dash-basic-002
+  topic: callbacks
+  difficulty: beginner
+  question: What is the difference between `Input`, `State`, and `Output`?
+  answer: '`Input(component_id, property)` is a trigger: when its property changes, Dash schedules the
+    callback. `State` supplies a current property value to the function without triggering it by itself.
+    `Output` names the component property the callback updates. A search field might be an `Input` when
+    results should update as the user types, or a `State` when a separate Submit button triggers a query
+    using the field''s current value. Values are passed as callback arguments in declaration order, with
+    inputs followed by state values. The callback''s return must match its output declaration. Use `Input`
+    for reactive dependencies, `State` for values sampled at an action boundary, and keep `Output` ownership
+    clear to avoid competing callbacks. In production, keep the behavior aligned with the installed Dash
+    version, validate values at the server boundary, and test the relevant empty, repeated, and unauthorized
+    cases. This makes the interaction dependable beyond the happy-path demo.'
+  tags:
+  - Input
+  - State
+  - Output
+- id: dash-basic-003
+  topic: callbacks
+  difficulty: beginner
+  question: When should a callback use `prevent_initial_call=True`?
+  answer: 'Dash may invoke a callback on initial page load so its outputs match the starting input values.
+    `prevent_initial_call=True` suppresses that initial call when the callback''s input and output exist
+    together at initialization. It is useful for actions that should happen only after an explicit user
+    event, such as submitting a form or starting an expensive report. It is usually not appropriate when
+    a chart should render from its default filters as soon as the page loads. Dynamic components complicate
+    the lifecycle: newly inserted inputs or outputs can still cause callback work as the page becomes
+    consistent. Treat the option as interaction behavior, not a security or resource limit. Validate callback
+    inputs and constrain expensive operations regardless of initial-call settings.
+
+    '
+  tags:
+  - initial-call
+  - callbacks
+- id: dash-basic-004
+  topic: callbacks
+  difficulty: beginner
+  question: How do you prevent a callback from updating its outputs?
+  answer: 'Raise `dash.exceptions.PreventUpdate` when the callback should update none of its outputs.
+    This is useful when a triggering event is irrelevant or a valid update cannot yet be computed. Return
+    `dash.no_update` for an individual output when other outputs should still change. For example, an
+    invalid form could preserve the existing chart with `no_update` while returning a validation message
+    to a separate error component. In a multi-output callback, each returned position corresponds to a
+    declared output, so the choice is explicit. Returning `None` is not the same as preserving the old
+    value: it may clear a property or be an invalid value for that component. Model these cases deliberately
+    rather than relying on exceptions. In production, keep the behavior aligned with the installed Dash
+    version, validate values at the server boundary, and test the relevant empty, repeated, and unauthorized
+    cases. This makes the interaction dependable beyond the happy-path demo.'
+  tags:
+  - PreventUpdate
+  - no_update
+- id: dash-basic-005
+  topic: component-properties
+  difficulty: beginner
+  question: What is `dcc.Graph`, and how does it use a Plotly figure?
+  answer: '`dcc.Graph` is a Dash component that renders a Plotly figure in the browser. Its `figure` property
+    accepts a Plotly.py figure, commonly built with Plotly Express (`px`) or `plotly.graph_objects` (`go`).
+    A callback can return a new figure when a dropdown, date range, or other input changes. Graph interaction
+    properties such as `clickData`, `hoverData`, `selectedData`, and `relayoutData` can be callback inputs
+    for linked details or charts. These properties may be empty before interaction and their shape varies
+    by event, so check for missing values. Figures are serialized and sent to the browser; aggregate or
+    filter large datasets before returning them rather than shipping an entire warehouse table to the
+    client. In production, keep the behavior aligned with the installed Dash version, validate values
+    at the server boundary, and test the relevant empty, repeated, and unauthorized cases. This makes
+    the interaction dependable beyond the happy-path demo.'
+  tags:
+  - dcc.Graph
+  - Plotly
+  - figures
+- id: dash-basic-006
+  topic: component-properties
+  difficulty: beginner
+  question: What is the purpose of component IDs in Dash?
+  answer: An ID identifies a component in callback dependencies. `Input("region", "value")` refers to
+    the `value` property of the component whose ID is `region`; a callback `Output` uses the same mechanism.
+    IDs are not labels shown to users, and they should be unique among ordinary components in the rendered
+    tree. For repeated components, dictionary IDs can encode a type and stable key, enabling pattern matching
+    with selectors such as `ALL` or `MATCH`. Reusing a fixed ID in a component factory can cause duplicate-ID
+    errors or ambiguous behavior. Keep IDs stable and meaningful, and use visible labels or accessible
+    names separately. An ID is routing metadata, not a security token or a substitute for server-side
+    authorization. In production, keep the behavior aligned with the installed Dash version, validate
+    values at the server boundary, and test the relevant empty, repeated, and unauthorized cases. This
+    makes the interaction dependable beyond the happy-path demo.
+  tags:
+  - ids
+  - components
+- id: dash-basic-007
+  topic: layout
+  difficulty: beginner
+  question: How can a Dash app build a layout from reusable pieces?
+  answer: 'A layout is a tree of component objects, so ordinary Python functions can compose reusable
+    sections. A function such as `metric_card(title, value, component_id)` can return an `html.Section`
+    containing a heading and value component. The page then composes several cards, controls, and graphs
+    in a parent container. Reuse should not create duplicate IDs: accept an ID or stable key as a function
+    argument, or use a dictionary ID for repeated items. Keep service logic and expensive queries out
+    of layout factories; layout construction should be fast and predictable. Styles can be shared through
+    `className` and CSS assets rather than repeating inline style dictionaries. This structure makes pages
+    easier to read, test, and restyle. In production, keep the behavior aligned with the installed Dash
+    version, validate values at the server boundary, and test the relevant empty, repeated, and unauthorized
+    cases. This makes the interaction dependable beyond the happy-path demo.'
+  tags:
+  - layout
+  - components
+  - reuse
+- id: dash-basic-008
+  topic: component-libraries
+  difficulty: beginner
+  question: What do Dash Bootstrap Components and Dash Mantine Components provide?
+  answer: Dash Bootstrap Components (DBC) and Dash Mantine Components (DMC) are third-party libraries
+    of UI components and styling conventions. DBC supplies Bootstrap-based elements such as containers,
+    rows, columns, navigation, cards, and forms; it is typically paired with a Bootstrap stylesheet or
+    theme. DMC provides Mantine-style controls and theming through its provider components. They can make
+    a large application more consistent and reduce custom CSS, but each is a separate dependency with
+    its own version requirements and API. A CSS theme does not automatically style Plotly's internal figure
+    appearance, so configure chart templates and colors too. Choose one primary design system where possible,
+    pin compatible versions, and check accessibility and responsive behavior in the actual app. In production,
+    keep the behavior aligned with the installed Dash version, validate values at the server boundary,
+    and test the relevant empty, repeated, and unauthorized cases. This makes the interaction dependable
+    beyond the happy-path demo.
+  tags:
+  - DBC
+  - DMC
+  - theming
+- id: dash-basic-009
+  topic: state
+  difficulty: beginner
+  question: What is `dcc.Store`, and what should not be stored in it?
+  answer: '`dcc.Store` holds JSON-serializable data on the client, using memory or browser storage according
+    to its `storage_type`. Callbacks can use its `data` property to share small pieces of UI state, such
+    as compact filter selections or a temporary client-side result. It is not a shared server cache: browser
+    sessions are separate, and stored data can be inspected or modified by the user. Do not store secrets,
+    credentials, sensitive records, or authorization decisions in it. Large data in a Store increases
+    serialization, network, and browser-memory costs. For sizable or protected datasets, keep the data
+    on the server or in a controlled backend and store only a compact reference that is re-authorized
+    when used. In production, keep the behavior aligned with the installed Dash version, validate values
+    at the server boundary, and test the relevant empty, repeated, and unauthorized cases. This makes
+    the interaction dependable beyond the happy-path demo.'
+  tags:
+  - dcc.Store
+  - state
+  - security
+- id: dash-basic-010
+  topic: callbacks
+  difficulty: beginner
+  question: How can one callback update multiple properties?
+  answer: Declare multiple `Output` dependencies in one callback and return a tuple or list with one value
+    per output in the same order. This is useful when a single calculation should update a chart, status
+    text, and button state consistently. Name intermediate values before returning them so the relationship
+    is readable. Use `dash.no_update` for an output that should keep its prior value while another output
+    changes, and `PreventUpdate` to stop all outputs. Multiple callbacks writing the same property can
+    create unclear ownership; if that is truly required, Dash supports `allow_duplicate=True` under specific
+    rules, but consolidating ownership is usually simpler. Treat output ordering and property types as
+    part of the callback's tested contract. In production, keep the behavior aligned with the installed
+    Dash version, validate values at the server boundary, and test the relevant empty, repeated, and unauthorized
+    cases. This makes the interaction dependable beyond the happy-path demo.
+  tags:
+  - multiple-outputs
+  - callbacks
+- id: dash-basic-011
+  topic: callbacks
+  difficulty: beginner
+  question: How can you tell which input triggered a callback?
+  answer: Use `dash.ctx.triggered_id` inside a callback to identify the component ID that triggered it.
+    When several component-property changes are reported, `dash.ctx.triggered_prop_ids` provides the changed
+    property identifiers. This is more reliable than guessing from which callback argument is truthy,
+    because old values remain present on later invocations. It is useful when a small group of buttons
+    share one callback—for example, Apply and Reset—but separate callbacks may be clearer if actions have
+    different validation or side effects. For dictionary IDs, the triggered ID is structured rather than
+    a string. Define behavior for multiple simultaneous changes instead of assuming exactly one trigger
+    always occurs. In production, keep the behavior aligned with the installed Dash version, validate
+    values at the server boundary, and test the relevant empty, repeated, and unauthorized cases. This
+    makes the interaction dependable beyond the happy-path demo.
+  tags:
+  - dash.ctx
+  - trigger-context
+- id: dash-basic-012
+  topic: figures
+  difficulty: beginner
+  question: What is the difference between Plotly Express and `plotly.graph_objects`?
+  answer: 'Plotly Express (`plotly.express`, commonly `px`) is a high-level API that turns tabular data
+    and semantic column names into common chart types with concise code. It is often the fastest way to
+    create a line, bar, scatter, or facet chart. `plotly.graph_objects` (`go`) exposes explicit trace
+    and layout objects, offering finer control over specialized traces, mixed chart construction, and
+    advanced formatting. Both create Plotly figures that `dcc.Graph` can render. They can be combined:
+    build a base figure with `px`, then adjust it with methods such as `update_layout` or add a graph-object
+    trace. Choose the simplest API that expresses the chart clearly, and preserve numeric and date types
+    in the source data. In production, keep the behavior aligned with the installed Dash version, validate
+    values at the server boundary, and test the relevant empty, repeated, and unauthorized cases. This
+    makes the interaction dependable beyond the happy-path demo.'
+  tags:
+  - Plotly Express
+  - graph_objects
+- id: dash-basic-013
+  topic: callbacks
+  difficulty: intermediate
+  question: What are `ALL`, `MATCH`, and `ALLSMALLER` used for?
+  answer: '`ALL`, `MATCH`, and `ALLSMALLER` are pattern-matching selectors used with dictionary component
+    IDs. `ALL` collects a property from every matching component, providing a list to a callback that
+    aggregates repeated controls. `MATCH` pairs dependencies for one matching ID, such as an input and
+    output belonging to the same dynamic row. `ALLSMALLER` selects matches whose numeric index is smaller
+    than a target, which can support ordered or cumulative interactions. These selectors reduce the need
+    to register one callback per repeated component, but their valid combinations and return shapes depend
+    on the callback declaration. Use a consistent ID schema with a stable key; do not assume an `ALL`
+    list position is a durable business identifier. In production, keep the behavior aligned with the
+    installed Dash version, validate values at the server boundary, and test the relevant empty, repeated,
+    and unauthorized cases. This makes the interaction dependable beyond the happy-path demo.'
+  tags:
+  - pattern-matching
+  - ALL
+  - MATCH
+- id: dash-basic-014
+  topic: performance
+  difficulty: intermediate
+  question: When is a clientside callback appropriate?
+  answer: 'A clientside callback runs JavaScript in the browser and is useful for lightweight transformations
+    of data already there, local formatting, or small presentation changes where a server round trip adds
+    unnecessary latency. It is not appropriate for database queries, trusted business rules, or authorization,
+    because the browser is controlled by the user and has no server credentials. Large computations can
+    still block the browser''s main thread and slow the interface. Keep clientside functions small and
+    test their behavior in the target browsers. Measure first: moving work to JavaScript does not automatically
+    make it faster if the payload is large or the user device is weak. Keep sensitive and authoritative
+    decisions on the server. In production, keep the behavior aligned with the installed Dash version,
+    validate values at the server boundary, and test the relevant empty, repeated, and unauthorized cases.
+    This makes the interaction dependable beyond the happy-path demo.'
+  tags:
+  - clientside-callbacks
+  - performance
+- id: dash-basic-015
+  topic: performance
+  difficulty: intermediate
+  question: Why can process-local memoization be unreliable across deployed workers?
+  answer: '`functools.lru_cache` and ordinary module dictionaries live in one Python process. With multiple
+    Gunicorn workers, each worker has its own memory, so one worker''s cache fill or invalidation is not
+    visible to the others. Users may see different freshness depending on which worker handles a request.
+    These caches can also grow without bound unless limited, and user-specific results need keys that
+    include all relevant tenant and permission scope. Use a shared cache such as Redis when workers must
+    see common state, with explicit TTL and invalidation behavior. Alternatively, cache only safe, small
+    computations whose per-worker duplication is acceptable. Never rely on a process-local cache for durable
+    job status or cross-user coordination. In production, keep the behavior aligned with the installed
+    Dash version, validate values at the server boundary, and test the relevant empty, repeated, and unauthorized
+    cases. This makes the interaction dependable beyond the happy-path demo.'
+  tags:
+  - caching
+  - gunicorn
+  - workers
+- id: dash-basic-016
+  topic: performance
+  difficulty: intermediate
+  question: What does `background=True` do for a callback?
+  answer: '`background=True` marks a Dash callback as background work so long-running operations can run
+    through a configured background callback manager rather than occupy a normal web request for their
+    full duration. The app must be configured with a compatible manager; `background=True` alone does
+    not create a queue or provide durable execution. Diskcache is commonly used for local development,
+    while a Celery-based manager with a broker and result backend is one production option. The job should
+    validate inputs and permissions, handle retries and failure, and be safe against duplicate submission
+    when it performs side effects. Background callbacks improve request availability, but they still require
+    worker capacity, observability, and a clear way to show status or errors. In production, keep the
+    behavior aligned with the installed Dash version, validate values at the server boundary, and test
+    the relevant empty, repeated, and unauthorized cases. This makes the interaction dependable beyond
+    the happy-path demo.'
+  tags:
+  - background-callbacks
+  - background
+- id: dash-basic-017
+  topic: multipage
+  difficulty: intermediate
+  question: What are Dash Pages and how do they relate to `dcc.Location`?
+  answer: Dash Pages is a page registry built around `dash.register_page` and `dash.page_container`. Page
+    modules register metadata and layouts, while the shared app shell hosts the container. It reduces
+    manual route-selection code for multi-page apps. `dcc.Location` exposes URL properties such as `pathname`,
+    `search`, and `hash`; a callback can use it to choose a layout or update navigation in a manually
+    routed application. Pages itself also uses the URL as part of its routing model. Either approach must
+    support direct links and refresh, and neither automatically protects sensitive pages. Enforce authorization
+    on server-side data and actions; hiding a link is not an access-control check. In production, keep
+    the behavior aligned with the installed Dash version, validate values at the server boundary, and
+    test the relevant empty, repeated, and unauthorized cases. This makes the interaction dependable beyond
+    the happy-path demo.
+  tags:
+  - pages
+  - routing
+  - dcc.Location
+- id: dash-basic-018
+  topic: data-access
+  difficulty: intermediate
+  question: How should a callback query a database safely?
+  answer: Validate and normalize callback values on the server, then pass them to parameterized SQL rather
+    than concatenating strings. Use an allowlist for dynamic identifiers such as sort columns, since SQL
+    parameters bind values rather than arbitrary table names. Query only the required columns and a bounded
+    number of rows, with a timeout and managed connection lifecycle. Keep credentials on the server, use
+    a connection pool, and ensure pool capacity times worker count is compatible with the database limit.
+    Put query logic in a service function so it can be tested independently from Dash. Browser controls
+    constrain ordinary UI use but are not a trust boundary; callback requests can be modified directly.
+    In production, keep the behavior aligned with the installed Dash version, validate values at the server
+    boundary, and test the relevant empty, repeated, and unauthorized cases. This makes the interaction
+    dependable beyond the happy-path demo.
+  tags:
+  - SQL
+  - security
+  - data-access
+- id: dash-basic-019
+  topic: data-access
+  difficulty: intermediate
+  question: What are the risks of using `dcc.Interval` for refreshes?
+  answer: '`dcc.Interval` periodically changes its `n_intervals` property, which can trigger a callback.
+    If many browser sessions poll frequently, the request rate multiplies and can overload a database
+    or API. A slow callback can overlap later ticks, duplicating costly work. Use a reasonable interval,
+    return only changed or bounded data, and avoid making each tab independently recompute an expensive
+    shared result. A background producer plus shared cache can refresh once for many users. Apply timeouts
+    and concurrency limits, and consider whether users really need push updates or can tolerate periodic
+    refresh. An interval is a UI trigger, not a durable scheduler or guarantee that every tick runs exactly
+    once. In production, keep the behavior aligned with the installed Dash version, validate values at
+    the server boundary, and test the relevant empty, repeated, and unauthorized cases. This makes the
+    interaction dependable beyond the happy-path demo.'
+  tags:
+  - dcc.Interval
+  - polling
+- id: dash-basic-020
+  topic: security
+  difficulty: intermediate
+  question: Why are hidden buttons and menu links not authorization controls?
+  answer: Browser code and callback requests are controlled by the user. A user can inspect the app, change
+    client-side state, or submit a request without clicking the visible button. Therefore hiding a link
+    or setting `disabled=True` improves the interface but does not enforce access. Every callback that
+    returns sensitive data or performs a write must use a trusted identity and check permission on the
+    server. Authentication can be provided by a Flask integration or an identity-aware proxy, but proxy
+    headers are trustworthy only when the proxy strips untrusted incoming copies and injects verified
+    values. Re-check permissions for background work where access can change. Do not store secrets or
+    authorization flags in `dcc.Store` or URLs. In production, keep the behavior aligned with the installed
+    Dash version, validate values at the server boundary, and test the relevant empty, repeated, and unauthorized
+    cases. This makes the interaction dependable beyond the happy-path demo.
+  tags:
+  - authorization
+  - security
+- id: dash-basic-021
+  topic: deployment
+  difficulty: intermediate
+  question: How is a Dash app commonly served in production?
+  answer: 'A Dash application exposes its underlying Flask server as `app.server`, which can be served
+    by a WSGI server such as Gunicorn. The production process imports that object; it should not run Flask''s
+    or Dash''s development server with `app.run()`. Run the process in the foreground under a container
+    or process manager, configure graceful shutdown and request limits, and log to the deployment''s standard
+    logging system. Worker count is a capacity decision, not a universal constant: workers multiply memory
+    use and database pools, and can affect callback concurrency. Long jobs should use a configured background
+    queue rather than hold a web worker indefinitely. Test through the actual proxy and URL prefix as
+    well as locally. In production, keep the behavior aligned with the installed Dash version, validate
+    values at the server boundary, and test the relevant empty, repeated, and unauthorized cases. This
+    makes the interaction dependable beyond the happy-path demo.'
+  tags:
+  - gunicorn
+  - deployment
+  - WSGI
+- id: dash-basic-022
+  topic: deployment
+  difficulty: intermediate
+  question: What causes broken assets or callbacks behind a reverse-proxy URL prefix?
+  answer: The reverse proxy and Dash must agree about the public path where the app is mounted. If the
+    proxy serves the app at `/analytics` but forwards requests as if the app were at `/`, browser requests
+    for assets or callback endpoints can use the wrong path and fail. Configure Dash's `requests_pathname_prefix`
+    and `routes_pathname_prefix` to match the proxy's forwarding behavior and verify the proxy's strip-or-preserve-prefix
+    policy. Also configure trusted forwarded headers only for known proxy hops, since arbitrary forwarded
+    host or scheme values can be spoofed. Test CSS and JavaScript assets, callback requests, deep links,
+    and refresh through the public URL; a root page that loads locally is not enough. In production, keep
+    the behavior aligned with the installed Dash version, validate values at the server boundary, and
+    test the relevant empty, repeated, and unauthorized cases. This makes the interaction dependable beyond
+    the happy-path demo.
+  tags:
+  - reverse-proxy
+  - prefixes
+  - deployment
+- id: dash-basic-023
+  topic: testing
+  difficulty: intermediate
+  question: Which test layers are useful for a Dash application?
+  answer: 'Test domain logic—validation, permissions, SQL parameters, transformations, and figure construction—with
+    ordinary Python unit tests. Keep callback adapters thin; direct function tests do not exercise Dash''s
+    callback protocol or browser behavior. Use Dash''s testing utilities with pytest and a browser driver
+    for a few important workflows: load a page, change a control, verify the output, follow a deep link,
+    or test a protected action. Mock external data sources for deterministic tests. Browser tests should
+    wait for meaningful UI conditions rather than arbitrary sleeps and avoid selectors tied to unstable
+    component internals. Finally, smoke-test behind the real WSGI server, authentication layer, and proxy
+    prefix to catch deployment behavior that unit tests cannot cover. In production, keep the behavior
+    aligned with the installed Dash version, validate values at the server boundary, and test the relevant
+    empty, repeated, and unauthorized cases. This makes the interaction dependable beyond the happy-path
+    demo.'
+  tags:
+  - testing
+  - pytest
+  - browser
+- id: dash-basic-024
+  topic: framework-choice
+  difficulty: intermediate
+  question: When might Dash be a better fit than Streamlit, and when might it not be?
+  answer: Dash can be a strong fit when the app needs explicit callback dependencies, reusable component-level
+    interactions, rich Plotly integration, dynamic repeated controls, custom routing, or more control
+    over the layout and behavior. Its model suits teams willing to structure pages and callbacks as an
+    application. Streamlit is often faster for analyst-owned, script-like tools where rerunning a Python
+    script after widget changes is convenient and its opinionated UI is sufficient. A JavaScript SPA may
+    be better for highly bespoke, browser-heavy experiences. Dash is not automatically faster or more
+    scalable; all choices depend on workload, team skill, accessibility, deployment, and lifetime. Build
+    a small proof of concept around the hardest interaction rather than relying on invented performance
+    comparisons. In production, keep the behavior aligned with the installed Dash version, validate values
+    at the server boundary, and test the relevant empty, repeated, and unauthorized cases. This makes
+    the interaction dependable beyond the happy-path demo.
+  tags:
+  - Dash
+  - Streamlit
+  - framework-choice

@@ -1,0 +1,239 @@
+- id: pw-basic-001
+  topic: architecture
+  difficulty: beginner
+  question: What is a browser context, and how is it different from a page?
+  answer: |
+    A browser context is an isolated browser session, similar to an independent profile. It owns cookies, local storage, permissions and pages. A page is a tab-like document inside that context; it has navigation state, frames and page events. Two pages in one context can share the same session cookies, while two contexts in one browser process have separate browser storage.
+
+    Tests commonly create a fresh context per test so one case's login or preferences do not leak into another. Contexts are lighter than launching a new browser process, but they still share CPU and memory. They isolate client-side browser state, not server-side records or accounts. For two simulated users, use distinct contexts and distinct authorized test identities. Close the context when finished; doing so closes its pages and releases associated session resources.
+  tags: [browser-context, page, isolation]
+
+- id: pw-basic-002
+  topic: architecture
+  difficulty: beginner
+  question: What does Playwright auto-waiting do, and what does it not do?
+  answer: |
+    Before an action such as `locator.click()`, Playwright waits for actionability conditions, including that the locator resolves uniquely and the target is visible, stable, enabled and able to receive events. This lets tests express an action rather than guessing a fixed sleep duration. A locator is resolved when used, so it can find a current element after a framework re-renders the page.
+
+    Auto-waiting does not mean Playwright waits for every application task triggered by a click. A handler might return before a save request completes. In that case, assert on the visible success state, wait for a specific response when relevant, or check navigation. Avoid `time.sleep()` as synchronization: it is both slow and unreliable. Choose an observable condition that represents the expected behavior.
+  tags: [auto-wait, actionability, synchronization]
+
+- id: pw-basic-003
+  topic: architecture
+  difficulty: beginner
+  question: What is the role of the browser process in Playwright's object model?
+  answer: |
+    Playwright launches or connects to a browser process, then creates isolated contexts within it. Each context may contain pages, and each page can contain multiple frames. The browser object represents the process-level connection; a context represents a session boundary; a page represents one tab-like target. This hierarchy determines which state is shared and what must be closed during cleanup.
+
+    A common pattern launches one browser and makes a fresh context for each independent test. That gives useful profile isolation without paying the cost of a separate process for every case. It does not make contexts resource-free: many heavy pages still compete for the same host memory and CPU. In pytest-playwright, fixtures usually manage these lifetimes, so tests should not close a shared fixture-owned browser unexpectedly.
+  tags: [browser, lifecycle, contexts]
+
+- id: pw-basic-004
+  topic: locators
+  difficulty: beginner
+  question: Why prefer `get_by_role()` over a long CSS selector?
+  answer: |
+    `get_by_role()` locates an element by its accessible role and name, for example `page.get_by_role("button", name="Save")`. This expresses what the control is to a user and assistive technology, rather than how the page happens to nest its HTML. A CSS selector tied to generated classes or element positions can break after a harmless redesign, and it may keep working even when the control has no useful accessible label.
+
+    Role locators also encourage a useful product contract: a button should have a clear name, and repeated controls should be distinguishable in context. CSS and XPath remain available when structure is the behavior being tested or semantics are insufficient. A test ID can be a good explicit hook for complex components, but should not replace semantic queries everywhere. Prefer locators that communicate intent and remain uniquely resolvable.
+  tags: [locators, accessibility, selectors]
+
+- id: pw-basic-005
+  topic: locators
+  difficulty: beginner
+  question: What does strict mode mean when a locator matches multiple elements?
+  answer: |
+    For actions that need one target, Playwright expects a locator to resolve to exactly one element. If two visible buttons are both named “Delete,” a click fails with a strict-mode violation rather than choosing one arbitrarily. That makes ambiguity explicit: the test author may have selected too broad a region, or the interface itself may have unclear controls.
+
+    Narrow the query with a meaningful scope, such as a row containing the intended invoice, then find its Delete button. Avoid using `.first` just to suppress the error because ordering may change and cause the wrong record to be deleted. `first`, `last` and `nth()` are suitable when position is part of the requirement and the test asserts that ordering. Strict mode is useful feedback, not a setting to disable for convenience.
+  tags: [strict-mode, locator, ambiguity]
+
+- id: pw-basic-006
+  topic: locators
+  difficulty: beginner
+  question: When should a test use `get_by_label()` and `get_by_test_id()`?
+  answer: |
+    Use `get_by_label()` for a form control associated with a visible or accessible label, such as `page.get_by_label("Email")`. It describes the control in terms that matter to a user and often reveals accessibility problems when the label is missing or ambiguous. Placeholder text can help identify a field, but it should not be the only durable label because placeholders disappear during entry and may be inaccessible.
+
+    Use `get_by_test_id()` when semantic roles, labels or text do not provide a stable unique locator. A dedicated test ID is an explicit contract between the UI and tests; it should be intentional and consistently named. Avoid adding test IDs to every element by default, because then tests can become coupled to implementation and miss user-facing accessibility regressions. Choose the least implementation-specific locator that still uniquely identifies the intended control.
+  tags: [labels, test-ids, accessibility]
+
+- id: pw-basic-007
+  topic: assertions
+  difficulty: beginner
+  question: Why use Playwright's `expect(locator)` assertions instead of an immediate check?
+  answer: |
+    A locator assertion such as `expect(locator).to_be_visible()` retries until the expected state appears or its timeout expires. This accounts for rendering and asynchronous updates without a fixed sleep. In contrast, `locator.is_visible()` returns a snapshot boolean. `assert locator.is_visible()` can fail immediately even though the element would appear a moment later.
+
+    Use web-first assertions for page state that may change: visibility, text, count, enabled state or attributes. Use ordinary Python `assert` for values already in memory, such as a parsed CSV row or calculated result. A good assertion checks the behavior users depend on, such as an order confirmation, not every incidental CSS class. When an assertion times out, investigate whether the locator is wrong, the expected transition never occurred or the environment was slow before simply increasing the timeout.
+  tags: [expect, assertions, retry]
+
+- id: pw-basic-008
+  topic: assertions
+  difficulty: beginner
+  question: What is the difference between `pytest-playwright` and Playwright Test?
+  answer: |
+    `pytest-playwright` is a Python pytest plugin. It provides fixtures such as `page`, `context` and `browser`, along with options to select browsers and configure test behavior. Pytest still performs Python test discovery, fixture dependency injection, parametrization and reporting. It is the typical runner choice for Playwright's Python binding.
+
+    Playwright Test is a separate JavaScript/TypeScript test runner distributed with the Node.js Playwright ecosystem. It has its own configuration format, fixture model, projects and sharding features. Similar names and APIs do not make their configuration interchangeable. In Python, use pytest and the plugin's documented fixtures and options for the pinned version. If a team wants Playwright Test's integrated runner, that means authoring tests in its supported JavaScript/TypeScript environment, not importing its runner into Python.
+  tags: [pytest, test-runner, python]
+
+- id: pw-basic-009
+  topic: assertions
+  difficulty: beginner
+  question: When should a Playwright test use sync API versus async API in Python?
+  answer: |
+    The synchronous API is often the simplest choice for ordinary pytest functions: calls like `page.goto()` and `locator.click()` block until their Playwright operation completes. The asynchronous API exposes `await` and fits an application or test harness that already uses asyncio. Keep a test consistently within one API; do not pass sync objects into async code or mix object types.
+
+    An async test needs a compatible pytest setup, commonly an async test plugin, and must respect the event loop's lifecycle. In a notebook or server where an event loop is already running, synchronous calls may conflict with that environment. Async syntax does not make actions on the same page inherently safe to run concurrently: navigation and clicks can still race. Use the API that matches the surrounding runtime and parallelize independent contexts when concurrency is useful.
+  tags: [sync, async, python]
+
+- id: pw-basic-010
+  topic: fixtures
+  difficulty: beginner
+  question: Why should most browser tests use a fresh context?
+  answer: |
+    A fresh context gives a test its own cookies, local storage, permissions and pages. This prevents a prior test's login, language preference or other browser-side state from changing the next test's starting conditions. The context is usually cheaper to create than another browser process, so it is a practical isolation unit.
+
+    Fresh context does not isolate data stored on the application server. Tests can still race if they share an account, edit the same record or use a fixed test resource name. Use separate test identities or unique data namespaces where necessary. Plugin fixtures often create contexts automatically; understand their scope and avoid expanding a mutable context to module or session scope without a deliberate reset strategy. Independent tests should be runnable in any order and should clean up their own resources.
+  tags: [fixtures, context, test-isolation]
+
+- id: pw-basic-011
+  topic: debugging
+  difficulty: beginner
+  question: What information can a Playwright trace provide after a failure?
+  answer: |
+    A Playwright trace can capture a timeline of actions, DOM snapshots, screenshots and network activity. In the trace viewer, a developer can inspect what the page looked like before and after a click, whether the locator matched, and which requests took place. That is more useful than a final screenshot alone because it can distinguish a missing element from a failed response after a successful action.
+
+    Python projects can record traces through supported pytest-playwright options or the lower-level `context.tracing` API. Check the installed plugin version for exact options. Traces may contain page text, URLs, screenshots or request information, so treat them as potentially sensitive artifacts. Capture them on failure or for a short diagnostic run, restrict access and retention, and include browser and package versions so the evidence can be reproduced.
+  tags: [traces, debugging, artifacts]
+
+- id: pw-basic-012
+  topic: debugging
+  difficulty: beginner
+  question: Why is a fixed sleep usually a poor solution for a flaky browser test?
+  answer: |
+    A fixed sleep guesses how long a page or API will take. If the wait is shorter than a slow run, the race remains; if it is longer, every successful test wastes time. A sleep also provides no evidence about which state the test is waiting for, making diagnosis harder.
+
+    Instead, wait for an observable condition that defines success: a web-first assertion on a message, a URL assertion, or a response wait associated with the action that triggered it. Playwright auto-waits for actionability before clicking, but that does not wait for all asynchronous work started by the click. Identify the precise transition the test depends on. A timeout may need adjustment for a known slow environment, but first use traces and logs to establish that the condition is correct and eventually occurs.
+  tags: [flakiness, waits, synchronization]
+
+- id: pw-basic-013
+  topic: network
+  difficulty: beginner
+  question: How can a test mock an API response with Playwright?
+  answer: |
+    Register a route before the page makes the request, then fulfill the matching request with a controlled response. For example, `page.route("**/api/orders", handler)` can invoke `route.fulfill(status=200, content_type="application/json", body='{"items": []}')`. The test can then assert that the empty-state message renders. A context-level route is useful when the behavior should apply to all pages in a context.
+
+    Keep the URL match narrow and the mock representative of an owned or documented API contract. This test checks UI rendering against the supplied response, not the real backend integration. Maintain separate tests for the actual service boundary. A route can also continue an upstream request or abort it to test error handling. Register handlers before navigation, and avoid logging sensitive headers or request bodies in CI.
+  tags: [network, route, mocking]
+
+- id: pw-basic-014
+  topic: network
+  difficulty: beginner
+  question: How do you wait for a response triggered by a button click?
+  answer: |
+    Use `page.expect_response()` as a context manager around the action that triggers the request. For example, `with page.expect_response("**/api/orders") as info: button.click()` then retrieve `info.value` and inspect its status. This registers the wait before the click, so a fast response is less likely to be missed.
+
+    Make the match specific enough to avoid capturing unrelated polling or background traffic. For complex requests, provide a predicate that checks method, URL or request data. Waiting for a response is most useful when the response itself is part of the test contract. If the purpose is to verify user-visible behavior, a web-first assertion on the resulting page may be more resilient. Do not add a response wait for requests the UI does not guarantee to make.
+  tags: [responses, network, waiting]
+
+- id: pw-basic-015
+  topic: authentication
+  difficulty: beginner
+  question: What does `browser_context.storage_state()` save?
+  answer: |
+    `browser_context.storage_state()` returns browser storage state, including cookies and local storage for the context's origins. It can be saved to a file and passed into a new context as `storage_state="path/to/state.json"` to start with an authenticated session. Supported versions can include IndexedDB when requested. Consult the version-specific API because capabilities can evolve.
+
+    It is not a complete browser profile. Ordinary storage state does not include session storage, in-memory application state or every mechanism an application may use. A saved state can expire or be invalidated by the server. More importantly, it may contain session credentials: do not commit it, expose it as an unrestricted CI artifact or reuse a production account. Generate short-lived state for test identities, keep files ignored and verify the restored session through an authenticated page assertion.
+  tags: [storage-state, authentication, secrets]
+
+- id: pw-basic-016
+  topic: authentication
+  difficulty: beginner
+  question: How should a test model two users interacting with the same feature?
+  answer: |
+    Create two browser contexts, each initialized with a distinct authorized test user's state, and use a page in each context. A context separates cookies and browser storage; two pages in the same context may share those credentials and therefore represent the same identity. Give the actors clear names in the test and assert the handoff from both sides when appropriate.
+
+    Context isolation does not create backend users or isolate their shared records. Set up distinct test accounts in a safe environment, ensure data is unique to the test run, and clean up resources. Avoid order dependence between tests or parallel workers. For an access-control scenario, test the actual operation and server response when necessary; hiding a button for the wrong role is not sufficient evidence that the server rejects unauthorized requests.
+  tags: [multi-user, contexts, authorization]
+
+- id: pw-basic-017
+  topic: files
+  difficulty: beginner
+  question: How do you wait for and save a browser download?
+  answer: |
+    Use `page.expect_download()` around the click that starts the download. Retrieve the resulting download object and call `save_as()` with a deliberate artifact path if the file must outlive the browser context. This event-based pattern handles a fast download because the listener is registered before the action. The object also exposes metadata such as its suggested filename.
+
+    Do not treat the filename as proof of a valid export. Read a text file and verify its columns or known content, or validate a binary format appropriately. The browser's temporary download location is managed by Playwright and may disappear when the context closes, so save important artifacts explicitly. Keep artifact paths unique per test or worker to avoid parallel tests overwriting one another, and avoid putting sensitive exports in public CI artifacts.
+  tags: [downloads, artifacts, files]
+
+- id: pw-basic-018
+  topic: files
+  difficulty: beginner
+  question: What is the usual way to upload a file through a file input?
+  answer: |
+    Use `locator.set_input_files()` on the file input, for example `page.get_by_label("Attachment").set_input_files("tests/data/receipt.pdf")`. This sets the chosen file without relying on a native operating-system dialog. If a custom button opens a chooser, wrap the click in `page.expect_file_chooser()` and call `set_files()` on the resulting chooser.
+
+    Use a small, safe fixture file with known contents and a path that exists in the test environment. Avoid absolute paths tied to a developer machine or files downloaded dynamically from the internet. Test both successful upload and relevant validation behavior with controlled fixtures. For ordinary UI tests, setting the input directly is reliable; if drag-and-drop itself is a product requirement, add a separate test that exercises that interaction. Always assert the resulting page state or server-visible effect.
+  tags: [uploads, set-input-files, fixtures]
+
+- id: pw-basic-019
+  topic: files
+  difficulty: beginner
+  question: Can `page.pdf()` be used in all Playwright browser engines?
+  answer: |
+    The Python `page.pdf()` method generates a PDF through Chromium's printing support; it is not a portable capability across all browser engines. Tests using it should explicitly target Chromium rather than assuming the same API works in Firefox and WebKit. PDF output also uses print media by default, so print CSS may produce a different layout from the screen.
+
+    Set page size and margins when they matter, and use `page.emulate_media(media="print")` if you need to inspect print styling before generation. Validate the produced artifact with a PDF parser, text checks or visual review; a successful method call only means bytes were produced. For a cross-browser product, test the document's user-facing print behavior appropriately, but keep the API-specific PDF generation test scoped to the engine that supports it.
+  tags: [pdf, chromium, print-media]
+
+- id: pw-basic-020
+  topic: concurrency
+  difficulty: beginner
+  question: What does pytest-xdist add to a Playwright test suite?
+  answer: |
+    `pytest-xdist` can execute pytest tests in multiple worker processes, commonly selected with an option such as `-n 4`. This can reduce elapsed time when tests are independent and the host has enough capacity. It is an optional plugin; pytest does not parallelize tests by default, and pytest-playwright alone should not be assumed to distribute test cases across processes.
+
+    More workers also create more browsers or contexts, consume memory and CPU, and increase load on the application. Shared accounts, fixed test data, ports and files can race. Start with a measured worker count, use unique resource namespaces or separate accounts, and inspect first-run failures rather than hiding them with retries. Under a constrained container, a high worker count may slow the suite or crash browsers. Parallelism is safe only when both browser and backend state are controlled.
+  tags: [xdist, concurrency, resources]
+
+- id: pw-basic-021
+  topic: concurrency
+  difficulty: beginner
+  question: What is the difference between parallel tests and sharding?
+  answer: |
+    Parallel tests run multiple test cases concurrently within a test invocation, often using pytest-xdist worker processes. Sharding splits a larger suite across separate jobs or machines, with each job running a subset. A team may use both: CI shards distribute groups of tests, while each shard uses a limited number of local workers.
+
+    Sharding requires a reliable partition rule. The union of the shard selections should include every intended test exactly once, and each job needs its own report and failure artifacts. Splitting only by file can produce unbalanced jobs if test durations vary. Parallel execution and sharding both need isolated test data, because neither mechanism prevents two cases from editing the same server record. Compare timing and resource use before increasing either dimension.
+  tags: [sharding, parallelism, pytest]
+
+- id: pw-basic-022
+  topic: scraping
+  difficulty: beginner
+  question: When is browser automation a poor choice for extracting web data?
+  answer: |
+    A browser is often unnecessary when a permitted API, export, or stable HTML response contains the required data. Launching a full browser uses more memory and CPU than a direct HTTP client and parser, and browser rendering adds complexity. Prefer the least costly method that satisfies the authorized use case. Playwright is useful when JavaScript execution or user-visible interaction is genuinely required.
+
+    Permission, privacy and rate limits matter regardless of the tool. Public reachability does not automatically mean collection or republishing is allowed. Define the scope, fields and retention period, minimize personal data, and respect published restrictions. A browser must not be used to evade authentication, anti-bot controls, CAPTCHAs or rate limits. For broad crawling, evaluate an authorized dataset or managed service rather than scaling an unbounded fleet of browser workers.
+  tags: [scraping, ethics, rate-limits]
+
+- id: pw-basic-023
+  topic: ci
+  difficulty: beginner
+  question: Why must the Playwright package and browser binaries be compatible in CI?
+  answer: |
+    The Python Playwright package and browser binaries are version-coupled. Installing a package does not necessarily install browser executables; the Playwright CLI installs compatible browsers. A cached browser from a different package version can produce launch failures or subtle behavior differences. Pin the package and install the required browser engines from the same environment.
+
+    CI images should include the operating-system dependencies required by the browser. The supported `playwright install --with-deps` command can help on Linux environments where package installation is allowed, or use a version-matched official image. Cache keys should include operating system and Playwright version. Run a small smoke test that launches the target engine after image changes. Install only engines needed by that job, and collect browser version information with test artifacts to make failures reproducible.
+  tags: [ci, browsers, installation]
+
+- id: pw-basic-024
+  topic: migration
+  difficulty: beginner
+  question: What should a team evaluate before moving tests from Selenium to Playwright?
+  answer: |
+    Inventory the existing suite's language bindings, browser coverage, remote Grid, custom capabilities, CI setup, authentication, downloads, reporting and team ownership. Selenium uses the WebDriver protocol and has a broad ecosystem; Playwright brings its own automation protocol, contexts, auto-waiting locators and trace tooling. The better fit depends on requirements, not a universal claim that one is faster or newer.
+
+    Port one representative flow that includes realistic waits, fixtures and artifacts, then compare maintenance, observability, resource use and supported browsers. Selenium may remain preferable when WebDriver compatibility, Grid investment or a required language matters. Migration should be incremental with a clear criterion for retiring duplicate coverage. Rework tests around Playwright's locator and context model rather than mechanically translating Selenium commands and preserving fixed-wait habits.
+  tags: [selenium, migration, trade-offs]

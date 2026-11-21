@@ -21,10 +21,10 @@ Status legend: **done** · **running** (subagent authoring now) · **queued**
 | Module | Slug | Status |
 |---|---|---|
 | FastAPI | `fastapi` | done |
-| Pytest | `pytest` | running |
-| Streamlit | `streamlit` | running |
-| Plotly Dash | `dash` | running |
-| Gradio | `gradio` | running |
+| Pytest | `pytest` | done |
+| Streamlit | `streamlit` | done |
+| Plotly Dash | `dash` | done |
+| Gradio | `gradio` | done |
 
 ## Databases & warehousing
 | Module | Slug | Status |
@@ -50,8 +50,8 @@ Status legend: **done** · **running** (subagent authoring now) · **queued**
 | Delta Lake | `delta-lake` | done |
 | Apache Kafka | `kafka` | done |
 | dbt | `dbt` | done |
-| Snowflake | `snowflake` | done |
-| Databricks | `databricks` | done |
+| Snowflake | `snowflake` | running |
+| Databricks | `databricks` | running |
 
 ## Cloud & infrastructure
 | Module | Slug | Status |
@@ -72,28 +72,28 @@ Status legend: **done** · **running** (subagent authoring now) · **queued**
 ## AI, LLMs & agentic systems
 | Module | Slug | Status |
 |---|---|---|
-| LLM Agents | `llm-agents` | queued |
-| Tool Calling | `tool-calling` | queued |
-| MCP Servers | `mcp` | queued |
-| RAG | `rag` | queued |
-| LangChain | `langchain` | queued |
-| LangGraph | `langgraph` | queued |
-| PydanticAI | `pydanticai` | queued |
-| CrewAI | `crewai` | queued |
+| LLM Agents | `llm-agents` | running |
+| Tool Calling | `tool-calling` | running |
+| MCP Servers | `mcp` | running |
+| RAG | `rag` | running |
+| LangChain | `langchain` | running |
+| LangGraph | `langgraph` | running |
+| PydanticAI | `pydanticai` | running |
+| CrewAI | `crewai` | running |
 
 ## Web automation
 | Module | Slug | Status |
 |---|---|---|
-| Selenium | `selenium` | running |
-| Playwright | `playwright` | running |
-| Firecrawl | `firecrawl` | running |
-| n8n | `n8n` | running |
+| Selenium | `selenium` | done |
+| Playwright | `playwright` | done |
+| Firecrawl | `firecrawl` | done |
+| n8n | `n8n` | done |
 
 ## Analytics & BI
 | Module | Slug | Status |
 |---|---|---|
-| Tableau | `tableau` | running |
-| Power BI | `power-bi` | running |
+| Tableau | `tableau` | done |
+| Power BI | `power-bi` | done |
 
 ## Architecture
 | Module | Slug | Status |

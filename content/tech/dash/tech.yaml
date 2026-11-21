@@ -1,0 +1,95 @@
+slug: dash
+title: Plotly Dash
+category: python-ecosystem
+summary: Build interactive, data-driven web applications in Python with Dash callbacks, Plotly figures, and production-ready server patterns.
+level: core
+relations:
+  - to: python
+    type: foundation
+    note: Dash applications are Python programs; Python functions, packaging, concurrency, and data-access practices shape the app's behavior.
+  - to: streamlit
+    type: alternative
+    note: Both serve interactive Python data apps; Dash emphasizes explicit reactive callbacks and composable web components, while Streamlit favors a rerun-oriented scripting model.
+intro:
+  what: |
+    Plotly Dash is a Python framework for building interactive web applications, especially analytical dashboards. A Dash app declares a component tree as its layout, then connects component properties through callbacks. The browser renders the UI and reports user interactions; the Python server runs callback functions and returns updated properties. Dash includes the `dash` component package, core components such as `dcc.Graph`, and the Plotly.py figure model, while third-party component libraries add design systems and controls.
+
+    Dash is more than a chart wrapper: it is a reactive application framework with a defined browser/server boundary. The layout describes what can exist, callbacks describe how state changes, and the component properties form the interface between UI and application logic. Understanding that model matters more than memorizing individual components.
+  why: |
+    Data teams often need a shareable, multi-user interface around Python analysis without rebuilding every interaction in a separate JavaScript application. Dash lets domain developers keep calculations and data access in Python while delivering browser-based controls, charts, tables, and navigation. Its explicit dependency graph supports complex interactions and custom component libraries, but also asks developers to design state, callbacks, and server capacity deliberately.
+  problems:
+    - Turn Python analyses into interactive browser applications without hand-writing a full frontend.
+    - Connect filters, forms, charts, tables, and navigation through explicit reactive dependencies.
+    - Reuse Plotly figures and Python data tooling in stakeholder-facing analytical products.
+    - Build controlled, multi-page interfaces with reusable components and familiar web deployment options.
+  where_used:
+    - Internal analytics, operational monitoring, and decision-support dashboards.
+    - Data products where users need to filter, inspect, and export results.
+    - Scientific and financial interfaces requiring custom interactions and Plotly visualizations.
+    - Prototypes that need a path from a single analyst-owned app to a tested web service.
+  ecosystem: |
+    Dash builds on Python and Flask's WSGI ecosystem, and Plotly figures are commonly rendered by `dcc.Graph`. The component tree and callback protocol are served to the browser, where React-based components handle interaction. Add-ons such as Dash Bootstrap Components and Dash Mantine Components provide polished controls; Flask extensions or an identity-aware reverse proxy can provide authentication. A Dash app may share data and APIs with FastAPI services, but the frameworks have different request and UI models.
+  alternatives:
+    - name: Streamlit
+      note: Often faster for script-like data apps and exploratory workflows; Dash is a strong fit when explicit callback graphs, component-level control, or a custom multi-page experience matter.
+    - name: A JavaScript SPA
+      note: Better when the product needs a highly custom frontend, browser-heavy interactions, or a separately designed client/server contract.
+    - name: Panel
+      note: Another Python framework for analytical applications, useful where its HoloViz integrations fit the stack.
+  related: [python, streamlit, plotly]
+chapters:
+  - id: app-structure-callback-model
+    title: App Structure and the Callback Model
+    file: chapters/01-app-structure-callback-model.md
+    minutes: 12
+    level: core
+  - id: inputs-outputs-state
+    title: Inputs, Outputs, State, and Initial Calls
+    file: chapters/02-inputs-outputs-state.md
+    minutes: 12
+    level: core
+  - id: multiple-outputs-pattern-ids
+    title: Multiple Outputs and Pattern-Matching IDs
+    file: chapters/03-multiple-outputs-pattern-ids.md
+    minutes: 12
+    level: core
+  - id: graphs-figures
+    title: dcc.Graph and Plotly Figure Patterns
+    file: chapters/04-graphs-figures.md
+    minutes: 12
+    level: core
+  - id: layout-components-themes
+    title: Layout, Themes, and Component Libraries
+    file: chapters/05-layout-components-themes.md
+    minutes: 12
+    level: core
+  - id: performance-state-background
+    title: Performance, State, and Background Work
+    file: chapters/06-performance-state-background.md
+    minutes: 13
+    level: advanced
+  - id: multipage-routing
+    title: Multi-Page Apps and Routing
+    file: chapters/07-multipage-routing.md
+    minutes: 12
+    level: core
+  - id: data-access
+    title: Data Access Without Blocking the Server
+    file: chapters/08-data-access.md
+    minutes: 13
+    level: advanced
+  - id: authentication-deployment
+    title: Authentication and Deployment
+    file: chapters/09-authentication-deployment.md
+    minutes: 13
+    level: advanced
+  - id: testing-framework-choice
+    title: Testing Dash and Choosing the Right UI
+    file: chapters/10-testing-framework-choice.md
+    minutes: 13
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

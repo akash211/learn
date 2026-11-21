@@ -1,0 +1,79 @@
+concepts:
+  - title: Workflow graph
+    detail: A workflow connects triggers, actions, transformations and control-flow nodes; its graph is not a transaction.
+  - title: Trigger activation
+    detail: Production webhook and schedule behavior generally depends on the workflow being active; test and production webhook URLs differ.
+  - title: Item cardinality
+    detail: Nodes pass arrays of items; one item containing an array is not the same as many items.
+  - title: Current item expression
+    detail: "`{{ $json.field }}` reads the current item's field; validate missing values and expected types."
+  - title: Paired-item lineage
+    detail: Item linking relates outputs to inputs; aggregations, filters and custom Code node output can alter pairing.
+  - title: Edit Fields
+    detail: Use Edit Fields for visible mapping, renaming and field removal; explicitly decide whether to keep other input fields.
+  - title: HTTP Request
+    detail: Generic API calls require deliberate auth, pagination, timeout, response, rate-limit and idempotency behavior.
+  - title: Execution data
+    detail: Execution history aids debugging but may contain sensitive payloads; configure saving and pruning for a retention need.
+  - title: Credential encryption
+    detail: Self-hosted credentials are encrypted using `N8N_ENCRYPTION_KEY`; protect and preserve the key with database backups.
+  - title: Queue mode
+    detail: Queue mode uses Redis for jobs and workers for execution; workflow definitions and credentials remain in the shared database.
+  - title: Worker consistency
+    detail: Main and worker processes need compatible versions, shared database access and the same encryption key.
+  - title: Error workflow
+    detail: Configure an Error Trigger workflow for failure visibility; it does not roll back prior external side effects.
+  - title: Webhook idempotency
+    detail: Use stable provider event IDs, durable deduplication and destination idempotency because deliveries and retries can repeat.
+  - title: Environment promotion
+    detail: Promote reviewed workflow definitions with environment-specific credentials and verify URLs, activation and destinations.
+traps:
+  - Assuming fair-code means unrestricted open-source redistribution or SaaS rights.
+  - Treating a container volume as a tested backup or changing the encryption key casually.
+  - Assuming a green manual run proves that production trigger activation and payloads are correct.
+  - Retrying a write after timeout without checking idempotency or reconciling the remote result.
+  - Believing “Continue On Fail” means retry, recovery or business success.
+  - Assuming a model's valid JSON or confident answer is verified or authorized.
+advanced:
+  - Queue mode improves execution separation and scaling, not exactly-once external side effects.
+  - In webhook verification, follow provider signature canonicalization and use original bytes if its scheme requires them.
+  - Use atomic unique constraints or destination idempotency keys to avoid deduplication races.
+  - Keep polling cursors durable and advance them only after the corresponding data is safely handled.
+  - Separate model proposal, deterministic validation and authenticated approval for high-impact actions.
+  - Test restoration of database plus encryption key; backups that have never been restored are unverified.
+comparisons:
+  - a: n8n Cloud
+    b: self-hosted n8n
+    difference: Cloud delegates platform operations to the provider; self-hosting gives infrastructure control but requires operator-managed patching, security, backups and recovery.
+  - a: trigger node
+    b: action node
+    difference: A trigger starts a run from an event or schedule; an action performs work after execution begins.
+  - a: item array
+    b: array field
+    difference: Multiple n8n items are processed as separate data units; an array field is nested inside one item's JSON.
+  - a: mapped items
+    b: paired items
+    difference: Mapping processes items; pairing preserves lineage between outputs and their originating inputs for cross-node references.
+  - a: error workflow
+    b: retry policy
+    difference: An error workflow alerts or coordinates after failure; a retry policy repeats an operation and must account for idempotency.
+  - a: n8n
+    b: Airflow
+    difference: n8n excels at visible connector-centric automation; Airflow is stronger for scheduled dependency-heavy data pipelines and backfills.
+commands:
+  - label: Run n8n in a container for local evaluation
+    code: "docker run --rm -it --name n8n -p 5678:5678 docker.n8n.io/n8nio/n8n"
+  - label: Run n8n worker with controlled concurrency
+    code: "n8n worker --concurrency=5"
+  - label: Configure queue execution mode
+    code: "EXECUTIONS_MODE=queue"
+  - label: Configure externally visible webhook base URL
+    code: "WEBHOOK_URL=https://automation.example.org/"
+  - label: Set self-hosted encryption key through a secret manager
+    code: "N8N_ENCRYPTION_KEY=<protected-secret-value>"
+  - label: Check container logs
+    code: "docker logs --tail=100 n8n"
+  - label: Check running containers
+    code: "docker compose ps"
+  - label: Validate content package
+    code: ".venv/bin/python -m backend.app.content"

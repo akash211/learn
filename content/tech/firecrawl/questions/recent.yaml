@@ -1,0 +1,110 @@
+- id: fc-recent-001
+  topic: api evolution
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: How should a team choose between the current scrape JSON format and a legacy extraction endpoint?
+  answer: |
+    First check the current Firecrawl migration guide and API reference rather than copying an older example. The extraction surface has evolved: current guidance points to `/v2/scrape` with a JSON format for a known single page, while broad wildcard or multi-page discovery and extraction is moving toward an agent-oriented workflow. A legacy `/extract` route may still appear in tutorials or SDKs, but an integration should follow the currently supported path and note any deprecation window.
+
+    The endpoint choice should follow the task boundary. A known URL with a defined schema is a bounded page transformation. A request that must discover many pages has scope, job tracking and coverage concerns that deserve explicit orchestration or the current multi-page agent workflow. Pin SDK versions, add contract tests, and isolate provider calls behind an adapter so endpoint migrations do not spread across business logic.
+  tags: [api-migration, structured-output, versioning]
+- id: fc-recent-002
+  topic: api behavior
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: How do you reason about separate API and target-page status in a scrape response?
+  answer: |
+    Model the API request and target website as two independent outcomes. The API HTTP response and success/error payload describe whether the provider handled the scrape request. Page metadata such as `statusCode` describes the target site's response. A request can be successfully processed by the provider while the target returned 404, 403 or 500. Those outcomes should not be collapsed into one Boolean.
+
+    In a pipeline, classify the provider failure first, then inspect the target status and content quality. A timeout may merit bounded retry; a target 404 may be a valid link-check observation but not indexable article content. Record the status, source URL, and any metadata error. Add metrics for API failures, target non-2xx statuses and empty content separately. This avoids retrying permanent source errors and makes provider incidents distinguishable from site changes.
+  tags: [status-codes, observability, reliability]
+- id: fc-recent-003
+  topic: crawling
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: How would you make a large crawl restartable when the result payload is paginated?
+  answer: |
+    Persist the crawl job identifier and the exact request scope before polling. When results are ready, retrieve one result page at a time and write each page idempotently using a source identity and content hash. Only after a result page is committed should the client save the next cursor or URL. If the process fails, resume from the last committed cursor rather than submitting a duplicate crawl or losing already received data.
+
+    Track crawl status separately from result-ingestion status. A provider may report the job completed while the response still contains a `next` link because the result body is paginated. Continue until no next page remains and reconcile counts. Store page-level target status separately from crawler errors. If an SDK automatically accumulates all results, assess memory use for large jobs; direct incremental pagination or webhook delivery may better fit the workload.
+  tags: [pagination, restartability, async-jobs]
+- id: fc-recent-004
+  topic: extraction
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: How would you evaluate schema-based extraction quality beyond checking valid JSON?
+  answer: |
+    JSON validity only proves that the response can be parsed, not that its fields are correct. Build a fixture set with pages where each field is present, absent, ambiguous and represented in a confusing nearby context. Define expected values and evaluate field-level precision, completeness, normalization and evidence support. Include the target status and extracted content quality so a parser failure is not mistaken for model failure.
+
+    Validate output locally against a versioned schema and business rules, such as date ranges, enumerations or relationships among fields. For consequential values, retain source evidence or require a review step. Track pass rates by source domain, schema version and extraction mode; a sudden change can indicate template drift or a provider change. Keep prompt and schema versions with each record so regressions can be reproduced and outputs reprocessed.
+  tags: [evaluation, schema, quality]
+- id: fc-recent-005
+  topic: javascript rendering
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: A scrape returns a page shell but misses the main content. How would you investigate?
+  answer: |
+    Separate acquisition, rendering and extraction. First inspect target status, content type, metadata and any available HTML or screenshot for a representative URL. If the initial HTML already contains the needed text but Markdown does not, the issue may be cleanup or content selection. If neither contains it, the renderer may have captured before client-side hydration, an API request may have failed, or the content may require interaction or authentication.
+
+    Test a modest wait or a supported readiness condition and compare the resulting output for a known heading or field. Check whether lazy loading requires scrolling or a simple action, and verify the action outcome rather than assuming it worked. Use multiple representative URLs because one template may behave differently. If the workflow requires complex session state, use a controlled Playwright flow or another authorized path instead of increasing waits indefinitely.
+  tags: [javascript, debugging, rendering]
+- id: fc-recent-006
+  topic: pdfs
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: What validation would you add when ingesting PDFs through a scrape workflow?
+  answer: |
+    Treat PDF text as an extraction result that needs quality checks. Confirm the returned content type and page identity, then check for expected section names, meaningful text length and any available page counts or locators. PDFs can contain selectable text, scanned images, two-column layouts, tables or mixed content. OCR may introduce character errors, while layout reconstruction can put words in the wrong reading order.
+
+    Build test fixtures that represent these cases, not just a simple one-column report. For high-impact data, compare critical values with the rendered page or a trusted parser and preserve page numbers for citations. A successful provider response does not prove the content is complete or in order. For local files, use the current document parse workflow or an appropriate local library. Keep extraction version and source metadata so a parser change can be audited.
+  tags: [pdf, validation, documents]
+- id: fc-recent-007
+  topic: operations
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: How would you control usage for a crawl whose URL count is unknown?
+  answer: |
+    Start with discovery and a small pilot rather than a full crawl. Map a narrow domain or path, inspect URL patterns and estimate the volume. Set an explicit crawl page limit, exclude irrelevant paths, and control external links and subdomains. Choose only the output formats the consumer needs, because additional features and document types may affect resource usage. Credits and limits depend on the current plan and request options, so use the account's current documentation rather than a fixed remembered price.
+
+    Monitor pages attempted, useful pages, retries, response bytes and downstream processing. Set job and daily budgets, and stop or require approval when estimates exceed them. Process results incrementally and retry only transient failures. The meaningful unit is usage per validated document, not simply per API request. A low useful-page yield often indicates scope or source-quality problems that should be corrected before increasing capacity.
+  tags: [limits, budgeting, crawl]
+- id: fc-recent-008
+  topic: reliability
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: What retry policy would you use for a Firecrawl ingestion job?
+  answer: |
+    Classify errors before retrying. Network timeouts, temporary provider errors and rate limits may be transient; invalid URLs, stable 404s and access-denied responses usually are not. Honor any retry-after instruction. Otherwise use capped exponential backoff with jitter, a maximum attempt count and an overall deadline. Bound concurrent requests with a semaphore or token bucket rather than launching unbounded tasks.
+
+    Retry the smallest failed unit, such as one URL or one result page, not an entire successful batch. Persist job IDs, attempt counts and results so restarts are safe. Make writes idempotent using source identity and content hash, because a client timeout can happen after remote work was accepted. Track provider errors, target statuses and empty-content validation separately. This policy protects service limits, avoids retry storms and gives operators evidence about whether a problem is transient or systematic.
+  tags: [retries, rate-limits, idempotency]
+- id: fc-recent-009
+  topic: rag ingestion
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: How would you refresh a web corpus without re-embedding every page on every run?
+  answer: |
+    Maintain a normalized URL identity and a hash of normalized extracted content. On each refresh, discover candidate URLs and scrape within a bounded scope. Compare hashes to the last successful version, then rechunk and re-embed only pages whose content changed or whose processing version requires a rebuild. Store fetched time and extractor, normalization and chunker versions so a pipeline change can be distinguished from a source change.
+
+    Do not delete the last good document just because a crawl did not rediscover it once; discovery may be incomplete or a request may have failed. Treat removal as a separate policy decision, potentially confirmed by a targeted fetch or stable source signal. Make updates and deletes idempotent across document, chunk, vector and cache layers. Preserve URL, section and retrieval timestamp for citations and freshness filters.
+  tags: [rag, refresh, deduplication]
+- id: fc-recent-010
+  topic: alternatives
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: How would you compare Firecrawl with Playwright plus trafilatura or Crawl4AI?
+  answer: |
+    Compare candidates using the same representative URL set and acceptance criteria. Include static pages, JavaScript-rendered content, PDFs, redirects, pagination and any authorized interactive cases. Measure useful-page yield, content fidelity, status handling, failure recovery, latency, resource usage and operator time. A homepage-only demo can hide the cases that dominate maintenance.
+
+    Firecrawl offers a managed extraction and discovery API, trading some browser-level control for convenience. Playwright offers direct interaction control but leaves browser fleet operations, queues, retries and extraction to the team. HTTP plus trafilatura can be efficient for stable static articles but cannot run page JavaScript by itself. Crawl4AI is open source and customizable, but self-hosting requires patching and operating it. Include plan-dependent credits/limits and engineering labor in total cost, and keep a common output adapter so the decision can change later.
+  tags: [comparison, playwright, crawl4ai]

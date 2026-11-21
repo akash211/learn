@@ -1,0 +1,242 @@
+- id: dash-recent-001
+  topic: callback-design
+  difficulty: intermediate
+  period: 2024-2026
+  type: representative
+  question: How would you decide between a full figure return and a `Patch` update in a Dash callback?
+  answer: 'Return a complete figure when filters change the underlying dataset, trace structure, or much
+    of the layout. It is straightforward to test and avoids depending on prior browser state. A `dash.Patch`
+    can be useful when only a small portion of an existing component property needs to change, such as
+    adjusting one layout attribute or appending a bounded update. It reduces transfer only when the patch
+    is genuinely smaller than the full property; it does not make a large dataset cheap if the patch includes
+    that data. First measure callback duration and payload size, then choose the simpler correct design.
+    Check the installed Dash version and the component property’s patch support, and test updates when
+    the figure is initially empty or has changed shape.
+
+    '
+  tags:
+  - Patch
+  - figures
+  - performance
+- id: dash-recent-002
+  topic: callbacks
+  difficulty: intermediate
+  period: 2024-2026
+  type: representative
+  question: How can a callback provide consistent loading and disabled states while it runs?
+  answer: Use a loading indicator such as `dcc.Loading` when a region should communicate that an output
+    is waiting. In supported Dash versions, the callback `running` option can set component properties
+    for the duration of execution—for example, disable the submit button while a request is active, then
+    restore it. These are user-feedback mechanisms, not concurrency control or idempotency. A repeated
+    request may still arrive from another tab or a modified client, and an external write may complete
+    even if the browser disconnects. For important actions, validate authorization, make the operation
+    idempotent, and consider a background job with a durable status record. Test that the disabled state
+    is restored on errors and that the UI has a useful failure path. In production, keep the behavior
+    aligned with the installed Dash version, validate values at the server boundary, and test the relevant
+    empty, repeated, and unauthorized cases. This makes the interaction dependable beyond the happy-path
+    demo.
+  tags:
+  - running
+  - loading
+  - callbacks
+- id: dash-recent-003
+  topic: background-callbacks
+  difficulty: advanced
+  period: 2024-2026
+  type: representative
+  question: What must be configured before a callback marked `background=True` is production-ready?
+  answer: 'A background callback needs a configured background callback manager, and its queue, result
+    storage, worker processes, and failure policy must be operated as infrastructure. Dash releases support
+    managers such as Diskcache for local development and Celery integrations for distributed deployments;
+    the exact constructor and import names should be checked against the pinned version. The job must
+    be safe to retry, scoped to an authorized user, bounded in runtime and resource use, and observable
+    through status and logs. Store only what the user is permitted to retrieve, and define expiry for
+    results. Do not mistake a background callback for a transactional job system: cancellation may not
+    undo an external side effect, and delivery guarantees depend on the manager and backend configuration.
+
+    '
+  tags:
+  - background
+  - Celery
+  - Diskcache
+- id: dash-recent-004
+  topic: state
+  difficulty: intermediate
+  period: 2024-2026
+  type: representative
+  question: How do you decide between `dcc.Store` and a server-side cache?
+  answer: Use `dcc.Store` for compact, JSON-safe client state such as selected filter values or a small
+    temporary preference. It lives in the browser, so a user can inspect or modify it; it is not appropriate
+    for secrets, access decisions, or large datasets. Use server-side storage or a shared cache for large,
+    sensitive, reusable, or cross-worker data. A browser can keep an opaque key, but the server must authorize
+    the user and validate that key each time it is used. With several Gunicorn workers, a process-local
+    dictionary is not shared, so use a backend such as Redis when workers need common state. Decide freshness,
+    TTL, invalidation, and failure behavior before choosing either storage option. In production, keep
+    the behavior aligned with the installed Dash version, validate values at the server boundary, and
+    test the relevant empty, repeated, and unauthorized cases. This makes the interaction dependable beyond
+    the happy-path demo.
+  tags:
+  - dcc.Store
+  - caching
+  - state
+- id: dash-recent-005
+  topic: patterns
+  difficulty: intermediate
+  period: 2024-2026
+  type: representative
+  question: How would you implement an editable list of dynamic filter rows without registering a callback
+    per row?
+  answer: 'Give each row''s components dictionary IDs with a shared `type` and a stable row key, such
+    as `{"type": "filter-value", "index": row_id}`. Use a pattern-matching dependency with `ALL` to collect
+    the values, or `MATCH` when each row''s input updates a corresponding output. Keep the key stable
+    when rows are reordered or deleted; a display position is not a durable record identifier. When aggregating
+    an `ALL` list, associate values with their keys rather than assuming list order encodes business meaning.
+    Bound the number of rows and validate fields/operators against an allowlist before querying. Test
+    adding, removing, and reordering rows because identity mistakes often appear only after the initial
+    layout changes. In production, keep the behavior aligned with the installed Dash version, validate
+    values at the server boundary, and test the relevant empty, repeated, and unauthorized cases. This
+    makes the interaction dependable beyond the happy-path demo.'
+  tags:
+  - pattern-matching
+  - dynamic-components
+- id: dash-recent-006
+  topic: callbacks
+  difficulty: intermediate
+  period: 2024-2026
+  type: representative
+  question: How should multiple callbacks that update one logical value be designed?
+  answer: Prefer one callback as the clear owner of an output property. If different buttons or events
+    affect the same value, route them to that callback and use `dash.ctx.triggered_id` to distinguish
+    the event, or represent the value through an explicit state-reduction pattern. Multiple writers can
+    have unclear ordering and make the result depend on timing. Dash supports `allow_duplicate=True` for
+    duplicate outputs in supported scenarios, with restrictions including initial-call handling; it should
+    be an intentional exception, not a shortcut around callback design. Separate independent outputs or
+    actions into separate callbacks when they have distinct failure and authorization behavior. Document
+    which callback owns each property and test competing triggers so updates cannot silently overwrite
+    one another. In production, keep the behavior aligned with the installed Dash version, validate values
+    at the server boundary, and test the relevant empty, repeated, and unauthorized cases. This makes
+    the interaction dependable beyond the happy-path demo.
+  tags:
+  - allow_duplicate
+  - callback-ownership
+- id: dash-recent-007
+  topic: pages
+  difficulty: intermediate
+  period: 2024-2026
+  type: representative
+  question: What should you verify when using Dash Pages in a multi-page application?
+  answer: Verify page modules are discovered and registered at app startup, each has the intended URL
+    path and layout, and the shared shell includes `dash.page_container`. Test direct navigation, refresh,
+    browser back/forward, query parameters, and not-found behavior; a page that works only after clicking
+    from the home page is incomplete. Avoid expensive import-time work in page modules because every worker
+    imports them. Callback dependencies for components not present on the current page need a deliberate
+    dynamic-layout strategy rather than blanket suppression of validation errors. Most importantly, the
+    page registry does not authorize access. Enforce permissions in server-side callbacks and data services,
+    and ensure deep links work correctly through the deployment's URL prefix. In production, keep the
+    behavior aligned with the installed Dash version, validate values at the server boundary, and test
+    the relevant empty, repeated, and unauthorized cases. This makes the interaction dependable beyond
+    the happy-path demo.
+  tags:
+  - Dash Pages
+  - routing
+- id: dash-recent-008
+  topic: performance
+  difficulty: advanced
+  period: 2024-2026
+  type: representative
+  question: What does a production performance investigation of a slow Dash interaction include?
+  answer: 'Measure the stages rather than assuming Python computation is the only bottleneck: browser
+    event and rendering, request payload size, queue wait, callback execution, downstream query latency,
+    response serialization, and return transfer. Log callback duration with a safe correlation ID, and
+    measure database pool saturation and cache hit rate separately. A large figure may spend more time
+    serializing and rendering than calculating. Many slow callbacks may indicate worker exhaustion or
+    an overloaded data source. Optimize the measured stage: aggregate data, cache with correct scope,
+    reduce payload, use a clientside callback for tiny local work, or move long jobs to a configured background
+    manager. Establish a baseline and verify user-visible latency after the change; do not claim improvement
+    from an ungrounded benchmark.
+
+    '
+  tags:
+  - performance
+  - observability
+- id: dash-recent-009
+  topic: deployment
+  difficulty: advanced
+  period: 2024-2026
+  type: representative
+  question: Why can increasing Gunicorn workers make a Dash app less reliable?
+  answer: More workers allow more simultaneous requests only until a shared dependency becomes the bottleneck.
+    Each worker consumes memory, has its own process-local cache, and may create its own database connection
+    pool. Increasing workers can therefore multiply total connections beyond the database limit or raise
+    memory use until containers are killed. It can also duplicate scheduled or import-time work if that
+    work was incorrectly placed in every process. Measure callback latency, queueing, memory, and pool
+    utilization, then size workers and pool limits together. Long-running work should move to a background
+    queue. Test behavior under realistic concurrent sessions; worker count is a deployment parameter tied
+    to workload and instance size, not a universal formula. In production, keep the behavior aligned with
+    the installed Dash version, validate values at the server boundary, and test the relevant empty, repeated,
+    and unauthorized cases. This makes the interaction dependable beyond the happy-path demo.
+  tags:
+  - Gunicorn
+  - workers
+  - deployment
+- id: dash-recent-010
+  topic: security
+  difficulty: advanced
+  period: 2024-2026
+  type: representative
+  question: How should identity from a reverse proxy be trusted by a Dash app?
+  answer: Trust identity headers only when a known proxy authenticates the request, removes any client-supplied
+    copies of those headers, and injects its own verified claims over a protected connection. The app
+    should accept traffic only through that trusted path or independently authenticate it. Validate the
+    claim format and map it to server-side permissions; do not treat a username header as permission for
+    every record. Configure forwarded host, scheme, and prefix handling only for known proxy hops because
+    arbitrary forwarded values can be spoofed. Audit callbacks, exports, and background jobs for authorization,
+    not only page navigation. Test the public ingress, since a local request directly to the app may bypass
+    the identity layer and produce misleading results. In production, keep the behavior aligned with the
+    installed Dash version, validate values at the server boundary, and test the relevant empty, repeated,
+    and unauthorized cases. This makes the interaction dependable beyond the happy-path demo.
+  tags:
+  - authentication
+  - proxy
+  - security
+- id: dash-recent-011
+  topic: deployment
+  difficulty: advanced
+  period: 2024-2026
+  type: representative
+  question: How would you debug an app that loads at its public URL but has broken callbacks or assets?
+  answer: Inspect browser network requests for the exact asset and callback paths, response status, and
+    redirects. Compare the public prefix with the proxy's strip-or-preserve behavior and Dash's `requests_pathname_prefix`
+    and `routes_pathname_prefix` settings. Check forwarded scheme/host handling, static asset paths, and
+    whether authentication redirects callback requests unexpectedly. Test a deep link and refresh, not
+    just the root HTML page. Review server and proxy logs with a request correlation ID. A successful
+    root response proves only that one route worked; the frontend may still request scripts or callbacks
+    from the wrong base path. Reproduce through the same ingress and TLS termination used in production
+    rather than inferring from the container's internal port. In production, keep the behavior aligned
+    with the installed Dash version, validate values at the server boundary, and test the relevant empty,
+    repeated, and unauthorized cases. This makes the interaction dependable beyond the happy-path demo.
+  tags:
+  - reverse-proxy
+  - assets
+  - callbacks
+- id: dash-recent-012
+  topic: framework-choice
+  difficulty: intermediate
+  period: 2024-2026
+  type: representative
+  question: What criteria should guide a choice between Dash, Streamlit, and a JavaScript SPA?
+  answer: Compare the interaction model and ownership burden, not a generic popularity or speed claim.
+    Dash fits Python-led applications that need explicit callback dependencies, Plotly integration, reusable
+    components, and control over routing and layout. Streamlit often suits analyst-owned tools where script
+    reruns and an opinionated flow make prototypes quick. A JavaScript SPA fits highly bespoke, browser-heavy
+    products, with Python services behind an API if needed. Also assess accessibility, URL/deep-link needs,
+    identity integration, deployment and observability, team skills, and expected lifetime. Prototype
+    the riskiest interaction—dynamic controls, long jobs, or linked views—in the candidate frameworks.
+    Use real workflow evidence rather than invented throughput benchmarks, and include maintenance and
+    testing costs in the decision. In production, keep the behavior aligned with the installed Dash version,
+    validate values at the server boundary, and test the relevant empty, repeated, and unauthorized cases.
+    This makes the interaction dependable beyond the happy-path demo.
+  tags:
+  - framework-choice
+  - Streamlit
+  - SPA

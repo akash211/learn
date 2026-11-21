@@ -1,0 +1,111 @@
+slug: tableau
+title: Tableau
+category: analytics
+summary: Tableau is a visual analytics platform for connecting to data, exploring it through an interactive visual grammar, and publishing governed dashboards.
+level: core
+relations:
+  - to: sql
+    type: uses
+    note: SQL underlies many Tableau data connections and is useful for preparing, validating, and tuning source queries.
+  - to: power-bi
+    type: alternative
+    note: Power BI overlaps as a business intelligence platform; licensing, modeling, deployment, and existing skills guide the choice.
+  - to: redshift
+    type: uses
+    note: Tableau can connect to Amazon Redshift as a live analytical source or use an extract.
+  - to: snowflake
+    type: uses
+    note: Tableau can query Snowflake live or cache selected data in a Tableau extract.
+intro:
+  what: |
+    Tableau is a visual analytics platform for connecting to data, shaping a usable analytical model,
+    and building interactive views and dashboards. Tableau Desktop is the authoring environment;
+    Tableau Server and Tableau Cloud are publishing and collaboration platforms. Tableau's interface
+    maps fields onto shelves and marks, turning queries into visual encodings such as position,
+    color, size, and text. A workbook contains worksheets, dashboards, stories, data sources, and
+    formatting; the exact capabilities and administration depend on the product and release.
+
+    Tableau's data model distinguishes dimensions, which define categories or grouping, from
+    measures, which are typically aggregated. Fields also have roles and data types, and pills can
+    be discrete (blue) or continuous (green). Calculated fields, level-of-detail expressions,
+    table calculations, filters, parameters, sets, and actions provide layers of analytical logic.
+    Understanding when each layer operates is more important than memorizing shelf gestures.
+  why: |
+    Organizations need people to move from raw records to questions that can be explored and shared.
+    Tableau provides a visual workflow in which an analyst can compare, filter, drill, and annotate
+    without requiring every consumer to write SQL. Its breadth is useful, but an attractive chart
+    does not repair incorrect grain, definitions, access rules, or data freshness. The strongest
+    Tableau work connects clear visual choices to a dependable data model and an explicit operating
+    model for refresh, permissions, ownership, and change.
+  problems:
+    - Explore measures across categories, time, geography, and other business dimensions.
+    - Publish interactive dashboards that let users filter, select, and drill into relevant detail.
+    - Reuse calculations and governed data sources rather than reimplementing every metric in each workbook.
+    - Deliver analytics from warehouses such as Snowflake and Redshift through live connections or extracts.
+    - Explain and diagnose differences between row-level data, aggregate views, and filtered results.
+  where_used:
+    - Operational and executive dashboards on Tableau Server or Tableau Cloud.
+    - Analyst-led exploration in Tableau Desktop and browser-based authoring where enabled.
+    - Embedded analytics and shared published data sources with platform-specific governance.
+    - Reporting against cloud warehouses, relational databases, spreadsheets, and supported files.
+  ecosystem: |
+    Tableau workbooks sit between consumers and data platforms. A connector exposes a source; a
+    logical data model relates tables; worksheets define views; dashboards combine sheets and
+    interactive controls; Server or Cloud hosts and governs published assets. Extracts add a
+    Tableau-managed snapshot optimized for analysis, while live connections send queries to the
+    source. SQL, warehouse modeling, and upstream data quality remain essential neighbors rather
+    than capabilities replaced by the visualization layer.
+  alternatives:
+    - name: Power BI
+      note: A close BI alternative with a different semantic model, authoring experience, licensing, and Microsoft ecosystem integration.
+    - name: Looker
+      note: A governed modeling and BI option where LookML and the Looker platform fit the organization.
+    - name: Apache Superset
+      note: An open-source dashboard option, often selected where its deployment and feature tradeoffs fit.
+  related: [sql, power-bi, redshift, snowflake]
+chapters:
+  - id: tableau-model
+    title: Tableau's Data and Visual Model
+    file: chapters/01-tableau-model.md
+    minutes: 12
+    level: core
+  - id: connections
+    title: Connections, Extracts, and Refresh Strategy
+    file: chapters/02-connections-extracts-refresh.md
+    minutes: 12
+    level: core
+  - id: calculations
+    title: 'Calculations: LOD Expressions and Table Calcs'
+    file: chapters/03-calculations-lod-table-calcs.md
+    minutes: 13
+    level: core
+  - id: filters-order
+    title: Filters and Their Order of Operations
+    file: chapters/04-filters-order-of-operations.md
+    minutes: 13
+    level: core
+  - id: parameters-sets-actions
+    title: Parameters, Sets, and Actions
+    file: chapters/05-parameters-sets-actions.md
+    minutes: 12
+    level: core
+  - id: dashboard-performance
+    title: Dashboard Design and Performance
+    file: chapters/06-dashboard-design-performance.md
+    minutes: 13
+    level: core
+  - id: security-governance
+    title: Row-Level Security, Publishing, and Governance
+    file: chapters/07-security-publishing-governance.md
+    minutes: 13
+    level: advanced
+  - id: comparison-migration
+    title: 'Tableau vs Power BI: Choosing and Migrating'
+    file: chapters/08-tableau-power-bi-migration.md
+    minutes: 12
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

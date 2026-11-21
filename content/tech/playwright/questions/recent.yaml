@@ -1,0 +1,143 @@
+- id: pw-recent-001
+  topic: locators
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How would you choose between a role locator and a test ID in a large UI test suite?
+  answer: |
+    Start with the user's observable contract. `page.get_by_role("button", name="Submit")` captures the control's semantics and accessible name, so it can reveal a missing label while locating the element. For a form field, a label locator is often clearer. These queries make tests easier to read and encourage accessible interfaces.
+
+    Use a test ID when role, label or visible text cannot identify a stable target without coupling to fragile structure, such as a complex visualization or a non-semantic container. Treat the ID as an intentional testing contract, document its naming convention and avoid adding IDs indiscriminately. Avoid generated classes and positional CSS unless layout is itself under test. If the role locator matches multiple controls, scope to a meaningful row, dialog or card instead of selecting `.first` without justification. The final choice should be unique, maintainable and aligned with what the test intends to prove.
+  tags: [locators, accessibility, test-ids]
+
+- id: pw-recent-002
+  topic: reliability
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: A click succeeds but the expected state never appears. How do you debug the wait?
+  answer: |
+    First distinguish actionability from application completion. Playwright waits until the target is actionable before clicking, but the click handler may start a request and return before the response or rendering finishes. A successful click therefore does not prove that the expected page state arrived. Identify the exact user-visible condition the test needs and use a web-first assertion for it.
+
+    Inspect a trace to confirm the locator resolved to the intended control, the click occurred, and the subsequent network and DOM activity match expectations. Check console errors and failed requests selectively. If the response itself is part of the contract, use `expect_response()` around the triggering action; otherwise assert on the rendered outcome. Do not add a sleep or broaden every timeout before diagnosing whether the locator, backend state or expectation is wrong. A retrying assertion should wait for the condition, not conceal a transition that never happens.
+  tags: [auto-wait, debugging, traces]
+
+- id: pw-recent-003
+  topic: pytest
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How would you structure Python browser tests so browser state is isolated but startup cost stays reasonable?
+  answer: |
+    Let pytest-playwright manage browser lifecycle with its fixtures, and normally use a fresh context and page for each test case. A context isolates cookies, local storage and permissions; launching a separate process for every test is usually unnecessary. Keep fixture scope function-level for mutable state, and use wider-scoped fixtures only for immutable or carefully reset dependencies.
+
+    Avoid sharing a logged-in context across tests merely to save login time. For authenticated behavior, generate authorized storage state for a test identity and load it into a new context, while retaining a dedicated login test. Test data stored on the server needs its own isolation: unique resource names, separate users or a per-run namespace. Check the exact fixture behavior and plugin options in the pinned `pytest-playwright` version. This structure balances process reuse with test independence, and makes cases easier to run alone or in parallel.
+  tags: [pytest, fixtures, contexts]
+
+- id: pw-recent-004
+  topic: traces
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What evidence should a CI job retain for a failed Playwright test?
+  answer: |
+    Retain the failure report and a trace when possible, plus the test identifier, commit, shard or worker, Python and Playwright package versions, and browser engine/build. The trace can include action history, DOM snapshots, screenshots and network activity, which helps identify whether the problem was locator resolution, navigation, an API request or an assertion. A screenshot alone provides less temporal context.
+
+    Collect artifacts on failure or use a short always-on diagnostic run rather than storing every trace indefinitely. Trace contents can reveal user data, URLs, application text or request metadata. Use synthetic test accounts, restrict artifact access, set a retention period and avoid capturing credentials. Preserve first-run failures even if the CI system retries; a retry that passes is evidence of flakiness, not a clean first attempt. Keep artifacts from each shard separately identifiable so teams can reproduce the same environment and case.
+  tags: [ci, traces, privacy]
+
+- id: pw-recent-005
+  topic: network
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: When is route fulfillment a better test strategy than calling a live dependency?
+  answer: |
+    Fulfill a route with a deterministic response when the test is focused on a UI state that is expensive, nondeterministic or difficult to trigger from a real dependency—for example, an empty list, a known error response or a stable edge case. Register the route before navigation or before the triggering action, and match only the endpoint under test. Assert that the expected page behavior follows from the response.
+
+    This is not evidence that the backend integration works. The fixture must reflect an owned or documented API contract, and a separate integration test should verify the real service boundary. Keep mocks visible in test names or fixtures so reviewers know what has been simulated. Avoid intercepting all traffic: broad mocks can hide missing requests and broken assets. For external services, use a controlled test environment and respect authorization; route interception is not permission to bypass a site's access controls.
+  tags: [network, mocking, integration-tests]
+
+- id: pw-recent-006
+  topic: authentication
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What are the security and reliability trade-offs of reusing saved browser storage state?
+  answer: |
+    Saved storage state makes authenticated tests faster by restoring cookies and local storage into a fresh browser context. It avoids repeating the same UI login in every test, but it is not a complete profile and may omit session storage or in-memory state. Server expiry, one-time sessions or account rotation can also invalidate it. Verify restored authentication with an assertion on an authenticated page.
+
+    The file can contain bearer-like session credentials, so generate it only for a non-production test account, exclude it from version control, protect it in CI and avoid unrestricted artifact uploads. Regenerate state during a controlled setup step rather than depending on a developer's local copy. Keep at least one test for the actual login journey and its failure behavior. If a shared session is rotated or mutated when used, create worker-specific state or identities to avoid parallel tests invalidating each other.
+  tags: [storage-state, security, fixtures]
+
+- id: pw-recent-007
+  topic: concurrency
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How do you investigate tests that pass alone but fail with pytest-xdist?
+  answer: |
+    Treat the failure as evidence of shared state or resource contention. Reproduce with a small worker count, then inspect server-side accounts and records, fixed filenames, ports, shared files, global preferences and rate limits. A fresh browser context isolates browser storage but not an account's backend data. Give each worker or test a unique namespace, use separate identities where appropriate, and make cleanup safe after partial failures.
+
+    Also check host capacity: multiple browser processes can exhaust memory, CPU, file descriptors or shared memory, especially inside a small container. Lower the worker count and compare logs and resource metrics to separate contention from a logical race. Do not hide the issue with retries or disable all parallelism permanently. If a test depends on a genuine global resource, serialize that narrow boundary and keep independent tests parallel. Record first-run and retry outcomes separately so flaky tests remain visible.
+  tags: [xdist, concurrency, debugging]
+
+- id: pw-recent-008
+  topic: cross-browser
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How should a team decide which tests to run across Chromium, Firefox and WebKit?
+  answer: |
+    Begin with the browsers the product claims to support and the user impact of engine-specific differences. A short, high-value smoke path across the supported engines can catch navigation, rendering and interaction incompatibilities. Deeper coverage may run on the primary engine, with targeted tests added for browser-specific features or regressions. The exact allocation depends on product risk, release cadence and CI budget.
+
+    Do not assume one engine is a perfect proxy for another. Playwright provides a common API, but engines differ in rendering and behavior, and browser binaries are tied to Playwright releases. Pin and install the required engines, then report engine and version for each result. Avoid parametrizing every test across all browsers without considering multiplied runtime and data collisions. Also avoid using CDP-only behavior in tests that are supposed to represent Firefox or WebKit. Make the coverage policy explicit and review it as support commitments change.
+  tags: [cross-browser, engines, ci]
+
+- id: pw-recent-009
+  topic: performance
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How do you reduce a slow browser suite without sacrificing meaningful coverage?
+  answer: |
+    Measure where time is spent before changing the suite: browser startup, application setup, navigation, waits, test data provisioning or cleanup. Replace unnecessary browser tests with unit or API-level tests for logic that does not require rendering. Keep browser coverage for important integrated user journeys and add targeted assertions rather than duplicating every business rule in the UI layer.
+
+    Reuse browser processes through fixtures while creating isolated contexts for tests. Run independent tests in a bounded number of workers, then measure memory and CI wall time to find a safe concurrency level. Shard long suites with a partition that distributes expected duration and runs each selected case once. Avoid arbitrary sleeps and unnecessary full-page screenshots. Use storage state for authenticated product tests when safe, with a dedicated login test. Keep retries visible; they can help diagnose instability but should not mask it as speed or reliability improvement.
+  tags: [performance, parallelism, suite-design]
+
+- id: pw-recent-010
+  topic: scraping
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What controls would you require before running a browser-based collection job at scale?
+  answer: |
+    Establish that the organization is authorized to access and use the target data, define the pages and fields in scope, and review applicable terms and privacy obligations. Prefer a documented API, export or direct HTTP parser when it meets the permitted need; a browser is appropriate only when client-side behavior or interaction requires one. Minimize personal data and set a retention and deletion policy before collection.
+
+    Bound the job with per-origin concurrency and request budgets, timeouts, retry limits, monitoring and a kill switch. Respect published rate limits and stop or slow down after denial or repeated failures. Do not use proxy rotation, CAPTCHA bypass, fingerprint spoofing or account cycling to evade controls. Keep logs aggregated and redacted, and validate that returned pages are actual content rather than a login or error screen. Review a small authorized sample before scaling and document an accountable owner and stop conditions.
+  tags: [scraping, ethics, rate-limits]
+
+- id: pw-recent-011
+  topic: ci
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What should be pinned and checked when upgrading Playwright in a containerized CI environment?
+  answer: |
+    Pin the Python Playwright package and the container image or browser build so the driver and browser binaries remain compatible. Install the required engines using the CLI from that environment, and ensure the image includes the operating-system libraries those browsers need. If caching browser files, include operating system and Playwright version in the cache key. Install only engines used by the job where practical.
+
+    After an upgrade, run a smoke test that launches each target engine and opens a controlled page, then run representative tests and inspect trace output. Monitor resource use and confirm the container has appropriate temporary storage and shared memory. Recheck plugin options because `pytest-playwright` behavior and command-line interfaces can change by version. Record package and browser versions in CI artifacts. An official container image reduces setup work but does not remove the need to pin versions, validate security settings or manage sensitive artifacts.
+  tags: [containers, ci, versions]
+
+- id: pw-recent-012
+  topic: migration
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How would you evaluate whether a Selenium suite should migrate to Playwright?
+  answer: |
+    Compare requirements and total operating cost rather than API familiarity. Inventory languages, browser support, remote Grid use, custom capabilities, device needs, reporting, downloads, authentication, CI and who maintains the suite. Selenium's WebDriver protocol and broad ecosystem may be decisive for an existing Grid or language requirement. Playwright's contexts, locator auto-waiting and trace tooling may reduce maintenance for a suite that fits its supported environments.
+
+    Port one representative test that includes real waits, test data, browser configuration and failure artifacts. Compare stability, diagnosability, runtime, browser coverage and team workflow. Translate intent rather than mechanically replacing methods: Selenium's session and wait model do not map exactly to Playwright's browser/context/page hierarchy. Migrate incrementally with coexistence and a retirement criterion for duplicate cases. Keep Selenium if it remains the better technical fit; a migration is worthwhile only when concrete benefits outweigh conversion and operational costs.
+  tags: [selenium, migration, decision-making]

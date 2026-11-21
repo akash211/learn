@@ -1,0 +1,78 @@
+- id: pbi-scn-001
+  title: Revenue total differs between the executive KPI and detail report
+  technologies: [power-bi, sql]
+  difficulty: intermediate
+  prompt: |
+    Finance reports that the executive page shows lower revenue than a detailed sales report for the same month. Both reports use different semantic models built from the same warehouse. One model sums a line amount; the other calculates quantity times unit price. The month filter and visible transaction count appear similar, but discounts, returns and late adjustments may be handled differently.
+  approach: |
+    Establish the exact metric definition, grain, time role, currency and inclusion rules with Finance before comparing charts. Trace each model's source lineage and compare sample transactions, nulls, rounding, discounts, returns and adjustment timing. Reconcile totals by date and business key using a controlled SQL extract, while checking refresh timestamps and filters. Determine whether the calculated amount and source line amount are semantically equivalent. Centralize the agreed measure in a governed semantic model, document its definition and identify downstream report dependencies. Add a repeatable reconciliation test and owner, then deploy and validate both reports against the same examples.
+  red_flags:
+    - Assuming matching transaction counts prove amounts use the same definition.
+    - Changing the executive visual without tracing source rows and DAX.
+    - Averaging the two reported totals or hiding a difference with a visual filter.
+    - Ignoring refresh timing and currency conversion rules.
+- id: pbi-scn-002
+  title: DirectQuery report overloads an operational database at month end
+  technologies: [power-bi, azure-sql]
+  difficulty: advanced
+  prompt: |
+    A DirectQuery sales report performs acceptably during development but causes timeouts on the production Azure SQL source during month-end reporting. Many users open the page at once. The report contains several visuals and cross-highlighting; a proposed fix is to raise database compute and convert all relationships to bidirectional.
+  approach: |
+    Scope the incident and protect the operational workload first. Capture Performance Analyzer queries and correlate them with source query telemetry, plans, waits and concurrency. Determine query fan-out per interaction, whether Power Query steps fold, and which visuals or filters trigger expensive scans. Review model relationships and use single-direction star-schema paths unless a specific tested case requires otherwise. Reduce redundant visuals, optimize source schema and indexes with measured evidence, and consider aggregation tables, a composite model, Import snapshots or an analytical serving copy if freshness allows. Benchmark realistic concurrency and detail navigation, monitor application impact, and agree on freshness and latency targets. Resize only after query and workload design are understood.
+  red_flags:
+    - Increasing source capacity as the only diagnosis or fix.
+    - Enabling bidirectional filters globally without proving correctness or need.
+    - Ignoring operational transaction workload and peak concurrency.
+    - Testing one visual in Desktop rather than service query patterns.
+- id: pbi-scn-003
+  title: Dynamic RLS leaks one tenant's data to another
+  technologies: [power-bi]
+  difficulty: advanced
+  prompt: |
+    A multi-tenant semantic model uses USERPRINCIPALNAME() and an entitlement table. A customer reports seeing a few records belonging to another tenant after a new report was published. The team has not yet determined whether the user is a workspace editor, an app consumer or using a shared test identity.
+  approach: |
+    Preserve evidence and restrict access if exposure is confirmed. Identify the user's actual identity, access path, workspace role, app audience and model permissions; editor roles are not constrained like read-only RLS consumers. Trace the entitlement row, identity normalization, tenant key and relationship propagation from security table to every fact. Test with separate real consumer accounts for one, multiple and zero entitlements, and inspect all report pages, drill-through, export and Build paths that are enabled. Compare affected records with an independently filtered source query. Correct the faulty mapping or relationship, remove excessive workspace permissions, and add automated positive and negative tests. Review access logs and impact scope under the organization's incident process before declaring resolution.
+  red_flags:
+    - Relying only on Desktop View as to rule out a service permission bypass.
+    - Adding a visual filter as the security correction.
+    - Ignoring workspace Contributor, Member or Admin access.
+    - Failing to identify and contain the exposure before investigating.
+- id: pbi-scn-004
+  title: Incremental refresh misses late corrections in historical partitions
+  technologies: [power-bi, sql]
+  difficulty: intermediate
+  prompt: |
+    A large Import model uses incremental refresh for recent dates and reports successful daily refreshes. Finance finds an invoice from several months ago that was corrected in the source but remains unchanged in the model. The source has a ModifiedAt field, although some correction jobs do not update it consistently.
+  approach: |
+    Determine the historical partition containing the invoice and compare its data with the source. Verify the RangeStart/RangeEnd half-open filter, folding, refresh window and service partition policy. Check whether ModifiedAt updates for every correction and whether the configured change-detection logic can see that change. Assess deletions and late-arriving rows separately; a successful refresh may not revisit old partitions. Define a reliable source change contract, then choose an appropriate refresh horizon, periodic reconciliation or controlled partition-refresh process. Reconcile corrected periods and capture row counts and totals. Test a correction, deletion and late-arriving record before rollout. Document the added source work and operational owner so a longer refresh window does not cause new failures.
+  red_flags:
+    - Assuming green refresh status proves every historical row was revisited.
+    - Trusting an inconsistent ModifiedAt field without a source fix.
+    - Switching to a full refresh without estimating service window and source impact.
+    - Ignoring deletions or duplicate partition boundaries.
+- id: pbi-scn-005
+  title: Promote a certified sales model without breaking downstream reports
+  technologies: [power-bi, microsoft-fabric]
+  difficulty: advanced
+  prompt: |
+    A team is replacing several departmental sales models with a shared model and plans to mark the new model certified. Different reports currently define net sales differently. Development, test and production workspaces are available, and report authors have Build permission on some existing models. Leadership expects the cutover next week.
+  approach: |
+    Pause the certification decision until the business definition, grain, returns, discounts, currency and date roles are agreed and reconciled. Inventory downstream reports, measures, owners, security roles, Build users and refresh dependencies. Design explicit compatibility or migration steps for changed field and measure semantics. Test shared-model behavior, RLS, service credentials, refresh, app access and representative reports in nonproduction through the deployment pipeline. Communicate changes and owners, provide a cutover and rollback plan, and validate production data totals and consumer access. Apply endorsement only after documentation, lineage, security, reliability and support criteria are satisfied. Remove obsolete permissions and models in a controlled cleanup after consumers confirm migration.
+  red_flags:
+    - Applying certification based only on a successful deployment or leadership deadline.
+    - Replacing metric definitions silently because names are similar.
+    - Forgetting Build permission and dependent report migration.
+    - Skipping production refresh, RLS and rollback validation.
+- id: pbi-scn-006
+  title: Decide between Direct Lake, Import and custom application for Fabric analytics
+  technologies: [power-bi, microsoft-fabric]
+  difficulty: advanced
+  prompt: |
+    A product team has curated sales Delta tables in OneLake and wants an interactive customer analytics experience with low latency, row restrictions and a few workflow-specific interactions. The team proposes Direct Lake, while a product engineer suggests building a custom web dashboard. Users also need downloadable detail and monthly reconciled snapshots.
+  approach: |
+    Clarify freshness, latency, user concurrency, security, detail export, accessibility and workflow requirements. Prototype Direct Lake with the actual Delta layout, semantic model, RLS, capacity and schema-change behavior, verifying current feature support and any fallback considerations. Compare Import for snapshot behavior and query performance, and consider a composite or separate detail path where appropriate. Prototype the custom interaction only if its product value justifies owning server-side authorization, metric consistency, caching, audit, accessibility and release operations. Keep monthly reconciled snapshots and row-level detail requirements explicit. Benchmark end-to-end tasks using real identities and concurrent load; choose a source-of-truth layer for measures, document operational ownership and test failure and recovery paths.
+  red_flags:
+    - Treating Direct Lake as a generic instant query over any file.
+    - Implementing tenant access only as browser-side filtering in custom code.
+    - Comparing technologies from a screenshot without testing security and exports.
+    - Ignoring capacity, data reconciliation or Delta table maintenance.

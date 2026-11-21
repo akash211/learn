@@ -1,0 +1,125 @@
+slug: playwright
+title: Playwright
+category: web-automation
+summary: Reliable browser automation and end-to-end testing with isolated contexts, resilient locators, auto-waiting and trace-based debugging.
+level: core
+relations:
+  - to: python
+    type: foundation
+    note: Playwright's Python bindings use Python's async and synchronous APIs, fixtures and test ecosystem.
+  - to: selenium
+    type: alternative
+    note: Both automate browsers; Playwright emphasizes bundled browser versions, isolated contexts, auto-waiting and integrated traces.
+  - to: firecrawl
+    type: alternative
+    note: Playwright drives interactive browsers; Firecrawl focuses on managed web crawling and extraction workflows.
+intro:
+  what: |
+    Playwright is an open-source browser automation library with Python, JavaScript/TypeScript,
+    Java and .NET bindings. It controls Chromium, Firefox and WebKit through a consistent API,
+    supporting end-to-end tests, interactive workflows, screenshots, document generation and
+    browser-assisted data collection. Its Python API offers both synchronous and asynchronous
+    styles; the test runner commonly used in Python projects is pytest with the `pytest-playwright`
+    plugin.
+
+    The central design unit is the browser context: an inexpensive, isolated session with its own
+    cookies, storage and pages. Tests can create a fresh context per case instead of sharing a
+    profile. Playwright locators describe how to find an element and resolve it when an action is
+    performed. Actions wait for relevant conditions, and assertions retry until they pass or time
+    out. This reduces timing races, but does not make an unstable test or an incorrect expectation
+    correct.
+  why: |
+    Browser behavior includes rendering, navigation, client-side state, accessibility and network
+    timing that unit tests cannot fully reproduce. Playwright provides an automation interface
+    that can exercise these user-visible flows in real browser engines, while keeping setup,
+    waiting, diagnostics and browser lifecycle in one toolkit. Its auto-waiting and locator model
+    make tests less dependent on guessed sleeps; contexts and traces make isolation and failure
+    analysis practical. The value is not that every UI test becomes reliable automatically, but that
+    the framework gives teams sound defaults and useful evidence when a test fails.
+  problems:
+    - Exercise user-visible flows across real browser engines without hand-managed timing sleeps.
+    - Isolate cookies, storage and pages between tests or simulated users.
+    - Inspect browser behavior with screenshots, video, traces, console and network events.
+    - Test error states and API-dependent interfaces with controlled request interception.
+    - Automate permitted workflows that require JavaScript execution or interactive browser state.
+    - Produce screenshots, PDFs and downloaded artifacts in repeatable workflows.
+  where_used:
+    - End-to-end tests for web applications, often using pytest and pytest-playwright.
+    - Cross-browser regression checks in local development and continuous integration.
+    - Reproducible UI flows involving dialogs, downloads, uploads and authentication.
+    - Browser-assisted extraction where site terms, privacy rules and rate limits permit it.
+    - Visual evidence collection and PDF or screenshot generation.
+  ecosystem: |
+    The Python package `playwright` provides the API and browser driver; `playwright install`
+    installs browser binaries and optionally operating-system dependencies. `pytest-playwright`
+    supplies pytest fixtures such as `page`, `context`, `browser` and command-line browser options.
+    Pytest itself owns test discovery, parametrization, fixtures and reporting. In JavaScript,
+    Playwright Test is a separate integrated test runner with its own fixture, project and sharding
+    features; do not confuse its configuration with the Python plugin. Selenium remains a strong
+    alternative where WebDriver standards, existing grid infrastructure or broad language support
+    matter. Firecrawl and similar extraction services occupy a different layer: managed crawling
+    and extraction rather than general interactive UI testing.
+  alternatives:
+    - name: Selenium
+      note: Choose for WebDriver ecosystem compatibility, existing Grid investment or a required language binding; compare operational constraints rather than assuming one tool is universally faster.
+    - name: Firecrawl
+      note: Consider managed crawling and content extraction when the problem is permitted site-wide ingestion rather than validating browser UI behavior.
+    - name: HTTP client and parser
+      note: Prefer direct requests and parsing for stable, permitted endpoints; a browser is costly when the required data is already available in HTML or an API.
+  related: [python, selenium, firecrawl]
+chapters:
+  - id: architecture
+    title: Architecture, Contexts and Auto-Waiting
+    file: chapters/01-architecture-contexts-auto-wait.md
+    minutes: 12
+    level: core
+  - id: locators-strict-mode
+    title: Locators, Semantics and Strict Mode
+    file: chapters/02-locators-strict-mode.md
+    minutes: 12
+    level: core
+  - id: assertions-test-runner
+    title: Assertions and pytest-playwright
+    file: chapters/03-assertions-pytest-runner.md
+    minutes: 12
+    level: core
+  - id: fixtures-traces-debugging
+    title: Fixtures, Traces and Debugging
+    file: chapters/04-fixtures-traces-debugging.md
+    minutes: 13
+    level: core
+  - id: network-interception
+    title: Network Interception and Mocking
+    file: chapters/05-network-interception-mocking.md
+    minutes: 12
+    level: advanced
+  - id: auth-multi-user
+    title: Authentication State and Multi-User Flows
+    file: chapters/06-auth-state-multi-user.md
+    minutes: 12
+    level: advanced
+  - id: files-screenshots-pdfs
+    title: Downloads, Uploads, PDFs and Screenshots
+    file: chapters/07-files-screenshots-pdfs.md
+    minutes: 11
+    level: core
+  - id: concurrency-sharding
+    title: Concurrency and Sharding
+    file: chapters/08-concurrency-sharding.md
+    minutes: 12
+    level: advanced
+  - id: scraping-scale-ethics
+    title: "Scraping at Scale: Ethics and Operations"
+    file: chapters/09-scraping-scale-ethics.md
+    minutes: 13
+    level: advanced
+  - id: ci-containers-migration
+    title: CI, Containers and Selenium Migration
+    file: chapters/10-ci-containers-selenium-migration.md
+    minutes: 13
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

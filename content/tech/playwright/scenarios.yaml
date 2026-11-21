@@ -1,0 +1,123 @@
+- id: pw-scn-001
+  title: Checkout test fails intermittently after payment submission
+  technologies: [playwright, python]
+  difficulty: intermediate
+  prompt: |
+    A pytest browser test fills a checkout form, clicks “Place order,” waits two seconds, then asserts that an order confirmation heading is visible. The test passes locally but fails in CI about one run in ten. The button is visible and enabled, no browser crash is reported, and increasing the sleep to five seconds reduces but does not eliminate failures. The team wants to add a retry loop around the whole test.
+  approach: |
+    Separate actionability from the application's asynchronous result. Playwright's click waits for the button to be actionable; the fixed sleep is an unreliable guess about server latency and rendering.
+
+    1. Capture a trace on failure and inspect whether the click happened, the locator was unique, and the page issued the expected order request.
+    2. Check response status and browser console errors in the controlled test environment. Confirm whether failures are app defects, test data collisions or CI resource pressure.
+    3. Replace the sleep with a web-first assertion on the confirmation heading or a specific URL. If the response is part of the contract, use `expect_response()` around the click.
+    4. Ensure each test uses isolated browser state and unique order data; inspect parallel-run collisions.
+    5. Keep retries, if used for evidence, visible in reports. Fix the cause instead of treating a retry pass as reliability.
+  red_flags:
+    - Increasing global timeouts before inspecting the failed transition.
+    - Adding a fixed sleep or retry loop that can conceal a real failed order.
+    - Assuming auto-wait means the payment request and UI update have completed.
+    - Reusing one order record across parallel tests.
+
+- id: pw-scn-002
+  title: Two roles must collaborate on a shared document
+  technologies: [playwright, python]
+  difficulty: advanced
+  prompt: |
+    A product supports an owner inviting a reviewer to approve a document. The current end-to-end test opens two tabs in one Playwright context, signs in as the owner in the first tab, then types reviewer credentials into the second. After the reviewer accepts, the owner tab unexpectedly appears to be signed in as the reviewer. The test also fails intermittently when run alongside other cases.
+  approach: |
+    The tabs share one browser context and therefore share cookies and other browser storage. They do not represent independent identities. Create separate contexts for the owner and reviewer, each initialized from a distinct, authorized test identity.
+
+    1. Set up unique document and invitation data per test run, preferably through controlled test setup.
+    2. Use one page in each context and name the actors clearly in the test.
+    3. Assert that the owner sends the invitation, the reviewer receives and accepts it, and the owner sees the resulting state.
+    4. Test role authorization at the server boundary where appropriate; hiding controls is not sufficient evidence.
+    5. Clean up contexts and records reliably. Namespace data per worker or use separate accounts to prevent xdist collisions.
+    6. Keep storage-state files ephemeral and protected if used; they are credentials, not harmless fixtures.
+  red_flags:
+    - Opening a second page in the same context and assuming it has separate cookies.
+    - Reusing a production session or committing storage-state files.
+    - Treating a hidden button as proof of server-side access control.
+    - Sharing mutable account data across parallel workers.
+
+- id: pw-scn-003
+  title: Empty-state coverage accidentally hides a backend regression
+  technologies: [playwright, python]
+  difficulty: intermediate
+  prompt: |
+    A team adds a route handler that fulfills every request matching `**/api/**` with an empty JSON object, so browser tests run quickly and reliably. The dashboard's “No projects” empty state is covered, but the page also shows no error when the real projects endpoint is returning a server error in staging. A reviewer asks whether the mocked test is meaningful and how to cover both UI behavior and integration.
+  approach: |
+    Clarify the test boundary. A route mock is useful for asserting a deterministic empty-state UI, but it is not evidence that the real endpoint or dashboard integration works. Broad matching also risks fulfilling unrelated API calls with an unrealistic body.
+
+    1. Narrow the route to the specific projects endpoint and return a schema-valid empty response derived from the owned contract.
+    2. Name the test as a mocked empty-state case and assert the exact user-visible message.
+    3. Add an integration test in a controlled environment that calls the real service and verifies the loaded project list or error behavior.
+    4. Add an explicit error-response mock to verify user-facing recovery, without conflating it with backend health.
+    5. Register handlers before navigation and inspect failed requests or traces when the UI disagrees with the response.
+  red_flags:
+    - Claiming a fully mocked test validates backend behavior.
+    - Matching all API routes and returning a generic payload.
+    - Using a mock that contradicts the documented response schema.
+    - Removing all integration coverage to avoid a staging failure.
+
+- id: pw-scn-004
+  title: CI browser workers exhaust memory after a parallelism increase
+  technologies: [playwright, python]
+  difficulty: advanced
+  prompt: |
+    A browser suite takes 25 minutes with two pytest-xdist workers. A change to `-n auto` cuts the first run to 14 minutes, but the new CI container is intermittently killed for memory use, and several tests time out under load. The same tests pass when run alone. A developer proposes doubling the container memory and enabling automatic retries.
+  approach: |
+    Treat worker count as a resource budget and investigate both system pressure and test isolation. Each worker may create browser processes and contexts; contexts still consume memory, and tests may overload the application or collide on shared server data.
+
+    1. Re-run with a fixed worker count and record peak memory, CPU, browser crashes and timeout locations.
+    2. Compare two, three and four workers rather than trusting auto-detection in a constrained container.
+    3. Inspect for shared accounts, fixed filenames, ports, records and global preferences. Namespace test data per worker or isolate accounts.
+    4. Check traces for genuinely slow app transitions versus resource contention, and cap request pressure on shared test services.
+    5. Shard the suite into balanced CI jobs if independent workers on one host are not efficient.
+    6. Preserve retry outcomes as flake evidence; increase capacity only when measurements show the suite is otherwise isolated and the resource ceiling is truly too low.
+  red_flags:
+    - Raising memory limits or retries as the only diagnosis.
+    - Assuming CPU core count is a safe browser worker count.
+    - Disabling parallelism permanently without finding shared state.
+    - Reporting a retry pass as a clean first-pass result.
+
+- id: pw-scn-005
+  title: Authorized catalog collection triggers rate limiting
+  technologies: [playwright, python]
+  difficulty: advanced
+  prompt: |
+    A team has written permission to collect a defined set of public catalog pages from a partner's test environment. Its Playwright job opens 30 pages concurrently. After several minutes, requests begin receiving 429 responses and some pages show a challenge screen. The team asks whether rotating proxies and changing browser fingerprints would let the scheduled job finish. Only product names and public prices are required.
+  approach: |
+    Treat rate limiting and challenge pages as controls that require coordination, not obstacles to evade. Permission to collect a defined corpus does not imply unlimited request speed or permission to bypass anti-bot mechanisms.
+
+    1. Stop or pause the job and contact the partner's authorized owner to agree on a request budget, schedule and approved access method.
+    2. Confirm whether a documented export, API or direct HTTP response can provide only the required fields; a full browser may not be necessary.
+    3. Implement per-origin concurrency limits, bounded retries, timeouts, stop conditions and a kill switch.
+    4. Validate responses so challenge and error pages are never ingested as product records.
+    5. Minimize retained data and logs, use synthetic or authorized accounts, and define retention and deletion behavior.
+    6. Resume only within the confirmed scope and rate, then review a sample for correctness before scaling.
+  red_flags:
+    - Proxy rotation, fingerprint spoofing or CAPTCHA bypass to evade the challenge.
+    - Increasing concurrency after a 429 response.
+    - Assuming public visibility removes privacy or contractual duties.
+    - Saving full-page content when only two fields are authorized and needed.
+
+- id: pw-scn-006
+  title: Selenium migration plan risks dropping browser coverage
+  technologies: [playwright, selenium, python]
+  difficulty: advanced
+  prompt: |
+    An engineering team has 900 Selenium tests in Python, a remote WebDriver Grid, and a small suite of Firefox and WebKit checks. A proposal suggests rewriting all tests in Playwright in one quarter because a demo test needed fewer lines. The team also uses a custom browser capability and relies on existing CI reports. Leadership wants a reasoned migration recommendation rather than a tool preference.
+  approach: |
+    Recommend an evidence-based comparison, not a blanket rewrite. Selenium's WebDriver/Grid ecosystem and existing custom capabilities may be material; Playwright's contexts, auto-waiting and trace workflow may improve some test classes. Neither tool is universally the right answer.
+
+    1. Inventory browser coverage, custom capabilities, reporting, grid operations, downloads, auth, CI cost and test ownership.
+    2. Select a representative cross-section, including flaky waits, a multi-user case, artifacts and Firefox/WebKit coverage.
+    3. Port a small slice and compare maintenance effort, diagnostic quality, resource consumption, browser support and integration cost.
+    4. Confirm Playwright's supported browser and remote connection model can meet the actual infrastructure needs; do not assume CDP is a portable Grid replacement.
+    5. Propose incremental migration only where measured benefits justify it, with coexistence, coverage parity checks and a retirement condition for duplicate tests.
+    6. Keep Selenium where it remains the better fit.
+  red_flags:
+    - Using one short demo test as proof of lower suite cost.
+    - Ignoring existing Grid, custom capabilities or reporting dependencies.
+    - Removing Firefox or WebKit checks without an explicit coverage decision.
+    - Mechanically translating Selenium waits instead of using Playwright's locator model.

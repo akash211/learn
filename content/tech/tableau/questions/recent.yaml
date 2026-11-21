@@ -1,0 +1,90 @@
+- id: tab-recent-001
+  topic: calculation semantics
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: A FIXED customer-sales calculation does not change when a user selects a Region. How would you explain and correct it?
+  answer: |
+    FIXED expressions are evaluated before ordinary dimension filters, so the customer sales value may include all regions even when the worksheet later shows only the selected Region. First clarify the requirement: should each customer's value mean all-region sales or sales within the selected region? If the latter, making Region a context filter causes it to be applied before FIXED. Then test the result with a small crosstab showing Region, Customer, base Sales, and the FIXED value, comparing selected and unselected states. Context is not a generic performance switch, and it may affect query work. An alternative may be a different LOD or upstream model, depending on the intended grain. Also check data-source and extract filters, which are earlier in the order, and ensure joins have not duplicated sales. The answer should articulate semantics first, then use context only if the required subset demands it.
+  tags: [fixed, context-filter, order-of-operations]
+- id: tab-recent-002
+  topic: filter behavior
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: A dashboard must show the top ten products within the selected category. How do you design and test the filter logic?
+  answer: |
+    Clarify whether “top ten” means a Top N selection recalculated inside the selected category, a rank per pane, or one global top ten displayed within the category. These produce different results. For a Top N dimension filter that should operate within the selected category, make Category a context filter so the category subset is established before the Top N computation. A table-calculation rank may be a better fit when rank must be per pane or use a particular partition, but it has different filter and mark semantics. Test categories with fewer than ten products, tied scores, and changes in sort or date filter. Ties may produce more than ten members unless a tie-break rule is specified. Verify the selected product set against source SQL or a control table. Context should express the desired evaluation order, not be added automatically to every dashboard filter. Make the active category and ranking measure visible to users.
+  tags: [top-n, context-filter, ranking]
+- id: tab-recent-003
+  topic: data model
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: A dashboard's sales total doubles after adding a second table. How would you diagnose the problem in Tableau?
+  answer: |
+    I would start by stating the grain and key uniqueness of each table, then check whether the model uses a relationship, physical join, or blend. A one-to-many join can repeat sales rows; joining two child tables through a shared parent can create a many-to-many multiplication. Compare row counts and distinct keys before and after the combination, and build a small crosstab with fields from each table and SUM(Sales). Test a relationship when the tables have different grains and flexible analysis is intended, but do not assume relationships repair bad keys or cardinality declarations. Review unmatched keys and nulls, and compare the Tableau result to a trusted source query at several cuts. Check whether totals change only when fields from the added table enter the view, which can reveal query-grain behavior. The fix may be correcting keys, pre-aggregating a source, changing the model, or using a different metric—not merely hiding the doubled number.
+  tags: [relationships, joins, grain]
+- id: tab-recent-004
+  topic: calculation design
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: When should a Tableau calculation be an LOD expression rather than a table calculation?
+  answer: |
+    Choose based on the grain and stage of computation. An LOD expression such as FIXED, INCLUDE, or EXCLUDE defines the dimensions at which data is aggregated relative to the view. Use it when a calculation needs a stable or explicit dimensional grain, such as customer-level sales displayed by region, while accounting for the relevant filters. A table calculation operates over marks already returned to the visualization and is appropriate for running totals, ranks, moving windows, or comparison with a prior mark. It depends on addressing, partitioning, sort, and which marks remain available. If the computation is a property of each record, a row-level calculated field may be more suitable; if it is an aggregate exactly at the visible grain, use an aggregate expression. Build a diagnostic crosstab and verify filters and repeated values. For a shared metric, consider whether an upstream warehouse model is easier to govern than a view-specific calculation.
+  tags: [lod, table-calculations, grain]
+- id: tab-recent-005
+  topic: refresh architecture
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: A source receives late corrections to old records. Is a simple incremental extract refresh safe?
+  answer: |
+    Not without confirming the incremental design captures those corrections. A watermark based on an increasing key or timestamp is often suitable for append-oriented data, but a correction to a record older than the watermark may never be revisited. Deletions can be missed as well unless the process represents them. Ask how the source exposes changes, whether timestamps are reliable and unique, and what delay is acceptable. Possible approaches include periodic full refreshes, a source-side change capture or snapshot table, or a refresh design that reprocesses a bounded historical window when that matches source behavior. Test by deliberately correcting and deleting representative records, then compare the extract with a full source query. Coordinate with ingestion schedules and report the last successful refresh. An incremental job finishing successfully does not prove historical completeness. Avoid promising a particular method without verifying Tableau version, connector behavior, and the source's update semantics.
+  tags: [incremental-refresh, late-arriving-data, extracts]
+- id: tab-recent-006
+  topic: performance diagnosis
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: A dashboard is slow only after publishing, while it performs acceptably in Desktop. What do you investigate?
+  answer: |
+    I would reproduce the same interaction and compare the published environment's connection, authentication, network path, permissions, and workload with Desktop. Check whether the published workbook uses live data or an extract, whether credentials are available for scheduled refresh, and whether the server or cloud platform can reach the source. Use performance recording or platform monitoring where available, inspect generated SQL and warehouse query history for live queries, and examine refresh status for extracts. Server capacity, concurrent sessions, rendering, browser behavior, and cold versus warm cache can all contribute. Confirm that filters, actions, and data are the same in both environments; a permission or identity difference can change query behavior. Test as a normal consumer rather than an administrator. Change one factor at a time, preserve correctness checks, and measure under representative use. Do not infer a server sizing requirement from one local timing or claim that publishing itself caused the issue.
+  tags: [performance, publishing, diagnostics]
+- id: tab-recent-007
+  topic: security
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: How do you assess whether Tableau row-level security remains effective when users can download data or use other workbooks?
+  answer: |
+    Begin with the actual access paths: workbook view, web edit, download or export, connected workbooks, published data source, extract, and direct database access. Identify which identity reaches the source. With a shared embedded credential, the database may see only a service account, so database policies cannot automatically distinguish individual viewers unless identity is propagated through a supported design. Prefer centralized policies that cover multiple consumers when available, and restrict permissions that would let users bypass the governed source. Test representative allowed, denied, and unmapped users in the published environment, including permitted export paths. Compare the visible keys to an expected entitlement set and confirm the fail-closed behavior for missing mappings. Review group membership and credential rotation. A dashboard filter is not security, and a user filter is only as strong as its deployment and permissions. Record exceptions and periodically retest after workbook or source changes.
+  tags: [row-level-security, permissions, exports]
+- id: tab-recent-008
+  topic: dashboard design
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: How would you design a Tableau dashboard that works for both desktop and mobile users?
+  answer: |
+    Start from the user task and prioritise the few views and controls needed for that task, rather than shrinking a dense desktop dashboard. Use device-specific layouts where supported and test on the actual target form factors, including text size, touch targets, scrolling, and chart legibility. Put the primary KPI or comparison first, keep filters close to affected views, and make the active selection and data freshness visible. Use chart types and color that remain interpretable at small widths; avoid relying on hover-only tooltips for critical information. Ensure actions have an obvious reset path and test empty results and long labels. Compare the desktop and mobile layouts with representative users and data, since a layout that fits may still be difficult to navigate. Check published behavior and permissions, not only a Desktop preview. There is no automatic responsive design that replaces deliberate layout review; content and interaction priorities may need to differ by device.
+  tags: [dashboard-design, mobile, accessibility]
+- id: tab-recent-009
+  topic: migration
+  difficulty: advanced
+  period: '2024-2026'
+  type: representative
+  question: What are the main risks when migrating Tableau calculations and reports to Power BI?
+  answer: |
+    The main risk is semantic mismatch. Tableau FIXED, INCLUDE, and EXCLUDE LOD expressions have different evaluation behavior from DAX measures and their filter context. Tableau table calculations operate on marks with explicit addressing and partitioning, while DAX evaluates within model context; translating syntax without translating grain and filters changes results. Also inventory relationships, extract scope, filter order, parameters, sets, dashboard actions, user filters, refresh credentials, and export behavior. Start with a metric glossary and workbook dependency inventory, then pilot representative reports. For each important calculation, document grain, aggregation, null handling, date logic, and expected outputs; compare totals and edge cases against trusted source queries. Recreate security in the target and test unauthorized users separately. Migrate obsolete content selectively, plan coexistence and cutover ownership, and train authors on the semantic model. A visually similar report is not proof of calculation, refresh, or security equivalence.
+  tags: [power-bi, migration, dax]
+- id: tab-recent-010
+  topic: governance
+  difficulty: intermediate
+  period: '2024-2026'
+  type: representative
+  question: What would you include in a practical governance plan for Tableau Server or Cloud content?
+  answer: |
+    Establish clear ownership, purpose, metric definitions, lineage, source grain, freshness expectations, and a support route for each trusted workbook and data source. Organize projects and groups with least-privilege permissions, and specify who can publish, edit, download, and administer. Separate development and production or use a repeatable promotion workflow. Document live versus extract mode, refresh schedule, credential ownership, and recovery steps. Monitor refresh failures and stale content, track dependencies before changing shared fields, and review usage and permissions periodically. Certification or endorsement can help users discover trusted sources but needs active ownership and review. Include security tests for row-level entitlements and allowed export paths, not just a visual check of the dashboard. Set a lifecycle process for duplicate or obsolete workbooks and obtain owner approval before retirement. Governance is practical when responsibilities and failure handling are explicit, not when a policy document exists without operational checks.
+  tags: [governance, publishing, tableau-server]

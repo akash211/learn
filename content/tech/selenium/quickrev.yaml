@@ -1,0 +1,90 @@
+concepts:
+  - title: WebDriver command path
+    detail: The Selenium binding sends protocol commands through a driver endpoint to the browser; Remote WebDriver moves that endpoint to a remote service or Grid.
+  - title: Session lifecycle
+    detail: The close() command closes the current window; quit() ends the session and releases all associated windows and resources.
+  - title: Selenium Manager
+    detail: Selenium's built-in manager resolves and caches drivers for common setups; it does not guarantee browser installation, network access, or reproducible CI images.
+  - title: Locator stability
+    detail: Prefer stable IDs, accessible semantics, and deliberate test hooks over generated classes or positional DOM paths.
+  - title: Locator uniqueness
+    detail: find_element returns one match or raises; find_elements returns a list, including an empty list. Scope repeated controls to a meaningful component.
+  - title: Explicit wait
+    detail: WebDriverWait(driver, timeout).until(condition) polls for observable state; use the returned element or result when truthy.
+  - title: Expected conditions
+    detail: expected_conditions distinguishes presence, visibility, clickability, alert presence and staleness; select the condition matching the next action.
+  - title: Implicit wait
+    detail: A session-wide lookup timeout is not a page-readiness guarantee; keeping it at zero simplifies explicit-wait timing.
+  - title: WebElement references
+    detail: A WebElement is a remote reference that can become stale after re-render or navigation; re-locate after state changes.
+  - title: Native dropdowns
+    detail: Selenium's Select wraps an actual select element; custom widgets need their own open, wait, select and verify flow.
+  - title: Browsing contexts
+    detail: Switch into iframe or window contexts before locating their content, then explicitly restore the intended context.
+  - title: Headless environment
+    detail: Headless runs still depend on browser version, viewport, fonts, OS libraries, network and resource limits.
+  - title: Page objects
+    detail: Encapsulate page-specific selectors and behavior; keep scenario intent and business expectations visible in tests.
+  - title: Remote downloads
+    detail: A Grid browser writes to the node, not necessarily the Python client; use supported transfer or shared storage intentionally.
+  - title: Evidence before teardown
+    detail: Capture screenshot, URL, versions and logs while the session is alive; preserve the first exception and protect private data.
+  - title: Permission and throttling
+    detail: Selenium is browser control, not access permission; honor service terms and rate limits, and stop at access controls.
+
+traps:
+  - "Adding fixed sleeps instead of waiting for the page state the next command requires."
+  - "Mixing implicit and explicit waits without accounting for nested polling delays."
+  - "Selecting the first global match or using generated classes that reflect styling rather than identity."
+  - "Retrying a click or submission blindly when it may already have caused a side effect."
+  - "Using Select for a custom dropdown, or locating iframe contents without switching context."
+  - "Assuming headless mode, Selenium Manager, or Grid removes all environment and version concerns."
+
+advanced:
+  - "WebDriverWait can be customized with polling frequency and narrow ignored exceptions, yielding a fluent-wait style in Selenium Python; keep predicates read-only and repeatable."
+  - "A stale reference describes an outdated remote node identity. Wait for the transition and locate the replacement instead of globally suppressing the exception."
+  - "Parallel speedup is bounded by browser-node resources, Grid slots and application capacity; independent sessions and test data are prerequisites."
+  - "Selenium Manager reduces local driver-path management but does not solve offline image provisioning or browser/OS dependency management."
+  - "WebDriver BiDi adds event-oriented bidirectional communication; support varies by Selenium binding, browser and feature, so validate exact versions."
+  - "Remote Grid downloads and artifacts need an explicit node-to-client transfer plan and per-session isolation."
+
+comparisons:
+  - a: find_element
+    b: find_elements
+    difference: "Returns one element or raises vs returns all matches and an empty list when none exist."
+  - a: implicit wait
+    b: explicit wait
+    difference: "Session-wide element lookup delay vs condition-specific polling with WebDriverWait and expected_conditions."
+  - a: presence condition
+    b: visibility condition
+    difference: "DOM node exists vs node is displayed with non-zero dimensions; neither alone proves the next action will succeed."
+  - a: CSS selector
+    b: XPath
+    difference: "Concise for stable attributes and structure vs useful for text and ancestor relationships; stability depends on identity, not syntax."
+  - a: close()
+    b: quit()
+    difference: "Closes current window vs ends the session and closes all its windows."
+  - a: Selenium
+    b: Playwright
+    difference: "Mature WebDriver ecosystem and Grid compatibility vs integrated contexts, auto-waiting and tracing; choose against real requirements."
+  - a: browser automation
+    b: direct API/HTTP extraction
+    difference: "Use a browser for rendered behavior or interaction; prefer a permitted structured endpoint when it supplies the needed data."
+
+commands:
+  - label: Create a Chrome WebDriver session with Selenium Manager
+    code: "from selenium import webdriver; driver = webdriver.Chrome()"
+  - label: Wait for a visible element
+    code: "WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.ID, 'result')))"
+  - label: Wait until a button is actionable
+    code: "WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[type=submit]')))"
+  - label: Select a native dropdown option
+    code: "Select(driver.find_element(By.ID, 'country')).select_by_visible_text('Canada')"
+  - label: Wait for and accept a JavaScript alert
+    code: "WebDriverWait(driver, 5).until(EC.alert_is_present()).accept()"
+  - label: Switch into an iframe then return to the page
+    code: "driver.switch_to.frame(frame); ...; driver.switch_to.default_content()"
+  - label: Save screenshot evidence before teardown
+    code: "driver.save_screenshot('artifacts/failure.png')"
+  - label: End the browser session during teardown
+    code: "driver.quit()"

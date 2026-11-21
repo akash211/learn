@@ -1,0 +1,116 @@
+slug: selenium
+title: Selenium
+category: web-automation
+summary: "Browser automation with WebDriver: reliable UI tests, controlled data extraction, and cross-browser execution."
+level: core
+relations:
+  - to: python
+    type: foundation
+    note: Python supplies the language, test tooling and libraries commonly used to write Selenium suites.
+  - to: playwright
+    type: alternative
+    note: Both automate real browsers; Playwright offers a newer integrated API, while Selenium has a broad WebDriver ecosystem and Grid history.
+  - to: firecrawl
+    type: alternative
+    note: Selenium renders and interacts with browser pages; Firecrawl is an extraction service better suited to many content-crawling tasks.
+intro:
+  what: |
+    Selenium is a browser-automation project whose WebDriver API lets a client program control
+    browsers through a standardized command interface. Selenium's language bindings expose
+    familiar operations—navigate, locate elements, interact, inspect state—while browser-specific
+    driver implementations translate commands into browser actions. Selenium is commonly used
+    for end-to-end testing, compatibility checks, and carefully scoped extraction from pages that
+    require browser rendering or interaction.
+
+    Reliable Selenium work is less about clever clicks than about modeling the page's state.
+    Selectors should express stable identity, waits should describe the condition needed next,
+    and tests should assert user-visible outcomes rather than implementation details. Browser
+    versions, drivers, profiles, network behavior and asynchronous page updates all affect runs.
+  why: |
+    A browser is an important application runtime, not merely a display. WebDriver provides a
+    remote-control protocol so tests can exercise the same DOM, JavaScript and navigation behavior
+    users encounter. It helps teams detect regressions across browsers and supports repeatable
+    workflows that would be costly to validate manually. Selenium's open ecosystem also makes it
+    possible to run tests locally, in containers, or across a managed browser Grid.
+  problems:
+    - Verify end-to-end behavior through a real browser and the application's rendered interface.
+    - Exercise interactions such as forms, navigation, dialogs, frames and multiple windows.
+    - Run a browser compatibility suite across browser versions and operating systems.
+    - Extract rendered information when a documented API or static fetch is not appropriate.
+    - Capture reproducible evidence—screenshots, logs and session details—when a UI flow fails.
+  where_used:
+    - Regression and acceptance tests for web applications.
+    - Cross-browser checks in CI or a Selenium Grid.
+    - Controlled internal workflows and browser-based data validation.
+    - Browser-rendered extraction where permitted and technically justified.
+  ecosystem: |
+    Selenium WebDriver is the automation interface; browser drivers and browsers execute its
+    commands. Selenium Manager can discover, download and cache compatible drivers for common
+    local setups. Python users often pair Selenium with pytest, fixtures and page-object classes.
+    Selenium Grid distributes sessions across remote nodes. Playwright is a strong alternative
+    with auto-waiting and a cohesive browser-context API; Firecrawl or a site's official API may
+    be more suitable than controlling a browser for large-scale content extraction.
+  alternatives:
+    - name: Playwright
+      note: A modern browser-automation framework with built-in waiting and isolated browser contexts.
+    - name: Firecrawl
+      note: A managed extraction/crawling service for eligible web content, without scripting each browser interaction.
+    - name: HTTP client and parser
+      note: Prefer direct requests and structured parsing when the site exposes a suitable, permitted endpoint or static HTML.
+  related: [python, playwright, firecrawl]
+chapters:
+  - id: webdriver-architecture
+    title: WebDriver Architecture and Drivers
+    file: chapters/01-webdriver-architecture.md
+    minutes: 12
+    level: core
+  - id: locators
+    title: "Locators: CSS, XPath and Stable Identity"
+    file: chapters/02-locators.md
+    minutes: 12
+    level: core
+  - id: waits
+    title: Waits, Synchronisation and Flakiness
+    file: chapters/03-waits.md
+    minutes: 12
+    level: core
+  - id: browser-interactions
+    title: Forms, Alerts, Frames and Windows
+    file: chapters/04-browser-interactions.md
+    minutes: 12
+    level: core
+  - id: headless-containers
+    title: Headless Browsers and Containers
+    file: chapters/05-headless-containers.md
+    minutes: 12
+    level: core
+  - id: page-objects
+    title: Page Objects and Framework Structure
+    file: chapters/06-page-objects.md
+    minutes: 12
+    level: core
+  - id: extraction
+    title: Scraping Patterns versus Test Automation
+    file: chapters/07-extraction.md
+    minutes: 12
+    level: advanced
+  - id: responsible-automation
+    title: Anti-Bot Reality, Limits and Ethics
+    file: chapters/08-responsible-automation.md
+    minutes: 11
+    level: core
+  - id: debugging
+    title: "Debugging: Screenshots, Logs and Evidence"
+    file: chapters/09-debugging.md
+    minutes: 12
+    level: core
+  - id: ci-grid
+    title: CI, Grid, Parallelism and Choosing Playwright
+    file: chapters/10-ci-grid.md
+    minutes: 13
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

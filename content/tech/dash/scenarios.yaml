@@ -1,0 +1,125 @@
+- id: dash-scn-001
+  title: A chart callback slows every user's dashboard
+  technologies: [dash, python, sql]
+  difficulty: advanced
+  prompt: |
+    A Dash dashboard normally loads within a second. After a new date-range control is added, applying a filter takes 18 seconds for the user and makes unrelated users report delays. CPU is moderate, the query scans a large fact table, and the callback returns a Plotly figure with tens of thousands of rows. The team suggests adding more Gunicorn workers. How would you diagnose and improve the interaction?
+  approach: |
+    Separate request queueing, database time, Python transformation, serialization, and browser rendering before selecting a fix.
+
+    1. Instrument callback duration and database query time, and inspect worker saturation and connection-pool waits. Confirm whether unrelated requests queue behind occupied workers or share a bottleneck.
+    2. Review the SQL plan and filters; parameterize validated dates and push aggregation/projection into the database. Add appropriate indexes only after checking the query plan.
+    3. Return a bounded aggregate suitable for the chart rather than every raw record. Measure response size and browser render time.
+    4. Cache a safe shared aggregate if freshness allows, with normalized filter keys, tenant scope, and TTL. Coordinate across workers using shared storage when needed.
+    5. Load-test realistic concurrent sessions and size Gunicorn workers and DB pools together. Add a background job only if the interaction is genuinely long-running, and present status while it runs.
+  red_flags:
+    - Increasing workers without measuring database connections, memory, or queueing.
+    - Sending the full table to `dcc.Store` or the browser to avoid query work.
+    - Building SQL by concatenating user-selected dates or columns.
+    - Claiming a cache is safe without including user/tenant access scope.
+    - Optimizing Python code before measuring whether the query or rendering dominates.
+
+- id: dash-scn-002
+  title: Users see another tenant's cached chart
+  technologies: [dash, python]
+  difficulty: advanced
+  prompt: |
+    A multi-tenant Dash application caches chart results in a module-level `lru_cache` keyed by date range and product category. A user reports seeing a chart that belongs to another tenant. The UI filters available categories by tenant, and developers thought this made the callback safe. Explain the likely cause and propose a secure correction.
+  approach: |
+    Treat the browser's selected category as input, not proof of the user's identity or authorization. The cache key omits tenant scope, so a result produced for one tenant can be returned to another within the same worker.
+
+    1. Identify the trusted identity source, such as a verified session or identity-aware proxy, and enforce tenant membership in the server-side data service.
+    2. Include the authorized tenant/scope and all result-affecting normalized parameters in any cache key; alternatively cache only tenant-neutral aggregates.
+    3. Invalidate or expire existing unsafe entries and assess whether sensitive data was exposed.
+    4. Replace process-local caching with a shared cache only if required across workers, while preserving access-aware keys, TTL, and failure behavior.
+    5. Add tests that alter client inputs and attempt cross-tenant record access, covering charts, exports, and background jobs.
+  red_flags:
+    - Assuming hidden dropdown options or client-side state enforce access.
+    - Fixing only the chart callback while leaving downloads or other outputs exposed.
+    - Clearing the cache without correcting the key or authorization check.
+    - Treating a tenant ID submitted by the browser as trusted identity.
+    - Ignoring incident review after potentially sensitive data was returned.
+
+- id: dash-scn-003
+  title: A report action times out while occupying web workers
+  technologies: [dash, python]
+  difficulty: advanced
+  prompt: |
+    A Dash callback builds a quarterly report and can take 70 seconds. Users see gateway timeouts, and during the run ordinary filter callbacks become slow. The report writes a PDF to object storage and emails a link. The team wants to add `background=True` and assume that fixes the problem. What must change?
+  approach: |
+    Move long execution out of the request path, but design job lifecycle, identity, and side effects explicitly. `background=True` needs a configured manager; it is not itself a queue.
+
+    1. Configure and operate an appropriate callback manager and worker backend for the deployment; use a local manager only for development if it is not designed for production scale.
+    2. Validate request parameters and authorization before queueing, and re-check access when retrieving the result.
+    3. Give jobs an idempotency key so retries or double-clicks do not create duplicate reports or emails. Make object names and email delivery behavior explicit.
+    4. Provide progress/status and safe failure output; record job ID, owner, timestamps, and error category without logging sensitive report contents.
+    5. Set resource/time limits, result retention, queue monitoring, and cancellation expectations. Test backend outage, retry, duplicate submission, and partial completion.
+  red_flags:
+    - Adding `background=True` without configuring a manager or queue workers.
+    - Assuming cancellation rolls back a PDF write or sent email.
+    - Retrying email delivery without idempotency controls.
+    - Keeping report results indefinitely or allowing any user to fetch a job by ID.
+    - Treating the gateway timeout setting as the real solution.
+
+- id: dash-scn-004
+  title: Dynamic filter rows return mismatched values after deletion
+  technologies: [dash, python]
+  difficulty: intermediate
+  prompt: |
+    Users can add filter rows to a Dash page. A callback with an `ALL` pattern input combines the returned value list with a second list of labels using `zip`. After users remove a middle row or reorder filters, the query uses the wrong label for a value. The team considers converting the lists to strings and sorting them. Diagnose the design issue and outline a robust fix.
+  approach: |
+    The code assumes list position is a durable identity. Pattern-matching values are collected from matching components, but separate lists and changing layout order can drift away from business meaning.
+
+    1. Represent each row with a stable key in its dictionary ID, such as `{"type": "filter-value", "index": row_key}`; do not use mutable display positions as identities.
+    2. Collect the row definitions and their keys from a single structured source, or use matched dependencies where each row's control is paired.
+    3. Build a mapping from stable key to value, validate the field/operator/value tuple, then construct a parameterized query.
+    4. Handle missing or deleted components and cap the number of rows.
+    5. Test add, delete, reorder, duplicate field, and stale callback cases; assert the resulting query criteria rather than serialized ID strings.
+  red_flags:
+    - Sorting unrelated value and label arrays and assuming they align.
+    - Using row index as both display order and permanent identity.
+    - Concatenating dynamic filter choices directly into SQL.
+    - Failing to handle stale client requests after a row is removed.
+    - Allowing unlimited user-created controls or operators.
+
+- id: dash-scn-005
+  title: Public deployment works at root but breaks under a prefix
+  technologies: [dash, python, docker]
+  difficulty: intermediate
+  prompt: |
+    A Dash container works locally at `/`, but production serves it behind a reverse proxy at `/analytics/`. The page HTML appears, but its CSS, JavaScript assets, and callback requests return 404. Login redirects also lose the prefix. The proxy may strip the prefix before forwarding. How would you troubleshoot and resolve this systematically?
+  approach: |
+    Determine the public path and the exact path forwarded to the app before changing settings. Dash, the proxy, and any identity layer must agree on whether `/analytics` is retained or stripped.
+
+    1. Inspect browser network requests and proxy/app access logs for asset and callback paths, statuses, redirects, and forwarded headers.
+    2. Confirm the proxy's strip-or-preserve rule and configure Dash's `requests_pathname_prefix` and `routes_pathname_prefix` consistently with that behavior.
+    3. Ensure authentication redirects preserve the intended public URL; trust forwarded scheme/host only from the proxy.
+    4. Verify the container serves assets and callback routes under the expected internal path, and the proxy forwards those paths correctly.
+    5. Test a fresh login, direct deep link, page refresh, callback interaction, and logout through public ingress in CI or a staging smoke test.
+  red_flags:
+    - Making unrelated CSS changes when the network requests show wrong paths.
+    - Testing only the container port and not the public ingress.
+    - Trusting arbitrary `X-Forwarded-*` headers from clients.
+    - Fixing asset paths while leaving callback routes or redirects broken.
+    - Hardcoding a production prefix into source code for every environment.
+
+- id: dash-scn-006
+  title: Choose a framework for a growing analyst tool
+  technologies: [dash, streamlit, python]
+  difficulty: intermediate
+  prompt: |
+    An analyst has a Streamlit prototype with a few filters and charts. The roadmap adds linked views, dynamic filter rows, user-specific permissions, multiple pages, and a long-running report. The prototype's script-rerun model is beginning to feel awkward, but a full custom SPA seems too large for the team. How would you decide whether to stay, migrate to Dash, or choose another architecture?
+  approach: |
+    Make the decision from interaction and ownership needs rather than framework fashion. Establish which requirements the current tool can meet cleanly and which create recurring complexity.
+
+    1. Map the workflows, state transitions, URL requirements, access boundaries, and report lifecycle. Identify the riskiest interaction and data size.
+    2. Prototype the linked views and dynamic row behavior in Dash, and estimate callback graph complexity, testing needs, and component-library fit.
+    3. Verify authentication and authorization in both candidates; neither hidden UI nor a framework choice provides security automatically.
+    4. Model the report as a queued job independently of the UI framework, with status, idempotency, and access checks.
+    5. Compare team skills, accessibility, deployment, maintainability, and migration cost. Keep Streamlit if its rerun model remains simple; use Dash if explicit callbacks and control materially help; select a SPA plus API if the UX is highly bespoke.
+  red_flags:
+    - Selecting a framework from generic performance claims or popularity.
+    - Rewriting everything before prototyping the difficult interaction.
+    - Assuming migration solves authorization or background job design.
+    - Ignoring the team's ability to test and maintain the chosen system.
+    - Treating a prototype's current simplicity as proof it will scale unchanged.

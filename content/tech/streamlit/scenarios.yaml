@@ -1,0 +1,183 @@
+- id: st-scn-001
+  title: Duplicate imports after repeated reruns
+  technologies: [streamlit, python, postgresql]
+  difficulty: intermediate
+  prompt: |
+    An internal upload app inserts every parsed row into a database near the top of its main
+    script. A user uploads a CSV once, but the database shows duplicate batches after they change
+    a filter and then refresh the browser. The team says the uploader is “only one widget,” so the
+    script should not have run more than once. How would you diagnose and redesign the flow?
+  approach: |
+    Explain first that the app normally reruns top to bottom after widget interactions; the file's
+    presence on subsequent runs does not mean a fresh upload event. Identify the insert as a
+    side effect that cannot be undone by a rerun.
+
+    1. Trace each run and log a safe request/batch identifier, not file contents or secrets.
+    2. Move processing behind an explicit form submit or action, validate the upload, and show a
+       preview before commit if appropriate.
+    3. Give the operation an idempotency key or unique batch constraint so refresh/retry cannot
+       duplicate records.
+    4. Use a database transaction and persist import status outside Session State.
+    5. Render the saved status/result on later runs; do not re-import merely because the uploaded
+       file remains in widget state.
+
+    Add tests for initial upload, repeated widget changes, double submit, and refresh. Clarify that
+    a form batches values but does not itself provide exactly-once delivery.
+  red_flags:
+    - Claiming Streamlit executes only the line after the widget.
+    - Clearing the UI state and calling it a complete duplicate-write fix.
+    - Adding a spinner without idempotency or database constraints.
+    - Logging complete uploaded rows to identify the issue.
+
+- id: st-scn-002
+  title: Tenant data appears in another user's cached report
+  technologies: [streamlit, python, postgresql]
+  difficulty: advanced
+  prompt: |
+    A multi-tenant report app caches a query by date range and product category. During a review,
+    a user from tenant B sees values that belong to tenant A after loading the same dates and
+    category. Both users have separate Streamlit sessions. The team suspects Session State because
+    the filter widgets differ across pages. What is the likely root cause and how should it be
+    fixed and verified?
+  approach: |
+    Recognize that a data cache can be reused across sessions. Session isolation does not imply
+    cache isolation; the cached function's inputs omit the tenant, and hiding the tenant in a
+    global or reading it implicitly will not create a reliable key or permission check.
+
+    1. Contain exposure: disable or clear the affected cache and investigate what data was served.
+    2. Trace the authenticated principal to the server-side query and ensure the database query
+       enforces tenant scope.
+    3. Add a trusted tenant identifier to the cached function's explicit arguments if result
+       sharing remains appropriate, or avoid broad caching for this result.
+    4. Do not accept tenant identity from an editable widget or Session State flag.
+    5. Add cross-tenant tests that issue identical filter requests as two principals and assert
+       strict separation on cache hits and misses.
+
+    Consider log/retention implications and follow the organization's incident process if actual
+    disclosure occurred. Cache-key correction alone does not replace authorization.
+  red_flags:
+    - Assuming browser sessions are the same thing as cache scopes.
+    - Fixing only the UI to hide a tenant selector.
+    - Trusting a user-submitted tenant ID without server-side authorization.
+    - Treating a unique cache key as sufficient access control.
+
+- id: st-scn-003
+  title: Dashboard remains sluggish after caching queries
+  technologies: [streamlit, python]
+  difficulty: intermediate
+  prompt: |
+    A dashboard loads a 1.5-million-row dataframe from a warehouse. The query runs in 2 seconds
+    and is decorated with `st.cache_data`, but changing a display control still takes several
+    seconds and browser memory climbs. The dataframe is also stored in Session State for use by
+    three tabs. How would you investigate and improve it without guessing at infrastructure
+    limits?
+  approach: |
+    Profile end-to-end stages rather than concluding the cache failed. A cache hit avoids the
+    query body but can still serialize/copy a large result, rerun downstream transformations,
+    transmit a large payload, and make the browser render millions of cells. Three tabs may each
+    derive or hold additional copies; Session State retains the large object per active session.
+
+    1. Measure row/column count, query, transformations, serialization/payload, browser render,
+       cache hits, and process memory.
+    2. Push filtering, projection, aggregation, and pagination to the warehouse.
+    3. Display a bounded table and aggregate chart to appropriate visual resolution; fetch detail
+       only after the user selects a record.
+    4. Keep compact filters and IDs in Session State rather than the full dataframe.
+    5. Review cache cardinality and memory; `max_entries` is not a byte limit.
+    6. Load-test realistic concurrent sessions and set platform/container budgets from current
+       deployment documentation, not invented Streamlit constants.
+  red_flags:
+    - Increasing cache size before measuring result size and memory.
+    - Assuming a cache hit makes data transfer and browser rendering free.
+    - Arbitrarily raising a platform limit without consulting current docs.
+    - Sending the entire warehouse table to the browser and relying on tab layout.
+
+- id: st-scn-004
+  title: Long export fails when the user closes the tab
+  technologies: [streamlit, python, fastapi]
+  difficulty: advanced
+  prompt: |
+    Users request multi-minute regulatory exports from a Streamlit app. The app shows a spinner
+    while building the file in memory, but closing the tab or deploying a new version interrupts
+    the export. Users sometimes click again and produce duplicate export records. Design a more
+    reliable approach while preserving a simple Streamlit interface.
+  approach: |
+    Separate user interface lifetime from job lifetime. A spinner only communicates that
+    synchronous work is happening; it does not provide durability, background execution, or
+    cancellation. Move export generation to a queue/worker or durable job service.
+
+    1. On submit, validate request and authorization, create a job record with an idempotency key,
+       and enqueue it.
+    2. Worker streams or processes bounded chunks, records progress/status, and writes output to
+       protected object storage; use retry-safe steps.
+    3. Streamlit stores the job ID as convenient session state and polls persisted status, with
+       bounded refresh intervals (a fragment may suit active sessions, not as the scheduler).
+    4. On completion, authorize each status and download request; use expiring links or a controlled
+       download endpoint, and define retention/deletion.
+    5. Surface failures and safe retry semantics; ensure duplicate submissions map to one job.
+
+    Validate timeouts, storage, permissions, and recovery across a worker restart and app redeploy.
+  red_flags:
+    - Increasing spinner duration or proxy timeout as the full durability design.
+    - Using `st.fragment(run_every=...)` as a persistent job scheduler.
+    - Keeping the only output copy in Session State.
+    - Publishing a permanent public URL to a regulatory export.
+
+- id: st-scn-005
+  title: Upload validation bypassed by file extension
+  technologies: [streamlit, python]
+  difficulty: intermediate
+  prompt: |
+    An app accepts `.csv` through `st.file_uploader(type="csv")`, parses files, and later generates
+    spreadsheet downloads. A user uploads a renamed binary file that crashes the parser, and
+    another user reports that exported text beginning with `=` becomes a spreadsheet formula.
+    What controls should be added across the upload-to-download lifecycle?
+  approach: |
+    Treat file type filtering as a UX hint, not a trust boundary. Validate byte content and parse
+    errors, check encoding/schema/required columns, bound file size, row count, decompressed size,
+    and processing time. Do not trust client filenames; generate safe names and use controlled
+    storage if persistence is needed.
+
+    For exports, neutralize formula-like untrusted cell values according to the target format and
+    library, while preserving legitimate data safely. Limit exported columns and protect personal
+    data. Avoid logging raw file content. Apply malware scanning or additional controls appropriate
+    to threat model and hosting. Align proxy, host, and widget size ceilings. Show concise user
+    errors but keep diagnostic details in appropriately redacted logs. Test malformed encodings,
+    oversized inputs, unexpected delimiters, formula prefixes, and cleanup/retention after both
+    successful and failed parses.
+  red_flags:
+    - Claiming the `type` parameter validates actual file bytes.
+    - Writing uploaded names directly into filesystem paths.
+    - Returning raw parser exceptions and uploaded contents in the UI.
+    - Ignoring the spreadsheet formula issue because the input was a CSV.
+
+- id: st-scn-006
+  title: Streamlit works locally but fails behind the production proxy
+  technologies: [streamlit, docker]
+  difficulty: advanced
+  prompt: |
+    A containerized Streamlit app works when accessed directly in staging but fails in production
+    behind `/tools/analytics/`. The page shell loads, yet navigation, uploads, and long-lived
+    connections fail intermittently. The team also uses a hidden page for administrator reports.
+    Outline a diagnostic and production hardening plan.
+  approach: |
+    Treat the proxy path and persistent connection as first-class parts of the app. Check WebSocket
+    upgrade support, base-path and forwarded host/protocol configuration for the exact deployed
+    topology, and proxy idle/read timeouts. Confirm the backend is not publicly reachable if it
+    trusts proxy headers. Test file-size ceilings across proxy, host, and Streamlit configuration.
+
+    1. Reproduce through the public prefix; inspect browser network/WebSocket errors and proxy logs.
+    2. Verify TLS termination, path routing, reconnect behavior, navigation, and upload/download
+       flow after idle and redeploy.
+    3. Set explicit resource and timeout budgets based on current platform docs and observed load.
+    4. Replace hidden-page “protection” with trusted authentication plus server-side role checks
+       on every admin query/action.
+    5. Add health checks, structured redacted logs, dependency pinning, and monitoring.
+
+    Validate with direct URL access, an unauthorized principal, and untrusted forwarded headers;
+    do not assume visibility implies permission.
+  red_flags:
+    - Debugging only at localhost after the public prefix is part of the failure.
+    - Disabling TLS or allowing arbitrary forwarded headers as a shortcut.
+    - Treating a hidden admin page as access control.
+    - Inventing universal Streamlit resource or proxy timeout limits.

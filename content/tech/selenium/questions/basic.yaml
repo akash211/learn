@@ -1,0 +1,235 @@
+- id: sel-basic-001
+  topic: WebDriver architecture
+  difficulty: beginner
+  question: What happens between calling `driver.get(url)` and seeing a page load?
+  answer: |
+    The Selenium language binding turns `driver.get(url)` into a WebDriver command and sends it to the browser's driver endpoint. The endpoint asks the browser to navigate and returns a protocol response. With a local `webdriver.Chrome()`, the client, driver service and browser usually run on the same host. With `webdriver.Remote`, the command crosses the network to a Grid or remote service, which allocates a browser session. The call's return does not mean every asynchronous application request has finished; it reflects WebDriver's navigation behavior and page-load strategy. Tests should wait for the specific next state they need, such as a visible result or enabled control, instead of assuming the initial document load means the whole application is ready.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [webdriver, architecture, navigation]
+
+- id: sel-basic-002
+  topic: drivers
+  difficulty: beginner
+  question: What is Selenium Manager, and does it remove every browser setup concern?
+  answer: |
+    Selenium Manager is Selenium's built-in tool for discovering and managing browser drivers in common setups. Recent Selenium bindings can invoke it when creating a local browser session, so developers often do not need to download and pass a driver path manually. It can discover an installed browser, resolve a compatible driver, and cache downloads. It does not install every browser or system dependency in every environment, guarantee network access through a corporate proxy, or make a moving browser version reproducible. In a locked-down CI image, provision the browser and verify the driver strategy explicitly. When session creation fails, inspect browser installation, Selenium version, permissions, proxy/network access, and logs before manually adding another driver executable.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [selenium-manager, drivers, setup]
+
+- id: sel-basic-003
+  topic: sessions
+  difficulty: beginner
+  question: What is the difference between `driver.close()` and `driver.quit()`?
+  answer: |
+    `close()` closes the currently focused browser window. If other windows remain, the WebDriver session can continue with those windows; if it was the last one, the session may end. `quit()` ends the WebDriver session and closes all windows associated with it. Normal test teardown should usually call `quit()` so browser processes and remote Grid slots are released. Put cleanup in a fixture finalizer or `finally` block so an assertion failure does not skip it. If a test opens a popup and wants to continue in the original window, close only the popup and switch back to the saved original handle. Do not confuse closing a window with returning to a different browsing context.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [sessions, lifecycle, quit]
+
+- id: sel-basic-004
+  topic: locators
+  difficulty: beginner
+  question: When should you choose a CSS selector instead of XPath?
+  answer: |
+    CSS selectors are a good default for stable IDs, classes, attributes, and straightforward relationships because they are compact and familiar. For example, `button[data-testid='save']` expresses a stable test hook more clearly than a long ancestor chain. XPath is useful when a locator depends on text content, needs to traverse from a child to an ancestor, or expresses a relationship CSS cannot conveniently represent. Neither syntax is automatically reliable: `div:nth-child(4) > button` and a long positional XPath both encode incidental layout. Choose the locator that communicates intended identity, scope it to the relevant component, and check that it matches exactly one target. If possible, improve application markup instead of making a fragile selector more complicated.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [locators, css, xpath]
+
+- id: sel-basic-005
+  topic: locators
+  difficulty: beginner
+  question: What do `find_element` and `find_elements` return when no element matches?
+  answer: |
+    `find_element` returns one matching `WebElement`; if no match exists at lookup time, it raises `NoSuchElementException` (subject to any configured implicit wait). `find_elements` returns a list of all matches and returns an empty list when there are none. This distinction affects assertions and wait conditions. A predicate that uses `find_elements` should explicitly treat an empty list as “not ready,” while a test that expects one element can wait with `EC.presence_of_element_located`. Avoid relying on an implicit wait to turn `find_elements` into a meaningful readiness test. Also assert uniqueness when the action should target one control; otherwise a broad locator can quietly select the wrong page element.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [locators, find-element, exceptions]
+
+- id: sel-basic-006
+  topic: locators
+  difficulty: intermediate
+  question: Why is a generated CSS class usually a poor locator?
+  answer: |
+    A generated class often exists to support styling or a frontend build, not to identify a user action. Refactoring CSS, changing component libraries, or rebuilding assets can rename it without changing product behavior, so tests fail for irrelevant reasons. Deep paths such as `div.wrapper > div:nth-child(2) button.blue` are similarly coupled to layout. Prefer a stable ID, name, accessible label, semantic attribute, or deliberately maintained `data-testid`. If the application is under your control, agree on test hooks and keep them independent of visual styling. On third-party pages, use stable public semantics and accept that markup changes may require maintenance. Stable selectors reduce noise but do not excuse checking that the intended element is visible and unique.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [locators, stability, testability]
+
+- id: sel-basic-007
+  topic: waits
+  difficulty: beginner
+  question: What does `WebDriverWait(...).until(...)` do?
+  answer: |
+    `WebDriverWait(driver, timeout).until(condition)` repeatedly evaluates a callable with the driver until it returns a truthy value or the timeout expires. Selenium's `expected_conditions` module provides reusable predicates, including presence and visibility of an element, clickability, alert presence, and staleness. The returned truthy value is often useful: for example, `element_to_be_clickable` returns the element that can then be clicked. A wait should describe the next state the test requires, not merely add delay. Keep predicates safe to evaluate repeatedly; they should observe readiness, not perform clicks or submissions. If the condition never becomes true, the timeout is diagnostic evidence to investigate selector, application state, navigation, and environment.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [waits, webdriverwait, expected-conditions]
+
+- id: sel-basic-008
+  topic: waits
+  difficulty: beginner
+  question: What is the difference between presence, visibility and clickability conditions?
+  answer: |
+    `presence_of_element_located` means a matching node exists in the DOM, but it can be hidden or covered. `visibility_of_element_located` also requires the element to be displayed with non-zero dimensions. `element_to_be_clickable` checks that the element is visible and enabled, which is a stronger precondition for a click. It still cannot guarantee that an overlay will not appear immediately afterward or that the browser will accept the click. Choose a condition based on the operation: presence may be enough to inspect an attribute, visibility is appropriate for reading user-visible content, and clickability fits a button action. After clicking, wait for the outcome rather than assuming the action succeeded.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [waits, visibility, clickability]
+
+- id: sel-basic-009
+  topic: waits
+  difficulty: intermediate
+  question: Why can mixing implicit and explicit waits create confusing timeouts?
+  answer: |
+    An implicit wait applies to element-location commands across the session. An explicit `WebDriverWait` evaluates its predicate repeatedly, and that predicate may perform one or more lookups that each inherit the implicit timeout. As a result, the total time for an explicit wait can exceed the timeout a reader expects, and timing becomes harder to reason about. The two timeout mechanisms do not always combine as a simple sum, because polling and command behavior matter. A common policy is to keep implicit wait at zero and use explicit waits around specific state transitions. If a team chooses a different strategy, document it and test actual timeout behavior. Prefer conditions that target the required page state instead of globally delaying every lookup.
+  tags: [waits, implicit-wait, explicit-wait]
+
+- id: sel-basic-010
+  topic: waits
+  difficulty: beginner
+  question: Why is `time.sleep(2)` not a reliable synchronization strategy?
+  answer: |
+    A sleep waits for a fixed duration whether the page is ready or not. If the application or network takes longer than two seconds, the test still races and fails; if it finishes in a fraction of a second, the test wastes time. CI load, animations, browser startup and backend latency vary, so a duration that happened to work locally does not define readiness. Replace sleeps with an explicit condition such as a visible confirmation, an updated result count, or a stale old element. A short sleep can be useful temporarily while debugging or when a documented external system requires a deliberate pause, but it should not substitute for waiting on observable state.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [waits, flakiness, sleep]
+
+- id: sel-basic-011
+  topic: forms
+  difficulty: beginner
+  question: How do you select an option from a native HTML `<select>` element?
+  answer: |
+    Locate the native `<select>` and wrap it with Selenium's `Select` class from `selenium.webdriver.support.ui`. Then choose an option with `select_by_visible_text`, `select_by_value`, or `select_by_index`. Visible text or a stable value is generally clearer than an index, because option order can change. `Select` is not a generic dropdown helper: it expects an actual `<select>` element and raises an error for a custom widget built from `div`, buttons, or ARIA roles. For a custom dropdown, click its trigger, wait for the option menu, and interact with the intended option using a stable locator. Verify the chosen value or visible label afterward if selection is important to the test.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [forms, select, dropdown]
+
+- id: sel-basic-012
+  topic: forms
+  difficulty: beginner
+  question: How should a test handle checkbox state without accidentally toggling it incorrectly?
+  answer: |
+    Inspect the checkbox with `is_selected()` and compare its current state with the state the test requires. Call `click()` only when they differ. This makes the setup idempotent: rerunning it does not toggle a checked box off. Before typing a replacement into a normal text field, call `clear()` and then `send_keys()`; do not assume the field starts empty. Custom controls may not be native checkbox inputs, so inspect their semantics and use their intended user interaction. After changing an important value, assert the resulting state or submitted outcome. Avoid using JavaScript to mutate the DOM directly, because that may bypass input events and fail to exercise the application's normal behavior.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [forms, checkbox, state]
+
+- id: sel-basic-013
+  topic: alerts
+  difficulty: beginner
+  question: How do you interact with a JavaScript alert in Selenium?
+  answer: |
+    A native JavaScript alert is not part of the page DOM, so locating it with `find_element` will not work. Wait for it with `expected_conditions.alert_is_present()`, switch to the resulting `Alert` object, optionally read `alert.text`, then call `accept()` or `dismiss()` according to the behavior being tested. A prompt dialog also supports `send_keys()` before acceptance. Waiting matters because the alert may be triggered asynchronously after a click. Decide whether the test is meant to accept or cancel: those paths can have different application effects. If the alert never appears, the wait timeout helps distinguish a missing trigger from a selector problem.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [alerts, dialogs, expected-conditions]
+
+- id: sel-basic-014
+  topic: frames
+  difficulty: beginner
+  question: Why must Selenium switch into an iframe before locating its contents?
+  answer: |
+    An iframe hosts a separate document and WebDriver searches within the current browsing context. Finding the iframe element does not automatically make its child document current. Call `driver.switch_to.frame(frame_element)`, or use a supported frame name or index, before locating controls inside. When finished, return to the top-level page with `driver.switch_to.default_content()` or move one level outward with `parent_frame()`. For an iframe that appears asynchronously, use `frame_to_be_available_and_switch_to_it` as an explicit wait condition. A common symptom of a missing switch is that the frame is visible in the DOM but its internal button produces `NoSuchElementException`. Keep context restoration in `finally` where errors are possible.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [frames, iframe, context]
+
+- id: sel-basic-015
+  topic: windows
+  difficulty: beginner
+  question: How should a test identify a newly opened tab or window?
+  answer: |
+    Save the current window handle or the set of existing handles before the action that opens a new tab. Then wait until the handle set has an additional entry, compute the difference, and switch to that new handle. Do not assume a new tab always occupies a particular list index. After switching, validate its URL or a page-specific condition so the test knows it landed in the expected place. When finished, close the extra window if appropriate and switch back to the saved original handle. `current_window_handle` and `window_handles` expose the active and available contexts. A click may be blocked or open the same tab instead, so waiting for a new handle also gives a clear failure when the expected behavior does not occur.
+  tags: [windows, tabs, handles]
+
+- id: sel-basic-016
+  topic: headless
+  difficulty: intermediate
+  question: Does headless Chrome behave exactly like a headed browser?
+  answer: |
+    Headless Chrome is still a browser, but it runs without a visible desktop window and may differ from a developer's headed environment in viewport, fonts, device scale, graphics setup, browser version, locale or container dependencies. Those differences can change responsive layout, screenshots and timing. Set a deliberate window size and pin the browser environment used in CI. If a test fails only headlessly, collect a screenshot and logs, then compare the actual environment before adding flags or longer waits. Assertions should usually target semantic behavior rather than exact pixels unless visual fidelity is the requirement. Headless mode helps automate execution; it does not make poor synchronization or unstable selectors reliable.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [headless, chrome, ci]
+
+- id: sel-basic-017
+  topic: containers
+  difficulty: intermediate
+  question: What does a container need in order to run Selenium with Chrome?
+  answer: |
+    The container needs the Selenium client library, a Chrome browser binary, compatible operating-system libraries and fonts, a viable driver-resolution strategy, and enough memory and shared memory for the workload. Installing the Python package alone does not supply all of these dependencies. A maintained Selenium browser image can package the browser and Grid components, but its tag and resource requirements should be explicit. Selenium Manager may resolve a driver in common cases, but it cannot fix a missing browser or inaccessible network in an isolated build. Pin the image or digest, run as securely as supported, and avoid broad privileged or sandbox-disabling workarounds. A smoke test should prove that the selected image can start and close a browser.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [containers, chrome, selenium-manager]
+
+- id: sel-basic-018
+  topic: page objects
+  difficulty: beginner
+  question: What problem does the Page Object pattern solve?
+  answer: |
+    A page object gathers page-specific locators and operations behind a small interface, reducing repeated selectors, waits and navigation logic across tests. A test can call `login_page.sign_in(...)` rather than duplicate every field lookup. When a selector changes, a well-scoped object limits how many tests need repair. Page objects should model meaningful page or component behavior, not become giant classes that hide every assertion and workflow. Tests usually own scenario intent and expected business outcomes. Avoid returning raw `WebElement` references broadly because DOM re-rendering can make them stale. The pattern is a maintenance choice rather than a Selenium requirement; a few simple tests may need only fixtures and a small helper.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [page-objects, design, maintainability]
+
+- id: sel-basic-019
+  topic: fixtures
+  difficulty: intermediate
+  question: Why should a test suite create and clean up WebDriver sessions carefully?
+  answer: |
+    Each WebDriver session can start a browser process and consume significant memory, CPU, file handles, and a remote Grid slot. If a test fails before cleanup, a leaked session can slow later tests or exhaust the worker. Use a pytest fixture or `try/finally` so `driver.quit()` runs during teardown. `close()` only closes the current window, while `quit()` ends the session and closes its windows. Use an isolated session per test when test independence is more valuable than startup time. If reusing sessions, explicitly reset cookies, local storage, tabs, downloads and application data. Never run concurrent commands from multiple tests against one shared driver because browser state can interleave.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [fixtures, sessions, pytest]
+
+- id: sel-basic-020
+  topic: extraction
+  difficulty: intermediate
+  question: When is Selenium a poor choice for data extraction?
+  answer: |
+    Selenium is usually a poor default when an official API, permitted static HTML endpoint, export file, or database view already provides the data. A browser is relatively expensive: it renders pages, runs JavaScript, and consumes memory for each session. For a large static crawl, direct HTTP plus a parser or a dedicated extraction tool may be simpler and more efficient. Use Selenium when browser rendering or a legitimate user interaction is genuinely required, and respect site terms, rate limits, privacy and access controls. Extraction needs schema validation, deduplication, provenance and resumability; a test that merely confirms one result is visible does not establish that a dataset is complete.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [scraping, extraction, tools]
+
+- id: sel-basic-021
+  topic: pagination
+  difficulty: intermediate
+  question: How can a browser-based extractor handle pagination without looping forever?
+  answer: |
+    Model the pagination mechanism and define a stop condition. For a next-page link, wait for a page indicator or result set to change after clicking, and record stable item IDs or page URLs. For infinite scrolling, scroll deliberately, wait for additional records, and set a maximum page or item bound. Detect repeated pages, self-referential next links, empty results and duplicate IDs. Persist progress in batches so a run can resume after failure instead of keeping everything in memory. Include source URL and collection time when useful, and validate required fields before writing. A successful click does not prove new data arrived; compare the observable content after the transition and report partial output clearly.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [pagination, extraction, reliability]
+
+- id: sel-basic-022
+  topic: downloads
+  difficulty: intermediate
+  question: What should a test verify when it triggers a browser download?
+  answer: |
+    Configure a dedicated download directory, preferably unique to the test or worker, and trigger the download through the intended UI. Wait for a completed file using a stable completion check rather than a fixed sleep; some browsers create a temporary extension during transfer. Validate more than existence: check expected filename or pattern, non-zero size, content type where available, and the parsed file schema or key record. Remote Grid execution adds location ambiguity: the file may exist on a node, not on the Python client. Use a supported managed-download transfer feature for the Grid version in use, or another approved mechanism. Clean up test files afterward and avoid storing sensitive exports in broadly accessible CI artifacts.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [downloads, files, grid]
+
+- id: sel-basic-023
+  topic: debugging
+  difficulty: intermediate
+  question: What evidence is useful when a Selenium test fails in CI?
+  answer: |
+    Preserve the first exception and collect a screenshot before quitting the browser when possible. Record the current URL, page title, test name, timestamp, Selenium version, browser/version, execution mode, capabilities and Grid session ID. Driver or browser logs can help diagnose startup, communication and JavaScript problems when the configured browser and endpoint support them. Include the locator and expected wait condition in failure context. Do not blindly dump page source, cookies, tokens or sensitive form contents; screenshots and URLs can also expose private data. If artifact capture fails because the session has died, report that as a secondary problem without replacing the original exception. This evidence helps distinguish selector bugs, timing races, app errors and infrastructure failures.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [debugging, screenshots, logs]
+
+- id: sel-basic-024
+  topic: grid
+  difficulty: intermediate
+  question: What is Selenium Grid used for, and what does it not guarantee?
+  answer: |
+    Selenium Grid accepts WebDriver sessions and routes them to available browser nodes. It is useful for centralized browser infrastructure, remote execution, and cross-browser testing without installing every browser on each test worker. A client typically uses `webdriver.Remote` with an endpoint and browser options. Grid does not guarantee that a requested browser or version is configured, that capacity is available, or that a remote download is visible on the client filesystem. It adds network, queueing, node health, security and artifact-transfer considerations. Request capabilities that match the deployed nodes, bound parallel sessions, protect the endpoint, and log the session ID. Treat Grid as shared infrastructure whose capacity and image lifecycle must be operated intentionally.
+
+    A useful test also records its expected state and leaves enough diagnostics to explain failure, while avoiding retries that repeat side effects or hide the first error.
+  tags: [grid, remotewebdriver, parallelism]

@@ -1,0 +1,154 @@
+- id: tab-basic-001
+  topic: data model
+  difficulty: beginner
+  question: What is the difference between a dimension and a measure in Tableau?
+  answer: |
+    A dimension describes or segments records, while a measure is a field Tableau typically aggregates in a view. Region, customer, and product are common dimensions; Sales and Profit are common measures. These are data roles rather than rigid meanings. A numeric customer ID is usually a dimension because adding IDs is meaningless, while a numeric field can be converted to a measure when aggregation is appropriate. Tableau aggregates measures at the level implied by dimensions in the view: SUM(Sales) by Region produces regional values, while SUM(Sales) alone may produce one overall mark. Before trusting the result, establish the source grain and choose an aggregation that fits the metric. Balances, ratios, counts, and snapshots do not all behave like additive sales amounts. Role, aggregation, and business definition should agree.
+  tags: [dimensions, measures, aggregation]
+- id: tab-basic-002
+  topic: visual model
+  difficulty: beginner
+  question: What do blue and green pills mean, and are they the same as dimension and measure?
+  answer: |
+    Blue pills represent discrete fields, which create headers and categories; green pills represent continuous fields, which create an axis or continuous range. Blue and green do not mean dimension and measure. Tableau fields have a data role, such as dimension or measure, and a pill's discrete/continuous setting controls how it is displayed in the view. A date dimension can be blue as discrete YEAR(Order Date), creating year headers, or green as a continuous date axis. A numeric dimension can also be discrete. Choose based on the question: category comparison often benefits from headers, while a time trend often benefits from an ordered axis. Changing a date from discrete month to continuous month can change whether months from different years are kept in sequence or grouped by month name. Check both the field's meaning and the view's scale rather than relying on color alone.
+  tags: [discrete, continuous, dates]
+- id: tab-basic-003
+  topic: data model
+  difficulty: intermediate
+  question: Why does the level of detail matter when building a Tableau view?
+  answer: |
+    Grain describes what one source row represents, such as an order line, a daily account balance, or one customer. Tableau aggregates measures to the grain implied by dimensions in the view, so adding or removing a dimension can change the displayed result. Grain also matters when combining tables: joining order lines to several customer tickets can multiply rows and inflate SUM(Sales). A metric can be numerically correct at one grain but misleading at another. For example, balances may be additive across accounts at a point in time but not across dates, and averaging row-level margins is different from dividing total profit by total sales. State the source and target grain, inspect joins or relationships, and test with a diagnostic crosstab. For critical metrics, reconcile selected totals with source SQL. A polished chart cannot correct a mismatch in grain or duplicated facts.
+  tags: [grain, joins, aggregation]
+- id: tab-basic-004
+  topic: data model
+  difficulty: intermediate
+  question: When would you use a relationship instead of a physical join in Tableau?
+  answer: |
+    Use a relationship when logical tables have different grains and you want Tableau to preserve those tables' levels of detail while generating queries based on the fields used in a view. It is useful for flexible analysis across, for example, orders and targets without forcing every worksheet to use one fixed row-level join. A physical join combines rows within a logical table and is appropriate when the required row-level combination and join behavior are understood. Relationships do not eliminate the need to understand key uniqueness, cardinality, referential integrity, or the view's grain. An incorrect key or many-to-many pattern can still create surprising results. Validate representative combinations of dimensions and measures, check totals against source queries, and inspect null or unmatched keys. A union stacks similarly structured rows; it is not a substitute for a relationship. Choose based on intended row semantics rather than assuming one model option is universally safer.
+  tags: [relationships, joins, grain]
+- id: tab-basic-005
+  topic: connections
+  difficulty: beginner
+  question: How does a live connection differ from a Tableau extract?
+  answer: |
+    A live connection sends queries to the underlying database or warehouse as users interact. Performance and freshness depend on source workload, network, query design, caching, and upstream data schedules. A live connection is not inherently slow, and it may not show newly arrived data if ingestion has not completed. An extract is a Tableau-managed snapshot of selected source data. It can reduce repeated source queries and support analysis without querying the source for every interaction, but it must be refreshed and consumes storage and refresh capacity. Extracts can be scoped or aggregated, so they may not contain every source row or support every desired drill path. Choose using explicit freshness, concurrency, offline, governance, and cost requirements; benchmark representative workloads instead of claiming universal speed improvements. For either mode, test published credentials and connectivity because a Desktop connection does not guarantee that Server or Cloud can access the source.
+  tags: [live, extract, freshness]
+- id: tab-basic-006
+  topic: connections
+  difficulty: intermediate
+  question: When is incremental extract refresh appropriate, and what can make it incorrect?
+  answer: |
+    Incremental refresh is appropriate when the source has a reliable field and change pattern that lets Tableau identify data to add or refresh. A monotonically increasing key or timestamp may work for append-oriented data, provided the boundary and uniqueness are well defined. It can become incomplete if older records are corrected, late-arriving facts appear behind the watermark, rows are deleted, timestamps tie, or time zones shift the cutoff. A simple append strategy does not inherently capture every update or deletion. Ask how the source represents changes and what freshness is required, then compare incremental output with a trusted full extract or source query. Some deployments need periodic full rebuilds or a source-side change capture design to reconcile history. Also coordinate refresh with upstream ingestion, monitor failures, and expose the last successful refresh. A green job status confirms execution, not business completeness or correct totals.
+  tags: [incremental-refresh, extracts, data-quality]
+- id: tab-basic-007
+  topic: calculations
+  difficulty: intermediate
+  question: Explain FIXED, INCLUDE, and EXCLUDE LOD expressions.
+  answer: |
+    Level-of-detail expressions specify a dimensional grain for a calculation. FIXED computes at the dimensions named in the expression regardless of dimensions displayed in the view, although data-source, extract, and context filters affect it. INCLUDE adds dimensions to the view's level of detail for the calculation, after which Tableau can aggregate the result back to the visible grain. EXCLUDE removes listed view dimensions for the calculation, for example to compare a displayed subcategory with a category-level total. They differ from table calculations, which operate on marks after the view query. Choose an LOD when the calculation needs a defined grain; use a table calculation when it depends on neighboring or partitioned marks. Test the result in a small crosstab that exposes source grain, view grain, and filters. Remember that a FIXED value repeated across detail rows can be multiplied if later summed at a finer grain.
+  tags: [lod, fixed, include, exclude]
+- id: tab-basic-008
+  topic: calculations
+  difficulty: intermediate
+  question: Why might a FIXED LOD expression ignore a regular dimension filter?
+  answer: |
+    FIXED LOD expressions are evaluated before ordinary dimension filters in Tableau's order of operations. For example, `{ FIXED [Customer ID] : SUM([Sales]) }` can compute customer sales over all regions even when a Region dimension filter later limits the visible marks. That may be intended if the user should see all-region customer totals within a selected display, but it is wrong if the total must be limited to the chosen region. A context filter is evaluated before FIXED, so promoting Region to context makes the FIXED calculation use that subset. Do so only when it reflects the required semantics; context is not a universal performance switch. Alternatively, reconsider the expression or model. Diagnose with a small view showing the base measure and FIXED result before and after the filter. Data-source and extract filters are earlier too, so the actual result depends on the full filter stack.
+  tags: [fixed, context-filter, order-of-operations]
+- id: tab-basic-009
+  topic: calculations
+  difficulty: intermediate
+  question: How do INCLUDE and EXCLUDE differ from a table calculation?
+  answer: |
+    INCLUDE and EXCLUDE are LOD expressions that change the dimensional grain used in the data-query calculation relative to the view. INCLUDE adds dimensions to the view's grain for the expression and then permits aggregation back to the displayed grain. EXCLUDE removes selected view dimensions for that calculation. A table calculation instead operates on the marks Tableau has already returned to the visualization. Running sums, ranks, and LOOKUP are common table calculations; their results depend on partitioning, addressing direction, sort, and available marks. Use an LOD for a defined dimensional grain and a table calculation for relationships among displayed marks. A table calculation may change when the view's layout changes, while an LOD's named dimensions state a different kind of intent. Validate with a crosstab, check nulls and filter behavior, and avoid assuming that syntactically similar percentages have identical semantics. For reused business logic, consider whether upstream SQL is clearer and more consistent.
+  tags: [lod, table-calculations]
+- id: tab-basic-010
+  topic: calculations
+  difficulty: intermediate
+  question: What are addressing and partitioning in a Tableau table calculation?
+  answer: |
+    A table calculation works over marks in the view. Addressing specifies the direction or dimensions along which it traverses marks; partitioning defines the groups where the calculation restarts. For a running sum by month within each Region, the months are addressed in date order and Region defines separate partitions. If the calculation instead addresses across regions, the result answers a different question even though the same RUNNING_SUM expression appears. Sorting also determines what “previous” means for LOOKUP or ranking. The compute-using controls and specific-dimension settings let you inspect this behavior. Filters and hidden marks can affect which values are available at the table-calculation stage. Debug by showing the relevant dimensions in a crosstab, validating sort and partitions, and checking boundary marks where LOOKUP may return null. Table calculations are powerful for view-level analysis but are not automatically a substitute for a reusable database window calculation.
+  tags: [table-calculations, addressing, partitioning]
+- id: tab-basic-011
+  topic: filters
+  difficulty: intermediate
+  question: What is Tableau's order of operations, and why does it matter?
+  answer: |
+    A useful simplified sequence is extract filters, data source filters, context filters, FIXED LOD expressions, dimension filters, INCLUDE/EXCLUDE LOD expressions, measure filters, table calculations, then table-calculation filters. It matters because filters at different stages change which rows or marks a calculation can see. A normal dimension filter generally follows FIXED, so a FIXED total may include values outside the visible dimension selection. A context filter runs earlier and can constrain that FIXED calculation. A table-calculation filter is late, so marks can be hidden after a calculation has considered them; a regular dimension filter may remove them first and change a running total. This sequence is a practical model, not a guarantee for every edge case or product version. When a result surprises you, identify calculation type, filter type, intended subset, and grain, then test a small worksheet and reconcile to source data.
+  tags: [filters, order-of-operations, lod]
+- id: tab-basic-012
+  topic: filters
+  difficulty: intermediate
+  question: How can a context filter change a Top N result?
+  answer: |
+    A Top N dimension filter may select the leading members from the broader data domain before another ordinary dimension filter is applied. If the requirement is the top ten products within the selected category, a Top N computed across all categories and then restricted can show fewer than ten products. Making Category a context filter can cause the Top N computation to use the selected category subset. First confirm the desired rule: global top ten, top ten per selected category, or a rank within each pane. These are different calculations. Ties may also yield more than N members depending on the filter configuration; if exactly N is required, specify a stable tie-break rule. A rank table calculation has different semantics from a dimension Top N filter. Test with categories that have different product counts and tied sales, and verify the result against a query. Context filters can affect performance, so use them for the required subset semantics rather than as an unexplained speed trick.
+  tags: [top-n, context-filter, filters]
+- id: tab-basic-013
+  topic: parameters
+  difficulty: beginner
+  question: What is the difference between a parameter and a filter?
+  answer: |
+    A filter selects data members or marks to include in a view. A parameter is a workbook variable that holds one value, such as a date, threshold, or selected metric name. A parameter alone does not filter or change data: a calculation, reference line, supported connection option, or action must consume it. For example, a string parameter can choose between Sales and Profit through a calculated field, while a numeric parameter can set a threshold in a Boolean calculation. Filters are naturally about selecting members; parameters are values that logic can use. Some dashboards connect controls and filters in similar ways, so explain what the control changes. Set a meaningful default, validate allowable values, and display the active choice in the title or subtitle. Neither a parameter nor a visible filter is a security boundary. Enforce data access through an appropriate source or platform security design.
+  tags: [parameters, filters, calculations]
+- id: tab-basic-014
+  topic: parameters
+  difficulty: beginner
+  question: How does a set differ from a group or parameter?
+  answer: |
+    A set represents membership of dimension values in a subset, with IN and OUT states. It may be fixed, condition-based, or top-based, and dynamic membership can change with data and criteria. A group combines selected dimension members into named categories, such as combining several regions into “Other.” A parameter usually stores a single selected value rather than a multi-member subset. These objects can be combined in a workbook, but their semantics differ: a set answers whether a value belongs to a defined cohort, a group changes category labeling, and a parameter provides a value for logic to consume. Set actions can change membership based on selections; parameter actions can update a parameter value. Decide how an empty selection behaves and label membership clearly. Test both IN and OUT states and confirm that a changing set does not unexpectedly alter a denominator, total, or security assumption.
+  tags: [sets, groups, parameters]
+- id: tab-basic-015
+  topic: dashboards
+  difficulty: intermediate
+  question: What dashboard actions does Tableau support, and how do filter and highlight actions differ?
+  answer: |
+    Dashboard actions connect user interaction to another sheet or target. Filter actions pass selected values to filter target sheets. Highlight actions emphasize related marks while leaving other marks visible for context. Other common action types include URL actions, parameter actions, and set actions. The right action depends on what the user is trying to do: filter for a focused detail view, or highlight to compare a selected group with the remaining population. Define which sheets are sources and targets, which fields are passed, and what happens when the selection clears. A poor clearing behavior can leave the dashboard blank or in a confusing state. Test no selection, one and multiple selections, unmatched values, and reset behavior. Make selections discoverable and provide a visible way to return to the initial state. Do not rely on an action as the only way to access important information for users with different input methods.
+  tags: [actions, dashboards, interactivity]
+- id: tab-basic-016
+  topic: visual model
+  difficulty: intermediate
+  question: What happens when you add a dimension to Detail on the Marks card?
+  answer: |
+    A dimension on Detail participates in defining the marks even if it is not printed as a label. Adding Customer ID to Detail to a view of Sales by Region can split one regional mark into many customer-level marks. That changes the view's level of detail and can affect aggregation, performance, table calculations, and visual density. It may be exactly what is needed for a scatterplot or a mark-level tooltip, but it can also make a chart unexpectedly busy or change totals and calculations. Inspect the mark count and the dimensions that define each mark. If the goal is only to show an aggregated tooltip, determine whether adding the field changes the desired grain. Validate the measure at both the original and new grain, especially for ratios or repeated LOD values. Detail is not merely a cosmetic shelf; it participates in the query and the semantics of the visualization.
+  tags: [marks, detail, grain]
+- id: tab-basic-017
+  topic: calculations
+  difficulty: intermediate
+  question: Why is SUM(Profit) / SUM(Sales) often preferable to averaging row-level margins?
+  answer: |
+    A ratio of totals weights each record according to its sales contribution, while the average of row-level margins gives each record equal weight unless explicitly weighted. Those calculations answer different questions. If one transaction has a tiny sale and another has a large sale, an unweighted average can be dominated by the tiny transaction even though the business asks for overall margin. The common aggregate expression is `SUM([Profit]) / SUM([Sales])`, with appropriate handling for zero or null sales. That gives a ratio at the current view grain. The correct definition still depends on the business metric; sometimes an average of entity-level margins is specifically required. State the grain at which the ratio is defined and test totals, subtotals, and filters. Be careful with duplicated rows caused by joins, because both numerator and denominator may be distorted. Formatting a number as a percentage does not establish that its underlying aggregation is correct.
+  tags: [aggregation, ratios, calculations]
+- id: tab-basic-018
+  topic: dates
+  difficulty: beginner
+  question: When would you use a discrete date versus a continuous date in a Tableau view?
+  answer: |
+    A discrete date creates headers for date parts or values; a continuous date creates an ordered axis across a scale. Use discrete YEAR or MONTH when date categories should appear as named headers, such as a matrix by month name and weekday. Use continuous dates when the order and spacing along a timeline matter, such as a multi-year trend. Be precise about date parts: discrete month names can combine January across multiple years, whereas a continuous month timeline keeps the chronology. Tableau's blue/green pill color signals discrete/continuous, not dimension/measure. Check whether the chosen date level is a date part or a truncated date value and how missing periods should appear. Use axis ranges and labels carefully so the time trend is not distorted. The choice changes both the visual layout and the grouping semantics, so decide from the question rather than choosing by habit.
+  tags: [dates, discrete, continuous]
+- id: tab-basic-019
+  topic: performance
+  difficulty: intermediate
+  question: How would you investigate a slow Tableau dashboard?
+  answer: |
+    Reproduce a specific slow interaction and first separate query, network, rendering, refresh, and concurrency causes. Tableau performance recording and platform monitoring can help identify expensive query or rendering stages, depending on the environment. For a live connection, inspect generated SQL and warehouse query history or plans. For an extract, examine refresh duration, extract scope, and the view's query behavior. Review the number of sheets, high-cardinality filters, marks, calculations, and action-triggered queries, but do not assume any single item is the cause. Change one thing at a time and compare under representative conditions, noting whether the cache is warm. Test in the published environment with realistic permissions and concurrent usage, not only in Desktop. Preserve correctness: reducing data, changing aggregation, or making filters context can change results. No universal mark-count threshold or performance multiplier guarantees success across different data and deployments.
+  tags: [performance, diagnostics, dashboards]
+- id: tab-basic-020
+  topic: performance
+  difficulty: intermediate
+  question: What are sensible ways to optimize a Tableau extract?
+  answer: |
+    Keep only fields and rows needed for the intended analysis when that reduction preserves requirements. Removing unused columns can reduce data carried; limiting dates or applying a source filter can constrain scope but may remove history users expect. An aggregate extract can support fixed-grain reporting but cannot provide detail below that grain. Document all scope decisions and validate output against the source. Use incremental refresh only when the key and change pattern capture the source's inserts, updates, late arrivals, and deletes; schedule reconciliation or full rebuilds if historical changes occur. Measure both refresh and interactive query behavior with representative data. Extract options and performance depend on connector, data shape, version, and deployment, so avoid folklore about a guaranteed size limit or speed gain. Coordinate refresh with upstream ingestion and monitor failures. A smaller extract is not an optimization if it silently omits data or changes a metric's meaning.
+  tags: [extracts, performance, refresh]
+- id: tab-basic-021
+  topic: security
+  difficulty: advanced
+  question: How would you implement and validate row-level security for Tableau users?
+  answer: |
+    Start by identifying the identity used at the data source and choose an enforcement point that covers the intended access paths. Database-native policies or a centralized governed data policy can be strong options when available; user filters in a published source can be appropriate but need careful permissions and testing. A shared database credential may mean the database sees only the service identity, not the individual viewer, so do not assume identity propagation. Maintain a stable entitlement mapping and define a deny-by-default outcome for users without a match. Validate allowed, denied, multi-entitlement, and no-entitlement cases in the published environment. Test downloads, web editing, alternate workbooks, extracts, and other permitted routes—not only the dashboard view. Compare visible row keys with an independently computed expected set. A dashboard filter or hidden sheet is not authorization. Review source grants, Tableau permissions, embedded credentials, and data exports as one security design.
+  tags: [security, row-level-security, entitlements]
+- id: tab-basic-022
+  topic: governance
+  difficulty: intermediate
+  question: What should a team govern when publishing Tableau workbooks and data sources?
+  answer: |
+    Assign a clear owner and support contact, describe the business purpose and metric definitions, and document source grain, lineage, refresh mode, freshness, and known limits. Use projects and groups with least-privilege permissions; review who can edit, publish, download, and administer content. Decide whether to publish a reusable data source or package a workbook, and inspect included data and credentials. Separate development and production or use a controlled promotion process. Test calculations, filters, actions, layouts, authentication, refresh, and permissions as a consumer in the published environment. Track dependencies before changing shared fields because renames or removals can break workbooks. Certification or endorsement helps discovery but is not a guarantee of correctness forever. Monitor refresh failures, retire stale content with owner approval, and establish a review path for discrepancies. Governance is an operating practice, not a one-time permission setting.
+  tags: [publishing, governance, permissions]

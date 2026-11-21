@@ -1,0 +1,120 @@
+slug: pytest
+title: Pytest
+category: python-ecosystem
+summary: Python's extensible test runner, fixture system, and assertion rewriting for maintainable unit and integration suites.
+level: core
+relations:
+  - to: python
+    type: foundation
+    note: Pytest tests Python's runtime, APIs, packaging, and async behavior; Python fundamentals determine what the assertions actually prove.
+  - to: fastapi
+    type: complements
+    note: FastAPI applications commonly use pytest fixtures, dependency overrides, and HTTPX clients for endpoint tests.
+  - to: cicd
+    type: uses
+    note: CI pipelines invoke pytest, publish test and coverage results, and split fast and integration suites into reliable gates.
+intro:
+  what: |
+    Pytest is a Python test runner and framework built around plain test functions, Python `assert`,
+    and fixtures requested by name. It discovers tests, rewrites assertions to provide useful
+    failure context, manages setup and teardown, and exposes hooks that plugins use to extend
+    discovery, reporting, and execution. Its default style is deliberately low ceremony: a test is
+    usually a function whose name begins with `test_`, and shared dependencies are ordinary
+    fixtures rather than special test-case classes.
+
+    The framework scales from a few unit tests to suites involving async code, HTTP services,
+    databases, property-based tests, and containers. That flexibility is not proof of quality:
+    a passing test only establishes the behavior its assertions observe under the conditions it
+    created. Good pytest practice therefore combines readable contracts, isolated state, truthful
+    test doubles, and a suite structure that makes failures reproducible.
+  why: |
+    Tests provide executable evidence that code meets a contract and that previously fixed bugs
+    stay fixed. Pytest reduces the cost of writing that evidence: expressive assertions, reusable
+    fixture composition, parameterization, and a mature plugin ecosystem let teams build focused
+    tests without a large test-framework ceremony. Its granular selection and reporting help keep
+    feedback useful as a repository grows.
+
+    The value comes from trustworthy feedback, not test count. Shared mutable fixtures, mocks that
+    imitate implementation rather than behavior, uncontrolled external services, and retries that
+    hide flakiness can produce a green suite while defects escape. Pytest supplies mechanisms; the
+    engineering discipline is choosing boundaries and teardown that make the results meaningful.
+  problems:
+    - Discover and execute Python tests consistently from local development through CI.
+    - Express expected behavior with useful assertion diagnostics and parameterized cases.
+    - Share setup safely through composable fixtures with explicit lifetimes.
+    - Integrate unit, async, HTTP, database, coverage, and property-based testing.
+    - Select, mark, diagnose, and report suites as a codebase grows.
+  where_used:
+    - Python libraries, services, command-line applications, and data pipelines.
+    - FastAPI and other ASGI applications tested with HTTPX or framework test clients.
+    - CI workflows that run unit tests on each change and gate slower integration tests.
+    - Repositories using Hypothesis, pytest-cov, pytest-xdist, or HTTP mocking plugins.
+  ecosystem: |
+    Pytest is a test runner, not an application framework or a replacement for Python's standard
+    `unittest` library. It can execute `unittest.TestCase` tests, while new pytest tests commonly
+    use ordinary functions and fixtures. Plugins add capabilities: pytest-cov integrates coverage.py,
+    pytest-asyncio and AnyIO support async tests, `responses` intercepts `requests` traffic, and
+    Testcontainers can provision real dependencies. These integrations should be selected according
+    to the behavior under test; no plugin can make an unrealistic boundary trustworthy.
+  alternatives:
+    - name: unittest
+      note: Python standard-library framework with test case classes, assertions, and fixtures.
+    - name: nose2
+      note: A plugin-oriented successor to nose, used in some legacy suites.
+related: [python, fastapi, cicd]
+chapters:
+  - id: anatomy-fixtures
+    title: Test Anatomy, Fixtures, and Scopes
+    file: chapters/01-anatomy-fixtures.md
+    minutes: 13
+    level: core
+  - id: parametrisation-ids
+    title: Parametrization and Test IDs
+    file: chapters/02-parametrisation-ids.md
+    minutes: 13
+    level: core
+  - id: assertions-failures
+    title: Assertions, Introspection, and Expected Failures
+    file: chapters/03-assertions-failures.md
+    minutes: 13
+    level: core
+  - id: conftest-plugins-layout
+    title: conftest.py, Plugins, and Test Layout
+    file: chapters/04-conftest-plugins-layout.md
+    minutes: 13
+    level: core
+  - id: mocking
+    title: Mocking Without Self-Deception
+    file: chapters/05-mocking.md
+    minutes: 13
+    level: core
+  - id: async-testing
+    title: Async Testing with pytest-asyncio and AnyIO
+    file: chapters/06-async-testing.md
+    minutes: 13
+    level: advanced
+  - id: markers-selection
+    title: Markers, Selection, and Test Organisation
+    file: chapters/07-markers-selection.md
+    minutes: 13
+    level: core
+  - id: coverage-property
+    title: Coverage, Mutation, and Property-Based Testing
+    file: chapters/08-coverage-property.md
+    minutes: 14
+    level: advanced
+  - id: integration-infrastructure
+    title: Slow Tests, Databases, and Containers
+    file: chapters/09-integration-infrastructure.md
+    minutes: 14
+    level: advanced
+  - id: ci-flakes
+    title: CI Integration and Flaky-Test Triage
+    file: chapters/10-ci-flakes.md
+    minutes: 14
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

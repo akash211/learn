@@ -1,0 +1,262 @@
+- id: pytest-recent-001
+  topic: modern fixture design
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: A suite has many session-scoped fixtures to reduce CI time, but failures depend on test order. How would you redesign it?
+  answer: |
+    Treat order dependence as evidence that lifetime and mutable state are coupled. First identify
+    which fixture values change during tests and what state survives: Python objects, database
+    rows, environment variables, background tasks, or server caches. Keep expensive immutable
+    infrastructure session-scoped where it helps, but create function-scoped data and reset mutable
+    state for each test.
+
+    Inspect fixture order with `pytest --setup-show` and run tests in randomized order if the
+    project uses a randomization plugin. A broad fixture can expose a factory or connection, while
+    a narrow fixture creates and cleans a uniquely named record. For database work, use rollback
+    only when all work participates in the same transaction; otherwise use schemas, cleanup, or
+    another isolation boundary. Do not solve the symptom by pinning the test order. Measure setup
+    cost and preserve a reproducible failing sequence until the coupling is removed. Scope should
+    reflect ownership and isolation, not just startup time.
+  tags: [fixtures, isolation, CI]
+
+- id: pytest-recent-002
+  topic: parametrization design
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: A parametrized test now generates thousands of combinations and CI reports are hard to read. What changes would you make?
+  answer: |
+    Start by identifying which dimensions represent distinct behavior and which combinations are
+    valid. Stacked parametrization creates a Cartesian product, so a large count may be accidental.
+    Separate independent policies into focused tests, reduce each dimension to representative
+    equivalence classes, and keep only cross-combinations that could interact meaningfully. If
+    pairwise or combinatorial coverage is genuinely required, use a deliberate generator and
+    document what interaction coverage it promises.
+
+    Give parameter sets stable semantic IDs with `pytest.param(..., id=...)` so failure reports
+    name cases by policy, such as `expired-token` or `limit-inclusive`. Avoid mutable parameter
+    values that one case can change for another. Use `pytest --collect-only -q` to check item count
+    and node IDs before execution, then select a specific case with its node ID or `-k`. The goal
+    is not the smallest number of items; it is a suite whose cases are independently meaningful
+    and whose failure points to a specific requirement.
+  tags: [parametrization, test-ids]
+
+- id: pytest-recent-003
+  topic: test doubles and HTTP clients
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How would you test a `requests`-based client differently from an HTTPX-based client without accidentally using the network?
+  answer: |
+    Use a tool that intercepts the HTTP library the code actually uses. The `responses` package
+    intercepts `requests`; register the expected method and URL with a response, exercise the
+    client's public method, and assert on the parsed result and relevant request properties. For
+    HTTPX, use `httpx.MockTransport` or a library such as `respx`. `responses` does not automatically
+    intercept HTTPX, and a mock of `requests.get` may skip serialization and response handling.
+
+    Ensure unmatched requests fail rather than falling through to an external service. Cover an
+    error response and timeout behavior as well as success when those are part of the client
+    contract. State the test's limit: a transport fake does not prove DNS, TLS, live credentials,
+    provider availability, or current server schema. Keep a smaller controlled integration or
+    contract check for important external assumptions. Dependency injection can make the chosen
+    transport seam explicit. Never put credentials in fixtures or captured request logs.
+  tags: [requests, httpx, responses]
+
+- id: pytest-recent-004
+  topic: async plugin policy
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: A repository uses both pytest-asyncio and AnyIO. How can it avoid conflicting async test ownership?
+  answer: |
+    First decide which async backend each test must exercise. A library intended to be backend
+    neutral may use AnyIO's `@pytest.mark.anyio` and backend fixture; asyncio-specific application
+    code can use pytest-asyncio's `@pytest.mark.asyncio`. Configure the plugins deliberately and
+    use explicit markers or strict mode where helpful rather than overlapping auto modes that can
+    both claim coroutine tests.
+
+    Pin plugin versions and follow each version's fixture and loop-scope rules. Keep async fixtures
+    compatible with the runner that consumes them, and create, use, and close loop-bound resources
+    on the same event loop. Organize conventions by module or directory if that makes ownership
+    clearer. Test collection and run representative async fixtures in CI after configuration
+    changes. Avoid assuming that decorators and fixture semantics are identical across plugin
+    versions. If a test does not need to await anything, a synchronous test can be simpler; async
+    markers should encode behavior, not fashion.
+  tags: [pytest-asyncio, anyio, async]
+
+- id: pytest-recent-005
+  topic: asynchronous resource cleanup
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: An async test passes but emits warnings about pending tasks or unawaited coroutines. How would you fix the test and investigate the code?
+  answer: |
+    Find the creation site for every coroutine and task. A coroutine object does nothing until
+    awaited or scheduled; ensure the test awaits it. For tasks, await completion, cancel and join
+    them, or manage them with structured concurrency such as `asyncio.TaskGroup`. Cancellation
+    should reach cleanup code, typically through `finally` blocks or resource context managers.
+
+    Replace sleeps used as coordination with events, queues, or barriers, and put finite deadlines
+    around operations that could hang. A pending-task warning may expose application code that
+    leaks background work, not just a test teardown bug. Capture task names and stack traces where
+    available, then isolate the smallest failing test and check loop ownership. Verify that async
+    clients and servers close on the loop where they were created. Do not suppress warnings or
+    reuse a broader event-loop scope as a quick fix; first identify who owns each task and what
+    completion or cancellation contract the application promises.
+  tags: [async, tasks, cleanup]
+
+- id: pytest-recent-006
+  topic: coverage quality
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: A team meets its coverage threshold, but production defects still escape. What does that tell you, and what should be done next?
+  answer: |
+    Coverage shows executed lines or branches, not whether tests would detect incorrect behavior.
+    A test can call a function and assert only that it returned something, leaving important
+    branches and invariants unverified. First inspect branch coverage and uncovered risk areas, then
+    review assertions against actual requirements. Add boundary and error cases where the contract
+    requires them, and verify that tests cross important integration boundaries rather than
+    replacing them with permissive mocks.
+
+    Mutation testing can help evaluate whether selected tests detect small code changes; property
+    tests with Hypothesis can explore broad invariants. Neither produces a universal correctness
+    score. Review surviving mutants for real missed behavior versus equivalent changes, and define
+    independent properties that would catch a defect. Keep the coverage threshold as a regression
+    guard if it helps, but do not raise it mechanically. The goal is meaningful evidence for
+    high-risk behavior, plus diagnostics that make a failure actionable.
+  tags: [coverage, mutation, quality]
+
+- id: pytest-recent-007
+  topic: property-based testing
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: How do you write a useful Hypothesis property for a parser rather than just generating random strings?
+  answer: |
+    Define the parser's input domain and observable invariants first. If all strings are valid
+    candidates, use `st.text()` and specify how invalid inputs should be handled. If only a subset
+    is meaningful, build a strategy for that grammar or generate structured data and serialize it
+    through a separate, simple encoder. A property might require parse-serialize round trips for
+    valid values, stable normalization, or a documented exception for malformed input.
+
+    Avoid copying the parser's algorithm into the test oracle; identical bugs can make both agree.
+    Shrinking is useful because Hypothesis reduces a failing example, often exposing a minimal
+    counterexample. Use `@example` for known edge cases and keep failing examples reproducible
+    through Hypothesis's database. `assume()` is appropriate for occasional constraints, but heavy
+    filtering suggests the strategy is not generating the intended domain directly. Generated
+    tests complement named examples and do not replace tests for protocol compatibility or
+    external service behavior.
+  tags: [hypothesis, parsers, strategies]
+
+- id: pytest-recent-008
+  topic: database integration isolation
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: A database test uses transaction rollback, but data still leaks between tests. What causes would you check?
+  answer: |
+    Rollback isolates writes only when all relevant work participates in the transaction being
+    rolled back. Check whether application code opens another connection, commits internally,
+    runs background workers, or uses a connection pool that returns a different session. Also
+    inspect database sequences, which may advance even when inserted rows are rolled back, and
+    non-transactional side effects such as messages or files.
+
+    Verify the fixture's transaction boundaries and that teardown executes after failures. Build
+    a small test that writes through the production repository and checks visibility from a fresh
+    connection after cleanup. Depending on the engine and application, use savepoints, unique
+    schemas, per-test databases, truncation, or explicit cleanup. Under xdist, namespace schemas
+    or data by worker and test; one shared mutable database can race. Do not assume ORM metadata
+    setup tests migrations. Apply migrations from a known version and exercise the real engine
+    family. Confirm the configured target is a dedicated test database before any destructive
+    cleanup.
+  tags: [database, transactions, isolation]
+
+- id: pytest-recent-009
+  topic: containers in CI
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What should a CI design consider when using Testcontainers for database integration tests?
+  answer: |
+    Confirm that the runner has access to a supported container runtime and can fetch the pinned
+    image, or has a documented image mirror. Wait for service readiness rather than assuming
+    process startup means the database accepts connections. Use explicit versions and configuration
+    relevant to production, and keep credentials scoped to the job.
+
+    Decide resource lifetime and data isolation separately: a session-scoped container may reduce
+    startup cost, while each test still needs a transaction, schema, or cleanup boundary. With
+    xdist, the fixture may start per worker and multiply resource usage; shared services need
+    namespaced test data. Preserve container logs on startup or test failures. Do not silently skip
+    all container errors, because that can make a required integration suite disappear; distinguish
+    an intentionally optional local environment from required CI. Testcontainers proves behavior
+    against the provisioned container version, not deployment topology or production equivalence
+    by itself.
+  tags: [testcontainers, CI, integration]
+
+- id: pytest-recent-010
+  topic: flaky test triage
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: A test fails only under xdist. How do you distinguish a test race from an xdist or infrastructure issue?
+  answer: |
+    Preserve the original failure, worker ID, node ID, test seed if used, environment, and logs.
+    Rerun the single test without xdist and then with the smallest parallel configuration that
+    reproduces it. If it only fails in parallel, look for shared files, fixed database rows, global
+    environment changes, port collisions, mutable session fixtures, or assumptions about test
+    order. Give each worker and test isolated resources and ensure cleanup is safe when concurrent.
+
+    Check whether resource pressure or service limits rise with worker count; `-n auto` can start
+    more workers than a shared database or container can support. Run a minimal reproducer and
+    inspect whether failure location varies. A genuine runner bug is possible, but first remove
+    application and test shared state. Do not disable parallelism permanently as a substitute for
+    diagnosis if CI depends on it. If a temporary serial execution or retry contains the issue,
+    keep the failure visible and track the root cause to closure.
+  tags: [xdist, flakiness, concurrency]
+
+- id: pytest-recent-011
+  topic: flaky test retries
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: When are test retries acceptable, and what guardrails prevent them from hiding defects?
+  answer: |
+    Retries can contain occasional external infrastructure failures, but they should not be the
+    primary treatment for nondeterministic tests. Preserve and report the first failure, record the
+    retry count, and distinguish a retry pass from a clean first-pass result. Keep ownership and a
+    removal condition for any quarantined test, and investigate whether the cause is a race, timing
+    assumption, network dependency, shared state, or resource pressure.
+
+    A deterministic application defect can pass on retry if timing happens to differ, so treating
+    the final attempt as the only result hides evidence. Retry policy should be narrow, bounded,
+    visible in CI, and never apply to all tests by default. Keep critical suites required and avoid
+    xfail for flaky behavior: xfail describes a known expected failure, not variability. Replace
+    arbitrary sleeps with synchronization and real network calls with controlled boundaries where
+    appropriate. Measure whether retries are actually reducing infrastructure noise or merely
+    normalizing a growing failure rate.
+  tags: [retries, flakiness, CI]
+
+- id: pytest-recent-012
+  topic: test suite architecture
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How would you structure a growing pytest suite so unit, integration, and end-to-end checks remain useful?
+  answer: |
+    Organize around clear boundary and ownership definitions, not just labels. Unit tests should
+    run quickly with controlled collaborators; integration tests exercise selected real boundaries
+    such as a database driver or HTTP stack; end-to-end tests cover broader user-visible flows.
+    Place fixtures in the narrowest conftest scope that supports reuse, and keep expensive
+    infrastructure out of fast unit tests. Register markers such as `integration` and `slow`,
+    document exactly what they mean, and make canonical local and CI commands visible.
+
+    The default feedback path should include fast deterministic tests. Critical integration checks
+    must still gate an appropriate merge or deployment; a nightly-only job is insufficient for
+    urgent compatibility requirements. Make selection observable with collection summaries and
+    fail when a required suite unexpectedly collects zero items. Keep test support code in regular
+    modules when it is not fixture lifecycle logic. As the suite grows, track runtime and flaky
+    failures by category, then simplify fixture graphs and remove unused markers rather than
+    building a hidden test-management framework.
+  tags: [architecture, integration, markers]

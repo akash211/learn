@@ -1,0 +1,198 @@
+- id: fc-basic-001
+  topic: fundamentals
+  difficulty: beginner
+  question: What problem does Firecrawl solve compared with a basic HTTP request?
+  answer: |
+    A basic HTTP client retrieves the server's response, often HTML. That is enough for many static pages, but the response may be dominated by markup, navigation, scripts and unrelated boilerplate. On a JavaScript-driven site, the initial HTML may not even contain the text a user sees after the browser runs scripts. Firecrawl offers a managed extraction layer that can render pages when needed, clean content into formats such as Markdown, and return metadata or links. It also provides operations for discovering multiple pages rather than requiring every URL to be fetched separately.
+
+    It does not make every page accessible or every extraction correct. The caller still sets scope, checks target status, validates content and stores provenance. For stable server-rendered sources, direct HTTP plus a parser can be simpler; Firecrawl is valuable when heterogeneous page behavior makes custom scraping expensive.
+  tags: [scraping, rendering, extraction]
+- id: fc-basic-002
+  topic: fundamentals
+  difficulty: beginner
+  question: What is the difference between scraping and crawling in Firecrawl?
+  answer: |
+    Scraping processes a specific URL that the caller already knows. It is a focused operation: fetch or render the page and return requested content formats and metadata. Crawling starts from a URL and discovers additional pages through links or sitemap information, then scrapes pages within the configured scope. A crawl commonly runs as an asynchronous job because it may involve many pages; the caller submits the job, tracks status and collects paginated results.
+
+    Use scrape for one known page or a known list. Use crawl when the desired input is a site region whose pages must be discovered. Crawling does not mean “all pages on the internet” or guarantee completeness: limits, path filters, inaccessible pages, orphan pages and source changes affect coverage. Define an explicit page limit and restrict paths or domains before launching a broad job.
+  tags: [scrape, crawl, scope]
+- id: fc-basic-003
+  topic: fundamentals
+  difficulty: beginner
+  question: What does Firecrawl's map operation return, and when is it useful?
+  answer: |
+    Map is primarily a URL-discovery operation. It helps find candidate URLs associated with a site so a caller can understand its shape, choose relevant paths, or prepare a bounded scrape or crawl. It is useful before a large job when the page count and URL patterns are unknown, and it can support incremental workflows that compare discovered URLs over time.
+
+    A map is not itself a page-content corpus. A URL appearing in the result does not prove the page was successfully scraped, remains live, or should be indexed. Results may be bounded by endpoint and plan limits, and large sites can exceed those boundaries. Treat the output as a discovery result with a scope, inspect it, filter irrelevant paths and then retrieve the selected page content. Do not silently label a truncated map as a complete inventory.
+  tags: [map, discovery, urls]
+- id: fc-basic-004
+  topic: fundamentals
+  difficulty: beginner
+  question: When should you use Firecrawl search rather than crawl?
+  answer: |
+    Search is a good fit when you have an information need but do not know which domain or exact URLs contain the answer. It returns candidate web results for a query and can provide page content through the same integration. Crawl is a site-bounded traversal: it starts from a known URL and discovers pages under a configured domain or path scope.
+
+    Search results are ranked and limited, not an exhaustive census. They can be irrelevant, stale or uneven in authority, so retain the query, source URL, result rank and collection time and verify pages before relying on them. Crawl is preferable for a documentation site or known source corpus where systematic coverage within a boundary matters. Search can discover sources; scrape or crawl can then retrieve a more controlled set. The choice is about how the page set is discovered, not which operation is universally more accurate.
+  tags: [search, crawl, discovery]
+- id: fc-basic-005
+  topic: scrape endpoint
+  difficulty: beginner
+  question: What is the scrape endpoint's basic input and output?
+  answer: |
+    The scrape endpoint accepts a page URL and options describing the desired output and, when needed, how to render or interact with the page. In the v2 API, the endpoint is `POST /v2/scrape`. Formats can include Markdown, HTML, links, screenshots or structured JSON depending on supported configuration. The result includes the selected data and metadata about the source, such as its URL, title, content type or target status.
+
+    The service response and the target page outcome are separate facts. A successful API request can contain metadata showing that the website returned a 404 or another non-success code. A robust client checks the API-level outcome, target status and whether the extracted content is useful. SDKs wrap the HTTP call, but the application still needs timeouts, error classification, provenance and validation.
+  tags: [scrape, api, metadata]
+- id: fc-basic-006
+  topic: scrape endpoint
+  difficulty: beginner
+  question: How do you choose between Markdown and HTML output?
+  answer: |
+    Markdown is compact and readable. It usually works well for prose, headings, lists and many language-model or search-indexing workflows. It avoids much of the markup noise that makes raw HTML inconvenient. HTML preserves more structural context and can be useful when a downstream parser needs tables, attributes, links or page-specific elements. Raw HTML is also useful for diagnosing what the source supplied, though it includes scripts and boilerplate that are not necessarily useful content.
+
+    The right format depends on what consumes the result. Do not request every format by default: larger outputs require more transfer and storage, and some formats have feature-specific usage implications. Start with the smallest representation that meets requirements, then add HTML or screenshots for cases where Markdown loses essential structure. Keep metadata and source URL regardless of text format.
+  tags: [formats, markdown, html]
+- id: fc-basic-007
+  topic: scrape endpoint
+  difficulty: intermediate
+  question: What does `waitFor` do, and what are its limitations?
+  answer: |
+    `waitFor` requests a delay before the rendered page is captured, typically expressed in milliseconds in supported API versions. It can help when client-side scripts need a little time to fetch data and update the page. It is a simple timing control, not a signal that the specific content you need has loaded. A fixed wait may be too short on a slow page and wasteful on a fast one; continuously active analytics can also make generic “network idle” assumptions unreliable.
+
+    Prefer a more specific readiness condition when the endpoint supports it, or use a modest tested delay and verify output with a known heading, field or content-length check. Test representative URLs under realistic conditions. If a page requires multi-step interaction, authentication or highly customized state, a generic wait is not enough; use a browser automation workflow with explicit checks or an authorized alternative.
+  tags: [javascript, waitFor, rendering]
+- id: fc-basic-008
+  topic: scrape endpoint
+  difficulty: intermediate
+  question: What are scrape actions, and when are they appropriate?
+  answer: |
+    Scrape actions are simple browser instructions that can change the page before extraction, such as clicking a control, scrolling or entering text where supported. They can reveal a collapsed section, trigger lazy loading, or expose content below the fold. The intended use is a small, bounded interaction that makes otherwise hidden page content available to the scraper.
+
+    Actions are not a guarantee of success. A selector can change, an overlay can intercept a click, or the site may require a session or a complex workflow. Verify the expected result after each meaningful action rather than assuming that the command worked. First check whether the desired text is already present in the HTML; if it is, interaction may be unnecessary. For stateful flows such as login, multi-step forms or custom business logic, Playwright often provides finer control and clearer debugging.
+  tags: [actions, interaction, browser]
+- id: fc-basic-009
+  topic: crawl map search
+  difficulty: beginner
+  question: Why should a crawl have an explicit page limit?
+  answer: |
+    A starting page can link to far more content than expected, and a crawler may discover pages through both links and sitemap data. An explicit limit bounds the potential workload, cost exposure, result volume and processing time. It also prevents an accidental broad crawl when a path filter or domain assumption is wrong. The API's default may be generous, so production code should set a limit that matches the job's approved scope.
+
+    The limit is a ceiling, not a promise that the crawler will find that many pages. Some pages may be inaccessible, filtered out or undiscovered. Start with a smaller pilot, inspect URLs and output quality, and then expand deliberately. A limit alone is not enough: also constrain paths, external links and subdomains as appropriate, and monitor completed, failed and pending counts.
+  tags: [crawl, limits, budgeting]
+- id: fc-basic-010
+  topic: crawl map search
+  difficulty: intermediate
+  question: How should an application handle an asynchronous crawl job?
+  answer: |
+    Treat a crawl as a durable job, not a long HTTP request. Submit the starting URL and explicit scope, save the returned job identifier and request parameters, then poll its status at a reasonable interval with backoff. When results become available, fetch every result page, following any `next` URL or cursor until the service indicates there is no further page. SDKs may paginate automatically, but a direct API client must implement the loop.
+
+    Persist each result page before advancing its cursor so the process can restart without losing work. Make writes idempotent using a normalized source key and content hash. Track page-level target status separately from crawler errors. A completed job may still have failed URLs or paginated results not yet ingested; record “job completed” and “all results persisted” as distinct states.
+  tags: [async, crawl, pagination]
+- id: fc-basic-011
+  topic: crawl map search
+  difficulty: intermediate
+  question: How do crawl filters help control scope?
+  answer: |
+    Crawl filters can restrict which paths are included or excluded, constrain depth, and control whether subdomains or external links are followed, depending on endpoint support. They express an important boundary: for example, crawl only `/docs/` and exclude `/blog/` or account pages. Narrowing scope reduces irrelevant results and makes page count, output volume and review effort more predictable.
+
+    Filters must be tested against real URLs because matching semantics and the stage at which a filter applies can matter. A pattern might affect discovery, scraping, or both. Test a small crawl and inspect included and excluded URLs before increasing the limit. External links deserve particular care: one in-scope page may point to a different host or unrelated content. Keep domain allowlists and source-policy checks separate from crawler filters when the boundary is security- or compliance-sensitive.
+  tags: [crawl, filters, scope]
+- id: fc-basic-012
+  topic: extraction
+  difficulty: intermediate
+  question: How does schema-guided extraction differ from asking an LLM to summarize a page?
+  answer: |
+    Schema-guided extraction requests fields in a predictable shape, such as a product name, version and release date, while a summary produces free-form prose. A JSON schema can define field types, required values and allowed shapes; a prompt can clarify how each field should be interpreted. This makes records easier to validate and store than unstructured text.
+
+    A schema constrains form, not truth. A model can return well-formed JSON with a guessed date or a field copied from the wrong section. Define how missing values should appear, ask only for facts supported by the page, and validate types and business rules locally. For important fields, keep evidence or source quotes and review them. Use deterministic parsing for stable machine-readable sources; model extraction is most useful when page layouts vary but the desired facts remain present in the content.
+  tags: [schema, json, llm]
+- id: fc-basic-013
+  topic: extraction
+  difficulty: intermediate
+  question: What makes a good extraction schema?
+  answer: |
+    A good schema expresses the meaning and shape of the data the application actually needs. Use clear field names, types and descriptions, make genuinely required fields explicit, and represent legitimate absence with optionality or a documented null value. Use enums for fields with a controlled set of values. If dates, units or identifiers can be confused, explain whether the field is a publication date, event date, current price, or another specific concept.
+
+    Keep the schema focused. A large set of vague fields increases ambiguity and review costs. Test it against pages where values are present, absent and deceptively similar—for example, a page with an article date but no release date. Validate the returned object locally against your own data model, preserve the schema version, and retain source provenance. Passing structural validation should never be treated as proof that the extracted claims are correct.
+  tags: [schema-design, validation, extraction]
+- id: fc-basic-014
+  topic: extraction
+  difficulty: intermediate
+  question: What is the risk of treating extracted JSON as ground truth?
+  answer: |
+    Structured extraction can look authoritative because the output has named fields and valid types, but it can still contain an inference error. The model may misread nearby text, confuse a page publication date with a product release date, normalize a number incorrectly, or fill a missing field with a plausible guess. A schema can ensure that `price` is a string or number; it cannot prove that the value came from the correct item or that it is current.
+
+    Validate records using local rules and, when the consequences justify it, source evidence or human review. Store the URL, retrieval time, target status, schema version and relevant quote alongside extracted values. Define how unknown information is represented. Evaluate field-level accuracy across representative pages and watch for changes over time. For high-impact use, keep a deterministic or reviewed fallback rather than silently accepting every model response.
+  tags: [llm, validation, provenance]
+- id: fc-basic-015
+  topic: documents
+  difficulty: beginner
+  question: Can Firecrawl process a PDF URL like a web page?
+  answer: |
+    Firecrawl supports processing document URLs such as PDFs through its scrape or document-parsing capabilities, depending on the current API workflow. A caller can provide a PDF URL and request text-oriented output. The service may extract text from the document, but the result depends on how the PDF was produced and structured. Selectable text is generally easier than scanned pages that require optical character recognition.
+
+    PDF layout can be difficult: columns may be interleaved, tables flattened and headers repeated. Check the response content type and validate that expected sections, page counts or key fields are present. For citations, preserve page numbers or other locations if available. A URL suffix alone is not enough to identify the file because redirects and content types vary. For local files not accessible by URL, use the appropriate parse workflow or a local PDF tool.
+  tags: [pdf, documents, parsing]
+- id: fc-basic-016
+  topic: documents
+  difficulty: intermediate
+  question: How should you distinguish a target-site error from a Firecrawl API error?
+  answer: |
+    There are two status layers. The API request's HTTP status and success/error payload tell you whether Firecrawl accepted and processed the request. The returned page metadata can separately report the HTTP status received from the target website. An API call can succeed while the target returned a 404, 403 or server error; conversely, an API-level failure may occur before any usable target result is available.
+
+    Store and monitor these states separately. A target 404 may be a meaningful link-check result but usually is not useful article content. A timeout may be retryable; a persistent access-denied response may call for policy review rather than repeated attempts. Inspect metadata, warnings and extraction length, and classify errors before retrying. This separation lets operators understand whether the issue is provider availability, source-site behavior, or content quality.
+  tags: [errors, status-codes, observability]
+- id: fc-basic-017
+  topic: cost and operations
+  difficulty: intermediate
+  question: Why should pricing and usage assumptions be checked against the current plan?
+  answer: |
+    Usage and limits can depend on the account plan, endpoint, output format and optional features, and those terms can change. A basic scrape, a structured extraction, document parsing and a large crawl may not consume resources in the same way. Hard-coding a universal price or assuming one account's rate limit applies to everyone can produce inaccurate estimates and unexpected failures.
+
+    Before capacity planning, consult the account dashboard and current endpoint documentation. Run a representative pilot and record pages attempted, useful results, retries, output size and feature use. Budget per job and set explicit crawl limits, concurrency caps and alert thresholds. The most useful metric is often cost or usage per validated, usable document rather than per raw request. Keep pricing values configurable and avoid promising a fixed amount in product copy unless it has been verified for the relevant plan.
+  tags: [credits, limits, budgeting]
+- id: fc-basic-018
+  topic: cost and operations
+  difficulty: intermediate
+  question: How should a client respond to rate limits?
+  answer: |
+    Treat a rate-limit response as a signal to reduce request pressure. Honor any retry-after value or equivalent guidance. Otherwise, apply exponential backoff with jitter and cap both attempts and total job duration. A semaphore or token bucket should bound concurrent requests before they reach the service. Starting hundreds of tasks and letting the server reject them is less efficient and can make the retry storm worse.
+
+    Rate limits and target-site policies are separate constraints. An account may permit a certain request rate, but a source site can still be harmed or block aggressive collection. Keep concurrency appropriate for the workload and account plan, and watch queue growth so Firecrawl does not overwhelm downstream storage or embedding services. Retry only transient failures; stable 404s, invalid URLs and access denials generally do not improve through repeated immediate requests.
+  tags: [rate-limits, retries, backpressure]
+- id: fc-basic-019
+  topic: pipeline
+  difficulty: intermediate
+  question: Why should extracted documents retain source metadata?
+  answer: |
+    Source metadata makes content auditable and useful after ingestion. At minimum, retain the canonical or requested URL, page title when available, fetch time, target status, content type and an ingestion identifier. For a crawl, keep the job or discovery context as well. When chunks are retrieved later, metadata supports citations, freshness filtering, deletion requests and debugging when a page changes.
+
+    Without provenance, a RAG system may return a passage that cannot be traced to its original page, and an operator cannot distinguish a stale result from a current one. Keep metadata alongside each chunk or store compact references to a document record. Distinguish the collection time from the page's publication date; they are not the same fact. Apply retention and privacy rules to metadata as well as text.
+  tags: [metadata, provenance, rag]
+- id: fc-basic-020
+  topic: pipeline
+  difficulty: intermediate
+  question: What is a sensible way to deduplicate crawled pages?
+  answer: |
+    Use URL identity and content identity together. Normalize URLs conservatively by removing fragments, normalizing host casing and default ports, and stripping only query parameters known to be tracking noise. Query parameters may determine language, product variant or page content, so removing all of them can merge distinct documents. Preserve both requested URL and canonical URL when available.
+
+    Then compute a hash over normalized extracted content. This catches identical text served at multiple URLs or through redirects. Store the hash with the extraction and normalization version so reprocessing can be understood. Deduplication should not erase provenance: the same text may have different source URLs that are important for citations. When refreshing a crawl, do not delete old records merely because a page was absent once; discovery may be incomplete or temporarily failing.
+  tags: [deduplication, urls, content-hash]
+- id: fc-basic-021
+  topic: alternatives
+  difficulty: intermediate
+  question: When is Playwright a better fit than Firecrawl?
+  answer: |
+    Playwright is a general browser automation library and is often better when the workflow needs exact control over browser state: custom login, multi-step navigation, conditional clicks, application-specific waits, or inspection of network responses. It gives the team direct access to browser behavior and can handle workflows beyond a generic scrape request.
+
+    That control comes with operational ownership. The team must run browsers, manage versions and memory, implement retries and queues, and maintain selectors as pages change. Firecrawl is often preferable for routine extraction across heterogeneous public pages when a managed API's behavior is sufficient. A hybrid is common: use a simple HTTP parser for static sources, Firecrawl for the long tail, and Playwright for a small set of interactive workflows. Compare both on representative pages and ongoing maintenance, not feature lists alone.
+  tags: [playwright, alternatives, browser-automation]
+- id: fc-basic-022
+  topic: alternatives
+  difficulty: intermediate
+  question: What should you consider before self-hosting a crawler?
+  answer: |
+    Self-hosting can increase control over deployment, customization and where processing occurs, but it moves reliability work to your team. You need to operate browser workers, manage software updates and security patches, bound CPU and memory, build job queues, handle failures and retries, and monitor extraction quality as websites change. Open-source software does not eliminate the cost of infrastructure or engineering time.
+
+    Compare a self-hosted option such as Crawl4AI or Playwright plus a parser against Firecrawl using the same representative URL set. Include JavaScript pages, PDFs, pagination, redirects and difficult sources. Measure useful-page yield, operational effort, resource consumption, data handling and policy fit. Managed-service credits and limits depend on plan; self-hosted costs vary with workload and staffing. Use an adapter and common document schema so the choice remains reversible.
+  tags: [self-hosting, crawl4ai, operations]

@@ -1,0 +1,198 @@
+- id: n8n-basic-001
+  topic: fundamentals
+  difficulty: beginner
+  question: What is n8n, and what does fair-code mean in this context?
+  answer: |
+    n8n is a workflow automation platform where nodes connect triggers, application actions, transformations and control flow. It connects SaaS products, internal APIs, databases and AI services; custom logic is possible where a prebuilt node is insufficient. The visual graph makes integration steps inspectable, and executions show how a run progressed.
+
+    n8n calls its license fair-code rather than open source under the OSI definition. That label does not grant unrestricted rights to embed, redistribute or sell the software as a service. Many internal and personal uses are permitted, but commercial distribution and hosted offerings can be restricted. Read the current license for the intended use. Also distinguish self-hosted responsibility from hosted service: operating your own deployment adds patching, backups, network security and incident response to the user's work.
+  tags: [fundamentals, fair-code, licensing]
+- id: n8n-basic-002
+  topic: architecture
+  difficulty: beginner
+  question: What is the difference between n8n Cloud and self-hosted n8n?
+  answer: |
+    n8n Cloud is provider-operated: the provider runs application infrastructure and handles platform operations within the service's stated boundaries. The customer still owns workflow correctness, credential scope, access decisions, data minimization and consequences of actions sent to other systems. Cloud capabilities and limits can differ by offering, so check current documentation rather than assuming feature parity.
+
+    With self-hosting, the operator chooses and runs infrastructure, configures updates and networking, protects the database and encryption key, and plans backups and recovery. Self-hosting offers control over placement and operations, but does not automatically make data private, compliant or safe. Select based on operational skills, data and network needs, uptime requirements and responsibility boundaries, not on the assumption that one model removes all security work.
+  tags: [cloud, self-hosted, operations]
+- id: n8n-basic-003
+  topic: architecture
+  difficulty: beginner
+  question: What are the main pieces of a typical n8n deployment?
+  answer: |
+    A basic deployment runs the n8n application, which serves the editor and API, manages triggers and executes workflows. It stores workflow definitions, credentials and execution metadata in a database. A small installation may use SQLite; PostgreSQL is common for substantial deployments. The encryption key is needed to read credential records. In Docker, persistent state must live on durable storage rather than only inside a disposable container.
+
+    Queue mode adds Redis as a job broker and worker processes that execute queued runs. Workers share the database and encryption key with the main instance. Redis is not the system of record. Each component adds availability and monitoring needs, so start with the simplest architecture that meets capacity and recovery requirements. Back up the database and key and test restoring them together.
+  tags: [architecture, postgres, redis]
+- id: n8n-basic-004
+  topic: architecture
+  difficulty: beginner
+  question: When would you use queue mode with Redis and workers?
+  answer: |
+    Queue mode separates workflow execution from the main n8n process. The main instance enqueues work in Redis, and worker processes consume execution jobs. It is useful when one process lacks execution capacity or execution load should scale independently from editor and trigger management. Workers can scale horizontally, but the database, Redis and external APIs must also handle increased throughput.
+
+    Queue mode requires consistent configuration: main and worker processes need compatible n8n versions, access to the same database, matching `N8N_ENCRYPTION_KEY`, `EXECUTIONS_MODE=queue`, and correct Redis settings such as `QUEUE_BULL_REDIS_HOST`. More workers do not guarantee exactly-once side effects or eliminate rate limits. Monitor queue depth, worker health, Redis and database latency. Avoid adding distributed components before identifying a capacity or isolation requirement.
+  tags: [queue-mode, redis, workers]
+- id: n8n-basic-005
+  topic: nodes
+  difficulty: beginner
+  question: How do trigger nodes differ from action nodes?
+  answer: |
+    A trigger node starts a workflow run. Examples include Webhook for incoming HTTP requests, Schedule Trigger for time-based runs, and service triggers that poll or subscribe to an application's events. Many triggers operate as production listeners only when the workflow is active, and webhook test URLs differ from production URLs. The trigger payload is the input contract for the rest of the graph.
+
+    Action nodes perform work after a run starts: HTTP Request calls an API, database nodes read or write records, and service nodes interact with integrations. Transformation and control-flow nodes reshape or route items. The distinction matters operationally: a trigger can fail to receive events even if downstream nodes work in manual tests. Validate activation, public URL, credentials and incoming data using a realistic test event before relying on production delivery.
+  tags: [triggers, nodes, webhook]
+- id: n8n-basic-006
+  topic: nodes
+  difficulty: beginner
+  question: What does the HTTP Request node provide?
+  answer: |
+    HTTP Request is a general-purpose node for calling HTTP APIs when a built-in integration does not expose the needed operation or a custom endpoint is required. It configures method, URL, query parameters, headers, authentication, request body and response handling. Use an n8n credential for reusable authentication rather than embedding tokens in URLs or expressions. Configure timeout and error behavior to match the API contract.
+
+    Generic calls require understanding pagination, rate limits, status codes, idempotency and response schema. Validate user-controlled URL components to avoid making the workflow a server-side request proxy into internal networks. Avoid constructing raw SQL or unsafe request fragments from untrusted input. Test with representative responses and inspect output item shape; HTTP Request cannot infer the business meaning of returned fields.
+  tags: [http-request, APIs, security]
+- id: n8n-basic-007
+  topic: data-flow
+  difficulty: beginner
+  question: What is an n8n item, and how does it affect downstream execution?
+  answer: |
+    An n8n item is a unit of data passed between nodes, usually with a `json` object and optionally binary data. If an HTTP Request returns records as separate items, the next node may receive several items and process an operation for each. This differs from one item whose JSON contains an array-valued field such as `results`. The canvas alone does not reveal cardinality.
+
+    Inspect input and output panels and check how many items each node receives. A node may have an execute-once setting or an operation that handles a batch differently. Use Edit Fields to normalize fields and retain stable identifiers needed for deduplication or correlation. Test empty, single-item and multiple-item inputs; workflows often fail on empty collections or unexpectedly issue many API calls when item count is larger than expected.
+  tags: [items, data-flow, cardinality]
+- id: n8n-basic-008
+  topic: expressions
+  difficulty: beginner
+  question: What does the expression `{{ $json.email }}` refer to?
+  answer: |
+    `$json` refers to the JSON data for the current item in the node's expression context, and `.email` selects that item's email field. In a one-to-one chain, this means each incoming record contributes its own email. Expressions can appear in request parameters or mapped output fields, and their result can be a string, number, object or another type depending on context.
+
+    If the field is missing, the expression may resolve to an absent or empty-like value that the destination handles differently than expected. Validate required fields before making a write, and do not assume a missing email means an empty string. Prefer carrying needed values forward on the current item instead of reaching back to distant node output. Expressions are data access, not validation or authorization; constrain user-supplied values before using them.
+  tags: [expressions, json, data-flow]
+- id: n8n-basic-009
+  topic: data-flow
+  difficulty: intermediate
+  question: What is the difference between mapped items and paired items?
+  answer: |
+    Mapped item processing describes how a node receives a collection and applies its operation to items. In a straightforward one-to-one chain, each output corresponds to its input at the same logical position. Paired items describe n8n's lineage relationship that lets a current output refer to the input or earlier item that produced it. This lineage supports references to data from another node.
+
+    Pairing matters when a node filters, aggregates, splits or constructs items. A one-item summary from ten inputs cannot have a one-to-one correspondence with all ten. Position-based assumptions also break when branches reorder or filter independently. Preserve stable business keys such as `recordId`, define output cardinality, and inspect item linking when writing Code node transformations. Use current `$json` when possible, because direct data flow is easier to reason about than distant references.
+  tags: [paired-items, mapping, item-linking]
+- id: n8n-basic-010
+  topic: data-flow
+  difficulty: intermediate
+  question: When should you use Edit Fields versus a Code node?
+  answer: |
+    Edit Fields is usually better for straightforward mapping: adding, renaming or removing fields, setting values, and deciding whether to keep other input fields. Its mapping is visible and easy for teammates to audit. A consistent normalized object reduces dependence on a vendor's nested response format. Keep identifiers and source metadata needed for reconciliation even when removing irrelevant payload fields.
+
+    A Code node is useful for compact transformations that are awkward or brittle with standard nodes, such as nested normalization or a custom algorithm. Its run mode matters: “Run Once for All Items” and “Run Once for Each Item” have different semantics. Return correctly shaped items and preserve needed lineage. Larger application logic belongs in a regular tested codebase rather than an opaque Code node. Avoid Code for ordinary field mapping or logic that benefits from visual conditions.
+  tags: [edit-fields, code-node, transformations]
+- id: n8n-basic-011
+  topic: control-flow
+  difficulty: beginner
+  question: How do IF and Switch nodes affect item routing?
+  answer: |
+    IF routes items according to a condition into true and false outputs. Switch routes items among multiple outputs according to rules. Downstream nodes on a route only receive matching items, so a node may not run because no items matched or an earlier branch was not taken. Test both expected and unexpected branches, including missing values and boundary cases.
+
+    Branching is not a transaction. If one branch writes a record and another later fails, n8n does not undo the first write. If branches meet at Merge, specify the merge mode and test empty or unequal inputs. Use explicit keys rather than relying on item order to correlate independently processed branches. An empty branch can affect whether downstream logic executes, so inspect execution data rather than only the canvas.
+  tags: [if, switch, branches]
+- id: n8n-basic-012
+  topic: control-flow
+  difficulty: intermediate
+  question: What is the role of Merge and Loop Over Items?
+  answer: |
+    Merge combines branch data according to a selected mode, such as appending inputs or combining matching items. The correct mode depends on whether branches contain the same records, independent records or outputs paired by key. Positional merging assumes stable order and can silently associate wrong records if a branch filters or sorts inputs. Validate empty, unequal and duplicate-key cases.
+
+    Loop Over Items controls repeated processing, often for batches or delays between groups. It is different from assuming ordinary connections form a safe loop. The loop output, completion output and return connection have distinct roles, so wire them intentionally and verify termination. Batching can reduce request bursts but does not automatically comply with an API's rate window. Use a durable checkpoint or idempotent writes if a loop may be interrupted and resumed.
+  tags: [merge, loop-over-items, batching]
+- id: n8n-basic-013
+  topic: credentials
+  difficulty: beginner
+  question: How does n8n store credentials, and why is `N8N_ENCRYPTION_KEY` important?
+  answer: |
+    In a typical self-hosted installation, credential records are stored in the database in encrypted form. `N8N_ENCRYPTION_KEY` is the key n8n uses to encrypt and decrypt credential data. Set a strong value, protect it outside source control, and keep it consistent across processes sharing the database, including queue workers. A restart or migration with a different key can make credentials unreadable.
+
+    Back up the encryption key separately and securely alongside the database recovery plan. A database backup without its key may not restore usable credentials; the pair is highly sensitive. Do not casually rotate the key by changing an environment variable, because existing records were encrypted using the prior key. Follow the current migration procedure and test on a copy. Cloud storage details are provider-operated; customers still scope credentials and control workflow access.
+  tags: [credentials, encryption, key-management]
+- id: n8n-basic-014
+  topic: security
+  difficulty: beginner
+  question: What does least privilege mean for n8n credentials and workflows?
+  answer: |
+    Least privilege means each credential and workflow receives only the authority needed for its task. Use a dedicated service identity with minimal API scopes, data access and write permissions. Separate development and production credentials, and avoid sharing an administrator token across unrelated workflows. A read-only integration should not be able to delete data simply because the workflow might someday need that option.
+
+    Credentials can be misused by someone who can edit a workflow even if the UI does not reveal the secret: the workflow could send data to an unintended destination. Restrict workflow-edit, activation, credential-management and instance-admin access appropriately. Review access when team membership changes, and rotate external tokens with a plan. Least privilege reduces impact but does not replace code review, input validation, execution-data minimization or monitoring.
+  tags: [least-privilege, credentials, access-control]
+- id: n8n-basic-015
+  topic: errors
+  difficulty: beginner
+  question: How should you decide whether to retry a failed node?
+  answer: |
+    First classify the failure. A transient timeout, temporary 503 or rate-limit response may recover, while a 400 validation error usually needs changed input and a 401 may require credential repair. A timeout after a write is ambiguous: the remote service may have committed the operation even though n8n did not receive the response. Inspect status, provider guidance and whether the operation is safe to repeat.
+
+    Use bounded retries with delay or backoff for transient failures, and honor `Retry-After` where available. Prefer an idempotency key or stable external operation ID for writes. Avoid multiplying retries at node and whole-workflow levels without calculating total attempts. An error workflow can alert or coordinate recovery, but cannot roll back prior side effects. Test the retry path and exact number of requests before production use.
+  tags: [retries, idempotency, errors]
+- id: n8n-basic-016
+  topic: errors
+  difficulty: intermediate
+  question: What is an error workflow, and what should it do?
+  answer: |
+    An error workflow is a separate workflow configured as handler for failures from another workflow. It commonly starts with Error Trigger, which provides failure context such as source workflow and execution. It can notify an operator, create an incident record or enqueue a safe repair task. Configure the association explicitly and test a deliberate failure; placing Error Trigger in a workflow does not make it universal.
+
+    Keep the handler simple and independent enough to work when the original destination is unavailable. Include identifiers and concise error summary, not a full payload with secrets or personal data. The handler cannot undo completed API writes or guarantee a failed remote request had no effect. It provides visibility and coordination, not transaction rollback. For partial success, keep external IDs and idempotency keys so recovery can reconcile which actions actually completed.
+  tags: [error-trigger, recovery, operations]
+- id: n8n-basic-017
+  topic: webhooks
+  difficulty: beginner
+  question: What is the difference between a Webhook test URL and production URL?
+  answer: |
+    The Webhook node's test URL is used while a workflow is waiting for a test event in the editor. It supports development but is not the endpoint for a production integration. The production URL is registered for an active workflow and is the one an external provider should call. Exact URL patterns depend on configuration and version, so use the URL shown for the intended environment.
+
+    For self-hosting behind a reverse proxy, `WEBHOOK_URL` should match the externally reachable base URL and `N8N_PROXY_HOPS` should reflect the trusted proxy chain. Use HTTPS and route webhook traffic without exposing the editor unnecessarily. Validate authentication, signature, method, schema and size before acting. A successful HTTP acknowledgement may only mean the event was accepted, not that downstream nodes succeeded; design acknowledgement timing around the sender's retry semantics.
+  tags: [webhook, URLs, activation]
+- id: n8n-basic-018
+  topic: scheduling
+  difficulty: beginner
+  question: What should you consider when configuring a Schedule Trigger?
+  answer: |
+    Consider the interval or calendar schedule, timezone, workflow activation, expected run duration and behavior if a previous execution is still running. A local-time schedule can behave unexpectedly around daylight-saving changes if the intended timezone is unclear. Confirm the next execution in the deployed environment rather than relying only on how a setting appears in the editor.
+
+    If each run processes a time window, store a durable cursor and advance it only after relevant records are handled. Overlap or late arrival can cause missed records unless the workflow uses a safe overlap window and deduplication. Avoid conflicting concurrent runs; a concurrency setting or lock helps but does not provide a transaction with external systems. Respect API quotas and monitor schedule lag, failures and duration.
+  tags: [schedule-trigger, timezone, polling]
+- id: n8n-basic-019
+  topic: idempotency
+  difficulty: intermediate
+  question: How can a webhook workflow handle duplicate event delivery safely?
+  answer: |
+    Assume a sender can deliver an event more than once, often because it did not receive a timely success response. Use the provider's stable event ID or deterministic business key, then store it in a durable system with a uniqueness constraint. Claiming the key and processing the event should be atomic where possible; a separate check followed by a write can race when duplicate deliveries run concurrently.
+
+    If the destination supports an idempotency-key header, pass a stable key for the business operation. Retain deduplication records long enough to cover sender retries. An n8n execution ID is not the event ID: each retry may create a different execution. Handle ambiguous outcomes by querying or reconciling the remote record before repeating a write. Test duplicate, out-of-order and late events, and ensure the webhook response reflects durable acceptance rather than an assumption of completion.
+  tags: [idempotency, webhooks, deduplication]
+- id: n8n-basic-020
+  topic: AI
+  difficulty: intermediate
+  question: How should an n8n workflow validate LLM output before using it?
+  answer: |
+    Treat model output as untrusted data. Request a structured format where supported, parse the result, and validate required fields, types, allowed values and size before passing it to later nodes. Valid JSON is not proof facts are true or an action authorized. Keep source references when summarizing documents, and route missing, contradictory or invalid answers to a bounded retry or human review.
+
+    Limit model tools and permissions, especially for writes. Prompt injection can arrive through emails, pages or retrieved documents, so do not let model text select arbitrary URLs, SQL or credentials. For consequential actions, separate a proposed action from deterministic validation and authenticated approval. Log enough to evaluate quality while minimizing sensitive prompt and response retention. Re-evaluate representative and adversarial cases after changing model, prompt, retrieval source or node version.
+  tags: [LLM, validation, prompt-injection]
+- id: n8n-basic-021
+  topic: version-control
+  difficulty: intermediate
+  question: What does a workflow JSON export provide, and what does it not provide?
+  answer: |
+    A workflow JSON export can preserve a definition for review, version control or import into another environment. Stored in Git, a diff can expose changes to nodes, connections, expressions and settings. Inspect it for sensitive values and environment-specific references before committing. Exports are useful source artifacts, but are not automatically a complete backup of an installation.
+
+    Depending on configuration, an export may not include credentials, execution history, instance settings, external packages, database content or mounted files. Importing it does not guarantee credential references resolve correctly or production URLs are safe. Use a separate recovery plan for the database and encryption key. Test import into a non-production environment, verify credentials and destinations, and maintain controlled promotion rather than manually editing each environment.
+  tags: [workflow-export, Git, backup]
+- id: n8n-basic-022
+  topic: tool-choice
+  difficulty: intermediate
+  question: When is n8n a better fit than FastAPI plus cron or Airflow?
+  answer: |
+    n8n fits modest integrations where triggers, connectors, mapping, routing and operational visibility matter more than highly customized application structure. It lets users assemble a webhook or scheduled automation with service nodes and inspect executions. FastAPI plus cron is often better when a stable public API, complex domain logic, tests, custom protocols or fine-grained performance are central. It offers software-engineering boundaries but requires code and service operations.
+
+    Airflow fits scheduled data pipelines with task dependencies, retries, backfills and data-platform ownership; it is not usually first choice for low-latency webhook business actions. n8n can orchestrate simple scheduled pipelines, but graph complexity and data volume may become awkward. Choose by reliability, idempotency, scale, auditability and team skills. None of these tools provides exactly-once external side effects automatically, and each needs monitoring and recovery design.
+  tags: [tool-choice, fastapi, airflow]

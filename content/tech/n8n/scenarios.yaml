@@ -1,0 +1,72 @@
+- id: n8n-scn-001
+  title: Recover a flaky scheduled API sync without creating duplicates
+  technologies: [n8n, rest-apis]
+  difficulty: intermediate
+  prompt: |
+    A Schedule Trigger polls a partner API every ten minutes, normalizes records and creates rows in a CRM. The partner sometimes times out after accepting a request, and a previous retry created duplicate CRM records. Design a reliable polling and recovery approach.
+  approach: |
+    Clarify the partner's pagination, update cursor, retry contract and CRM idempotency support. Use a durable cursor with a deliberate overlap window for late updates, and deduplicate by stable partner record ID. Prefer an upsert or idempotency key; if unavailable, query for an existing external reference before create and reconcile ambiguous timeouts. Advance the cursor only after records are durably handled, and make batches bounded. Add bounded retries only for transient failures, respect rate-limit headers, route permanent or ambiguous cases to a quarantine path, and alert with execution and business identifiers. Test duplicate pages, partial success, cursor restart, empty input and partner outage. Monitor lag, retry volume, duplicates and execution duration.
+  red_flags:
+    - Retrying create requests without idempotency or reconciliation.
+    - Advancing the cursor before processing the page succeeds.
+    - Assuming one page contains every changed record.
+- id: n8n-scn-002
+  title: Secure an inbound vendor webhook
+  technologies: [n8n, rest-apis]
+  difficulty: advanced
+  prompt: |
+    A vendor posts customer-change events to a self-hosted n8n Webhook endpoint behind a reverse proxy. The current workflow trusts a secret path and writes fields from the request directly into an internal system. Describe how to harden and operate it.
+  approach: |
+    Configure the externally reachable HTTPS `WEBHOOK_URL`, trusted `N8N_PROXY_HOPS`, and proxy routing without exposing the editor. Validate the vendor signature according to its canonicalization rules, request size, content type, schema, allowed event type and required identifiers. Avoid arbitrary destination URLs and sanitize fields before writes. Deduplicate by vendor event ID using durable atomic storage, and choose acknowledgement timing based on whether work is safely accepted. Use least-privilege destination credentials, keep execution payload retention minimal, and send sanitized alerts. Test invalid signatures, replay, duplicate and out-of-order events, plus downstream outage. Monitor delivery failures, queue or execution lag, and audit changes to workflow permissions.
+  red_flags:
+    - Treating a secret URL or source IP as the sole authentication mechanism.
+    - Exposing the editor because the webhook must be public.
+    - Returning success before the event is durably accepted with no recovery route.
+- id: n8n-scn-003
+  title: Diagnose a workflow that loses customer correspondence
+  technologies: [n8n]
+  difficulty: intermediate
+  prompt: |
+    A workflow reads customer records, filters them, calls an enrichment API and then merges results with the original data. Some emails are attached to the wrong customer after a new filtering step. How do you investigate and fix the issue?
+  approach: |
+    Inspect execution data and item counts before and after filtering, enrichment and Merge. Determine whether the branches still contain the same records in the same order; positional correlation is unsafe if one branch filters or sorts. Carry a stable customer ID through normalization and merge on that explicit key, handling missing and duplicate keys deliberately. Check item linking if downstream expressions reference earlier nodes, especially if a transformation aggregates or constructs new items. Prefer current `$json` fields when possible. Test zero, one and many records, reordered results, missing IDs and duplicate responses. Add assertions or an error route when correspondence cannot be proven, and document the item contract.
+  red_flags:
+    - Using `$itemIndex` as a key after independent filtering.
+    - Assuming Merge always matches records by business meaning.
+    - Fixing the symptom by dropping unmatched customers silently.
+- id: n8n-scn-004
+  title: Move an instance from one container to queue mode
+  technologies: [n8n, docker]
+  difficulty: advanced
+  prompt: |
+    A single-container n8n instance is approaching capacity. The team plans Docker-based queue mode with PostgreSQL, Redis and multiple workers. What migration and operational checks should precede the cutover?
+  approach: |
+    Establish backup and restore for the existing database and `N8N_ENCRYPTION_KEY`; determine whether SQLite state must be migrated to PostgreSQL and rehearse on a copy. Pin compatible n8n versions, configure all processes with the same database, key and `EXECUTIONS_MODE=queue`, and secure Redis and PostgreSQL on private networks. Set worker concurrency conservatively based on memory, database connections and downstream quotas. Validate `WEBHOOK_URL`, proxy settings and trigger registration, then cut over in a controlled window and ensure only intended workflow copies are active. Exercise worker restart, Redis outage, failed job, credential decryption and restore. Monitor queue depth, job failures, worker health and database latency. Document rollback limitations after database migrations and external side effects.
+  red_flags:
+    - Changing the encryption key or discarding the old database without a tested recovery.
+    - Assuming Redis holds workflow definitions or is a backup.
+    - Scaling workers without considering partner rate limits or database load.
+- id: n8n-scn-005
+  title: Add an AI-generated triage step with safe escalation
+  technologies: [n8n, llm-agents]
+  difficulty: advanced
+  prompt: |
+    A team wants an AI-assisted workflow to read incoming support email, label urgency and draft a response. The agent may access a knowledge base and a ticketing system. Propose a design that improves throughput without letting model output make unsafe changes.
+  approach: |
+    Validate the inbound message and minimize sensitive data sent to the model. Treat email and retrieved documents as untrusted, retrieve only authorized knowledge, and ask for a constrained structured classification with citations or evidence. Parse and validate fields and allowed labels, evaluate confidence only if calibrated, and route ambiguous or urgent cases to a human. Give tools narrow read scope; drafting should be distinct from sending or changing ticket priority. Require authenticated human approval for consequential actions and use idempotent ticket updates. Bound model calls, tool iterations, time and output size; handle provider failures with bounded retries. Evaluate prompt-injection and malformed-output cases, keep a representative test set, and monitor quality, latency and sensitive-data retention.
+  red_flags:
+    - Letting the model email customers or change access controls without review.
+    - Treating retrieved text or model JSON as trusted instructions.
+    - Giving the agent broad ticketing credentials because it is convenient.
+- id: n8n-scn-006
+  title: Decide whether to keep a growing workflow or replace it
+  technologies: [n8n, fastapi, airflow]
+  difficulty: intermediate
+  prompt: |
+    A workflow has accumulated dozens of branches and Code nodes. It receives partner webhooks, enriches records, runs complex business rules and produces a daily analytical dataset with backfills. The team asks whether to split it or move to FastAPI and Airflow.
+  approach: |
+    Separate distinct execution styles. Keep the inbound webhook and straightforward connector orchestration in n8n if visibility and integrations are useful, but make event validation, durable deduplication and business API contracts explicit. Extract complex reusable rules into a tested service with versioned interfaces if Code nodes are hard to review. Use Airflow for the scheduled analytical DAG if dependencies, backfills, data quality and pipeline ownership are central; it does not replace a low-latency webhook endpoint by itself. Define stable boundaries and data ownership, compare operational expertise and failure semantics, then migrate incrementally with replay or shadow comparisons. Preserve idempotency and correlation IDs across boundaries, and test rollback and partial completion. Avoid a wholesale rewrite without measurable benefits.
+  red_flags:
+    - Treating node count alone as evidence that a rewrite is necessary.
+    - Expecting Airflow to replace webhook delivery or provide exactly-once writes.
+    - Moving logic without preserving event IDs, retries and reconciliation.
