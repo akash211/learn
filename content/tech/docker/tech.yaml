@@ -1,0 +1,135 @@
+slug: docker
+title: Docker
+category: cloud-infrastructure
+summary: Images, namespaces and cgroups, the build cache, and the operational habits that keep containers small, reproducible and safe to run.
+level: core
+relations:
+  - to: linux
+    type: foundation
+    note: A container is a Linux process with namespaces, cgroups and a pivot-rooted filesystem; every limit and isolation property Docker exposes is a kernel feature underneath.
+  - to: kubernetes
+    type: uses
+    note: Kubernetes schedules OCI images through a CRI runtime, so image design, healthchecks, signal handling and resource limits behave the same way one layer up.
+  - to: airflow
+    type: complements
+    note: Airflow workers and task pods run as containers; image size, dependency pinning and non-root execution decide whether a DAG is reproducible.
+  - to: terraform
+    type: complements
+    note: Terraform provisions the registry, cluster and network; Docker builds and pushes the artefact that those resources then run.
+intro:
+  what: |
+    Docker is a toolchain for building, distributing and running container images. An image is
+    an ordered stack of content-addressed filesystem layers plus a small config document
+    (entrypoint, environment, user, working directory). A container is a process started from
+    that image with its own view of the filesystem, network, process table and resource budget.
+
+    The important part is that nothing is emulated. There is no guest kernel: the container
+    shares the host's kernel and is confined with namespaces (what it can see) and cgroups
+    (what it can use). Docker's contribution is packaging those kernel primitives into a
+    reproducible artefact, a registry protocol, and a CLI that hides the bookkeeping.
+
+    This module teaches the whole path — layer mechanics and the build cache, the process
+    model, Dockerfile design, networking and storage, Compose, limits and health, registries
+    and supply chain, hardening, debugging, and the production failure modes that are not
+    obvious from a working `docker run`.
+  why: |
+    Containers made "it runs on my machine" a solvable problem by shipping the userland, not
+    just the code. The cost is that a container carries its own dependency tree, its own
+    libc, its own certificates and its own root filesystem — so image design decisions become
+    operational decisions. A 1.4 GB image is a slow deploy, a wide CVE surface and a cache
+    miss on every node. An image that runs as root with a writable filesystem is a host
+    compromise waiting for one application bug.
+
+    Most container incidents are not exotic. They are a healthcheck that never restarts
+    anything, a memory limit below the heap, a `latest` tag that moved, a log driver with no
+    rotation filling the disk, or a base image nobody rebuilt for a year. Knowing the
+    mechanics makes each of those visible before it pages someone.
+  problems:
+    - Ship an application with its exact runtime, libraries and configuration as one artefact.
+    - Make builds reproducible and cacheable instead of "works on the build agent".
+    - Isolate process trees, networks and filesystems without paying for a virtual machine.
+    - Cap CPU, memory and process counts per workload on a shared host.
+    - Distribute and version artefacts through a registry with digests, scanning and signatures.
+  where_used:
+    - Local development stacks — database, cache, queue and API started with one command.
+    - CI pipelines that build, scan, sign and push images per commit.
+    - Container platforms (Kubernetes, ECS, Cloud Run, Fly.io, Nomad) that schedule images.
+    - Batch and data workloads — Airflow workers, Spark jobs, scheduled scripts.
+    - Reproducible tooling: linters, compilers and CLIs pinned as images instead of installed.
+  ecosystem: |
+    Docker sits between the Linux kernel and every orchestrator. Above it, Kubernetes and Nomad
+    consume OCI images through a CRI runtime (containerd, CRI-O); below it, the kernel provides
+    namespaces, cgroups, capabilities, seccomp and overlay filesystems. Adjacent tooling splits
+    into builders (BuildKit, Buildah, Kaniko), registries (Harbor, ECR, GHCR, Artifact Registry)
+    and supply-chain tools (Trivy, Grype, Syft, cosign) that read the same image format.
+
+    The practical consequence: Docker skills transfer. A Dockerfile builds the same image
+    Buildah or Kaniko builds, and the same image runs under containerd in Kubernetes. What
+    changes between platforms is the orchestration layer and the runtime's defaults, not the
+    artefact.
+  alternatives:
+    - name: Podman
+      note: Daemonless and rootless by default, with a Docker-compatible CLI; a closer fit where running a root daemon is unacceptable.
+    - name: containerd / nerdctl
+      note: The runtime Kubernetes actually uses; nerdctl gives it a Docker-like CLI with Compose support.
+    - name: Buildah and Kaniko
+      note: Build images without a daemon, which matters inside CI runners and locked-down clusters.
+    - name: Virtual machines
+      note: A hardware boundary when tenants are untrusted; microVMs (Firecracker, Kata) aim for container speed with a real kernel boundary.
+related: [linux, kubernetes, terraform, airflow]
+chapters:
+  - id: images-layers-cache
+    title: Images, Layers and the Build Cache
+    file: chapters/01-images-layers-cache.md
+    minutes: 12
+    level: core
+  - id: containers-namespaces-cgroups
+    title: Containers, Virtual Machines, Namespaces and cgroups
+    file: chapters/02-containers-namespaces-cgroups.md
+    minutes: 13
+    level: core
+  - id: dockerfiles
+    title: Dockerfiles That Stay Small and Reproducible
+    file: chapters/03-dockerfiles.md
+    minutes: 14
+    level: core
+  - id: networking-volumes
+    title: Networking, DNS and Persistent Storage
+    file: chapters/04-networking-volumes.md
+    minutes: 13
+    level: core
+  - id: compose
+    title: Compose for Local Stacks
+    file: chapters/05-compose.md
+    minutes: 11
+    level: core
+  - id: limits-health-restart
+    title: Resource Limits, Healthchecks and Restart Policies
+    file: chapters/06-limits-health-restart.md
+    minutes: 12
+    level: core
+  - id: registries-supply-chain
+    title: Registries, Tagging and the Supply Chain
+    file: chapters/07-registries-supply-chain.md
+    minutes: 13
+    level: advanced
+  - id: security
+    title: Hardening the Container
+    file: chapters/08-security.md
+    minutes: 14
+    level: advanced
+  - id: debugging
+    title: Debugging and Inspecting Running Containers
+    file: chapters/09-debugging.md
+    minutes: 12
+    level: core
+  - id: production
+    title: Production Concerns — Logs, Storage, Cleanup and CI
+    file: chapters/10-production.md
+    minutes: 14
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

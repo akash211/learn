@@ -1,0 +1,246 @@
+- id: airflow-scn-001
+  title: Backfill eighteen months into a partitioned warehouse table
+  technologies: [airflow, sql, dbt]
+  difficulty: advanced
+  prompt: |
+    A new `fct_daily_revenue` table needs eighteen months of history — about 550 daily partitions.
+    The DAG that should produce it currently processes one day per run, writes with `DELETE` plus
+    `INSERT` scoped to `revenue_date`, and is scheduled daily with `catchup=False` because "catchup
+    caused an incident last year". The warehouse rejects more than eight concurrent loads and the
+    business needs the backfill within a day without delaying the normal 02:00 run.
+
+    You have the DAG code, `airflow pools`, the DAG's `max_active_runs`, and the freedom to change
+    the schedule, the pool and the recovery method.
+  approach: |
+    Start by establishing what "safe" means here: the load is already idempotent per partition, so
+    re-running a day is harmless and the awkward part is only concurrency and ordering.
+
+    1. **Separate capacity.** Create a `backfill_revenue` pool with a few slots (say 4) and give the
+       backfill tasks `pool="backfill_revenue"`, keeping the production pool for the 02:00 run. In
+       Airflow 3, run the backfill through the backfill scheduler so it has its own concurrency
+       instead of competing for `max_active_runs`.
+    2. **Cap the run.** `max_active_runs` limits parallel dag runs, but a backfill of 550 dates with
+       `max_active_runs=1` is deliberately slow; use a backfill run with modest concurrency plus the
+       pool, and confirm the warehouse limit of eight is never approached by combining both pools.
+    3. **Choose the mechanism.** `airflow dags backfill -s 2024-01-01 -e 2025-06-30 --reset-dagruns`
+       only if runs already exist and are wrong; otherwise plain backfill skips successful runs and
+       reuses the production code path. Do **not** clear 550 runs by hand.
+    4. **Prove idempotency first.** Run one date twice in staging and diff the partition. If the
+       second run doubles rows, fix the write before backfilling anything.
+    5. **Watch the leading indicators.** Queue latency, pool slot usage, warehouse concurrency and
+       the DAG's task duration. Throttle by reducing pool slots, not by cancelling and restarting.
+    6. **Reconcile at the end.** Row counts and `SUM(total_amount)` per month against the source,
+       plus a check that no partition is missing between the bounds.
+
+    The strong answer distinguishes capacity control (pools, `max_active_runs`) from correctness
+    (idempotent partition writes) and says explicitly which one it is changing.
+  red_flags:
+    - Turning `catchup=True` on and letting the scheduler create all 550 runs against production capacity.
+    - Clearing task instances in bulk as the first move.
+    - Raising `parallelism` to make the backfill faster without touching the warehouse's limit.
+    - Backfilling without checking that a double run leaves the partition unchanged.
+
+- id: airflow-scn-002
+  title: A DAG disappeared from the UI after a deploy
+  technologies: [airflow, python]
+  difficulty: intermediate
+  prompt: |
+    A pipeline that has run daily for a year is gone from the Airflow UI. Nothing else in the
+    deployment changed: the same image, the same scheduler, other DAGs are running normally. The
+    file is present in the DAGs folder on the scheduler host and was modified in the last deploy.
+    The team's first move is to restart the scheduler.
+
+    You have CLI access, the scheduler logs, and the DAG file.
+  approach: |
+    Treat "missing DAG" as an import problem until proven otherwise — a restart re-parses the file
+    and will simply fail again.
+
+    1. **Read the import error.** `airflow dags list-import-errors` (or the UI's "Import Errors"
+       page, or `airflow dags report`) names the file and the traceback. This is the answer more
+       often than anything else.
+    2. **Reproduce the import in the same environment.** `python -c "from airflow.models import
+       DagBag; b = DagBag('dags'); print(b.import_errors)"` inside the scheduler container — not on
+       a laptop, where the dependency versions differ.
+    3. **Check the usual suspects in order:** a missing provider package in the image; an import of
+       a module that only exists in the worker image; a syntax error or a `NameError` in the module
+       body; `Variable.get()` or a database call at import time now failing; a duplicate `dag_id`
+       elsewhere in the folder; a file outside `dags_folder` after a path change.
+    4. **Distinguish "parse failed" from "not discovered".** If there is no import error, check that
+       the file is inside the configured `dags_folder` on the *DAG processor* (in 3.x the
+       scheduler's folder is irrelevant), that its extension is allowed, and that
+       `dag_dir_list_interval` has elapsed.
+    5. **Check state, not just existence.** A DAG can be present but paused; in 3.x, look at the
+       DAG version and whether the bundle loaded.
+    6. **Fix forward and add the gate.** The import test from CI would have caught this; add the
+       file to it if it was excluded.
+
+    The strong answer asks what changed in the file and reads the error, rather than restarting a
+    process that will re-import the same broken code.
+  red_flags:
+    - Restarting the scheduler as the first action.
+    - Editing the DAG file directly on the scheduler host to "test quickly".
+    - Assuming the file is fine because it imports locally on a different Airflow version.
+    - Recreating the DAG under a new `dag_id`, which loses the run history.
+
+- id: airflow-scn-003
+  title: Scheduling got slow as the deployment grew to 2,000 DAG files
+  technologies: [airflow, python]
+  difficulty: advanced
+  prompt: |
+    Over a year the platform grew from 150 to about 2,000 DAG files, most generated from a
+    configuration loop. The scheduler's loop time has climbed from under a second to nearly
+    fifteen. Tasks now start minutes after their interval closes, the UI takes ten seconds to load
+    the DAG list, and the metadata database is 400 GB with `task_instance` at 300 million rows.
+    Adding a second scheduler and a bigger database instance helped for a week.
+
+    You can read metrics, query the database, and change DAG code.
+  approach: |
+    Separate the three costs — parsing, scheduling, and database — and measure each before changing
+    anything.
+
+    1. **Parsing.** `dag_processing.total_parse_time` per file and `dag_processing.import_errors`.
+       Look for DAG files that import pandas or a cloud SDK, or query the database at module level.
+       A separate `dag-processor` (default in 3.x) stops parsing from competing with scheduling, but
+       does not fix a file that takes four seconds to import.
+    2. **Graph size.** 2,000 files × 20 tasks is 40,000 tasks to evaluate every loop, and
+       `serialized_dag` rows to deserialize. Ask whether the DAGs are structurally identical: if
+       they are, one DAG with dynamic task mapping and a config lookup replaces 2,000 files — the
+       single biggest available win.
+    3. **Database.** 300 M `task_instance` rows means every dependency check and UI query fights for
+       cache. Check the retention policy: `airflow db clean` (dry run first) on `task_instance`,
+       `dag_run`, `log`, `xcom`; verify indexes are intact after upgrades; check for a long-running
+       transaction or lock waits in `pg_stat_activity`.
+    4. **Scheduling settings.** `min_file_process_interval`, `parsing_processes`,
+       `scheduler_idle_sleep_time`, `max_tis_per_query` — tune after the structural fixes, not
+       instead of them.
+    5. **Scheduler count.** A second scheduler helps availability and marginally helps throughput;
+       it does not fix a database at 100% CPU.
+    6. **Then re-measure** the same four graphs and state what changed.
+
+    The strong answer refuses to treat "add hardware" as the fix and identifies which of parse,
+    graph size or database is dominant, with a number for each.
+  red_flags:
+    - Adding schedulers or database capacity without measuring parse time.
+    - Deleting production history without a retention policy agreed with the business.
+    - Assuming generated DAGs must stay one-file-per-entity.
+    - Tuning `scheduler_idle_sleep_time` to zero as a throughput fix.
+
+- id: airflow-scn-004
+  title: A sensor fleet is holding half the worker capacity
+  technologies: [airflow, docker]
+  difficulty: intermediate
+  prompt: |
+    A Celery deployment with 400 task slots runs about 120 sensors at any time, each polling an
+    external SFTP or S3 location every 60 seconds for up to eight hours. Dashboards show
+    `executor.open_slots` near zero for most of the day while CPU sits at 15%. The team's proposal
+    is to double the worker fleet. Someone else suggests rewriting everything as one big Python
+    task that polls in a loop.
+
+    You can change operator code, executor configuration and the triggerer deployment.
+  approach: |
+    Name the problem first: slots are being consumed by *waiting*, not working, so more workers buy
+    capacity you do not need.
+
+    1. **Quantify.** Count tasks in `running` whose state is a poll loop, and the average wait
+       duration. 120 sensors × 8 hours is ~960 slot-hours a day of pure waiting.
+    2. **Move to deferrable.** Provider sensors accept `deferrable=True`; where they do not,
+       `mode="reschedule"` releases the slot between pokes (still scheduler-driven) as an interim
+       step. Deferrable is the target: the task leaves the worker entirely.
+    3. **Size the triggerer.** Each process handles `[triggerer] default_capacity` (1000) triggers;
+       run two for availability, and graph deferred-task age so a dead triggerer is visible.
+    4. **Fix the polling interval.** A 60-second poll for a file that lands once a day is 480
+       wasted checks per sensor; use a longer poke interval or an event-driven mechanism where the
+       source supports it.
+    5. **Replace the right ones.** If the upstream system can notify (S3 event → SQS, an asset
+       published by the producer), prefer that over polling at all — asset-driven schedules remove
+       the sensor entirely.
+    6. **Keep the workers you have** until the queue latency shows the fleet is now oversized, then
+       scale down.
+
+    The strong answer rejects both proposed fixes: doubling workers pays for waiting, and a single
+    polling loop loses per-item retries, visibility and parallelism.
+  red_flags:
+    - Doubling the worker fleet because slots are full.
+    - Merging all sensors into one long-running task.
+    - Deferring without a timeout, so a missing file waits forever.
+    - Deploying one triggerer and calling it done.
+
+- id: airflow-scn-005
+  title: The metadata database is bloated and runs are failing
+  technologies: [airflow, sql]
+  difficulty: advanced
+  prompt: |
+    An Airflow instance that ran comfortably for two years now has a 600 GB metadata database. The
+    scheduler takes 20 seconds per loop, the UI times out on the task instance page, and this week
+    two runs failed with `psycopg2.errors.DiskFull` during a task that returns a large pandas
+    DataFrame from a `@task`. Backups take six hours and have started failing.
+
+    You have database access, the DAG code, and a maintenance window.
+  approach: |
+    Treat it as three linked problems: payload size, retention, and the recovery plan.
+
+    1. **Find the growth.** Row counts and total size per table:
+       `SELECT relname, n_live_tup, pg_total_relation_size(relid) FROM pg_stat_user_tables ORDER BY 2 DESC;`
+       Expect `xcom`, `task_instance`, `log`, `dag_run`, `rendered_task_instance_fields`.
+    2. **Stop the bleeding before cleaning.** Fix the DAG that returns a DataFrame: write it to
+       object storage or a staging table and pass the URI. Set `do_xcom_push=False` on operators
+       whose return value is unused. Without this step, cleaning buys a month.
+    3. **Clean in batches.** `airflow db clean --clean-before-timestamp ... --tables xcom --dry-run`
+       first, then run it; on a 600 GB table, do it by time range and expect locks. Consider
+       partitioning the large tables by `execution_date`/`run_id` if the instance will keep growing.
+    4. **Set retention going forward.** A policy the business agrees to — 30–90 days of task
+       history, archived if compliance requires — enforced by a scheduled maintenance DAG.
+    5. **Verify performance after.** Scheduler loop time, UI page load, and `pg_stat_activity` for
+       long transactions; run `VACUUM (ANALYZE)` or the platform equivalent.
+    6. **Restore backups to a working size** and test a restore, since an untested six-hour backup
+       is not a backup.
+
+    The strong answer fixes the payload and the policy, not just the row count, and takes a backup
+    before deleting anything.
+  red_flags:
+    - Truncating `xcom` or `task_instance` in one statement during business hours.
+    - Cleaning history without fixing the DAG that writes megabytes per task.
+    - Dropping tables the UI depends on to "reset" the instance.
+    - Deleting data before verifying the backup restores.
+
+- id: airflow-scn-006
+  title: Migrate forty production DAGs to Airflow 3 on a managed service
+  technologies: [airflow, python, docker]
+  difficulty: advanced
+  prompt: |
+    Forty DAGs run on a managed Airflow 2.10 environment: 12 use SubDAGs, 30 use
+    `schedule_interval`, most import `from airflow.operators.python import PythonOperator`, eight
+    use datasets, two custom plugins reach into the database from task code, and one DAG has a
+    `sla_miss_callback` that pages the on-call. The vendor supports Airflow 3 only in a new
+    environment version, and the business cannot accept more than a one-hour pipeline outage.
+
+    You own the DAG repository, the CI pipeline and the migration plan.
+  approach: |
+    Frame it as a code migration with a cutover, not an in-place upgrade.
+
+    1. **Inventory mechanically.** `grep` for `schedule_interval`, `execution_date`, `SubDagOperator`,
+       `from airflow.operators.`, `airflow.datasets`, `sla`, and any plugin using
+       `provide_session`/`Session`. Produce a per-DAG checklist — this list is your estimate.
+    2. **Convert the mechanical cases first.** `schedule_interval=` → `schedule=`;
+       `execution_date` → `logical_date`/`data_interval_*`; core operators → standard provider
+       imports. These are review-and-merge changes with low risk.
+    3. **Handle the structural cases deliberately.** SubDAGs become `TaskGroup`s when the structure
+       is static and dynamic task mapping when it is not — mapping is not a drop-in, because
+       instances are addressed by `map_index`. Datasets become assets. The two plugins must stop
+       touching the database: call an operator/hook API or move the write into the warehouse task.
+    4. **Replace SLA alerting.** `sla_miss_callback` becomes deadline alerts or, more simply, an
+       "no successful run in N intervals" alert, which is what the page was really detecting.
+    5. **Prove it in a parallel environment.** Stand up Airflow 3 alongside, load the same DAG
+       bundle, run import and structure tests plus `dag.test()` on the critical DAGs, and run both
+       pipelines for a week against a non-production warehouse.
+    6. **Cut over with a freeze.** Pause 2.x DAGs, let in-flight runs finish, migrate the database
+       or start clean (state history is the only thing lost), repoint the bundle, unpause. Keep the
+       2.x environment intact for rollback until two clean weeks have passed.
+
+    The strong answer treats "the database plugin" and "SubDAG with dynamic structure" as the real
+    cost, and says what the rollback is.
+  red_flags:
+    - Upgrading in place on the managed environment without a parallel environment.
+    - Assuming SubDAGs map one-to-one onto task groups.
+    - Leaving SLA callbacks as the only alerting during the migration.
+    - No rollback plan beyond "redeploy the old image" — the database migration is not reversible.

@@ -9,7 +9,7 @@ OpenAI-compatible client.
 | Area | State |
 |---|---|
 | Dashboard, navigation, dark/light theme, ⌘K search | working |
-| Three technology modules (Python, SQL, Microsoft Fabric) — 10 chapters, 22 foundation questions, 10 recent-pattern questions, 6 scenarios, 16-concept quick revision each | working |
+| Eight technology modules (Python, SQL, Microsoft Fabric, PySpark, Airflow, PostgreSQL, Docker, System Design) — 10 chapters, 22 foundation + 10 recent questions, 6 scenarios and 16 quick-revision concepts each; 80 chapters / 256 questions in total | working |
 | Chapter progress, bookmarks, notes, difficult-question flags | working |
 | Full-text search over chapters, questions, scenarios and concepts (SQLite FTS5) | working |
 | Quick revision sessions, single or combined technology | working |
@@ -99,4 +99,4 @@ See `docs/ARCHITECTURE.md`. Short version:
 - The mock-interview quality follows the configured model. A 3B local model asks narrower
   questions than a frontier model; swap `AI_MODEL_INTERVIEW` when a stronger provider is
   available.
-- Content covers three technologies so far; the remaining library is authored next.
+- Content covers eight of the 52 technologies in the taxonomy; the rest are authored in batches. Referenced-but-unwritten slugs appear as an authoring backlog in Settings.

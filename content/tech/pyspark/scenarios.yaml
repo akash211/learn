@@ -1,0 +1,223 @@
+- id: pyspark-scn-001
+  title: A 20-minute job now takes three hours at 5× the data
+  technologies: [pyspark, parquet, airflow]
+  difficulty: advanced
+  prompt: |
+    A nightly PySpark job that joins a 400 GB event table to a 2 GB customer table and writes a
+    daily aggregate used to finish in 20 minutes. Input volume grew about 5× and nothing in the
+    code changed, but the job now runs for three hours, occasionally misses its SLA, and the
+    Airflow task times out at 120 minutes. The cluster is the same size. You are asked to make it
+    fit the window again without doubling the cluster.
+  approach: |
+    Start from the Spark UI, not from configs. Identify which stage dominates, then read its
+    summary metrics.
+
+    1. **Stage-level diagnosis.** Shuffle read size per task, spill, task duration max vs median,
+       input bytes. That separates "too much data per task" from "too many tasks" from "skew".
+    2. **Check the join.** At 5× growth, 2 GB may now be well over the 10 MB broadcast threshold,
+       so a previously broadcast join became sort-merge — two shuffles instead of zero. Confirm in
+       the SQL tab, then either broadcast explicitly or accept the shuffle and tune it.
+    3. **Check partition sizing.** `shuffle_bytes / spark.sql.shuffle.partitions` with the default
+       200 gives multi-GB tasks: spill, GC, stragglers. Raise the count to hit ~150 MB per task and
+       let AQE coalesce.
+    4. **Check the aggregate.** If the group-by key is low cardinality, map-side pre-aggregation
+       should make the shuffle small; if it is not, say so and explain the cost.
+    5. **Check the source layout.** A growing file count changes planning time and read
+       parallelism even when bytes are unchanged.
+    6. **Re-measure.** Show which metric moved and by how much; if the fix was a broadcast, state
+       the driver and executor memory implications.
+
+    A strong answer names concrete configs (`autoBroadcastJoinThreshold`, `shuffle.partitions`,
+    `advisoryPartitionSizeInBytes`) and says what it would verify afterwards.
+  red_flags:
+    - Treating "add more executors" as the first and only answer, with no measurement.
+    - Turning off AQE because the plan looks different between runs.
+    - Raising `spark.executor.memory` to 64 GB per executor to "give it room".
+    - Claiming the join is fine because it ran in 20 minutes before, without checking the strategy.
+
+- id: pyspark-scn-002
+  title: Executors OOM on a groupBy over a hot key
+  technologies: [pyspark, delta-lake]
+  difficulty: advanced
+  prompt: |
+    A deduplication job reads a 1.5 TB events table, groups by `account_id`, and keeps the latest
+    row per event id. Executors die with `java.lang.OutOfMemoryError: Java heap space`, the stage
+    retries four times and the job fails. A 1% sample runs fine. The largest account has roughly
+    40% of all events; nulls account for another 15%. The cluster has 16 GB executors with 5 cores.
+  approach: |
+    Establish that it is skew, not a global memory shortage: the UI shows one or two partitions far
+    larger than the rest, and the failure happens in the reduce stage after the exchange.
+
+    1. **Remove null keys.** They never participate in a meaningful aggregation and they all hash to
+       one partition. Filter them or handle them separately — this alone often removes a third of
+       the problem.
+    2. **Separate the hot accounts.** Process the top-N `account_id` values in their own job,
+       keyed by `(account_id, hash(event_id) % N)` so the hot key is split deterministically, then
+       union with the main path. Deterministic splitting matters because a window function over a
+       randomly salted key would no longer see all rows for an event.
+    3. **Or salt.** Random salt plus replication of the dimension side, with the caveat that
+       `row_number()` over `(event_id, salt)` is not the same as over `event_id` — dedupe by event
+       id needs the full key in one partition, so salting on the wrong key changes the answer.
+    4. **Increase parallelism and reduce per-task state.** Raise `spark.sql.shuffle.partitions`,
+       disable `parallelismFirst` so AQE targets ~128 MB partitions.
+    5. **Check the aggregation shape.** `groupBy(event_id).agg(max_by(...))` is a bounded-state
+       aggregation and much cheaper than collecting all rows per key and sorting in a window; if
+       the code uses `collect_list` or a window over the full partition, rewrite it.
+
+    A strong answer distinguishes "split the hot key" from "split the rows and lose correctness".
+  red_flags:
+    - Salting a dedupe key without noticing it changes which rows are comparable.
+    - Raising executor memory to 64 GB and calling it fixed.
+    - Using `distinct()` for deduplication, which is another full shuffle and not equivalent.
+    - Blaming the cluster size without looking at partition-size distribution.
+
+- id: pyspark-scn-003
+  title: A table with 500,000 small files
+  technologies: [pyspark, parquet, delta-lake]
+  difficulty: intermediate
+  prompt: |
+    A landing table is written every 15 minutes from a streaming micro-batch, and after two years it
+    contains about 500,000 Parquet files averaging 2 MB. Queries that used to take seconds now take
+    minutes before any data is read, the metastore is slow, and some jobs fail with "too many open
+    files". You need to fix it without stopping the pipeline.
+  approach: |
+    Quantify first: file count, average size, total size, partition count, and how much of the query
+    time is planning versus execution. `spark.sql("DESCRIBE DETAIL table")` on Delta, or a listing
+    job on plain Parquet.
+
+    1. **Explain the cost.** Per-file overhead: footer read, `LIST`/`HEAD` request, 4 MB
+       `openCostInBytes` charged against partition sizing, task setup, metastore entry.
+    2. **Compact.** Delta `OPTIMIZE` (optionally `ZORDER BY` the filter column), Iceberg
+       `rewrite_data_files`, or a plain read-repartition-rewrite into a new prefix. Target
+       128 MB–1 GB files.
+    3. **Fix the writer.** A 15-minute micro-batch that produces files per partition per batch will
+       re-fragment immediately. Reduce write frequency or write to a staging area and compact on a
+       schedule; if the table is partitioned by hour, repartition before writing so each batch
+       produces a few files, not hundreds.
+    4. **Check partition cardinality.** If `partitionBy` includes a high-cardinality column, the
+       compaction will not help — the layout has to change.
+    5. **Schedule it.** Compaction and `VACUUM` (7-day default retention) as recurring jobs, with
+       monitoring on file count per table, not just table size.
+    6. **Verify.** Re-run a representative query and compare planning time and bytes read.
+
+    Mention that compaction rewrites files, so it needs retention and concurrency thought — and
+    that readers mid-rewrite need a table format with atomic commits.
+  red_flags:
+    - Calling `coalesce(1)` on the whole table to "make one file".
+    - Compacting once and declaring the problem solved.
+    - Deleting files directly to reduce the count.
+    - Increasing `spark.sql.files.maxPartitionBytes` and expecting the listing cost to disappear.
+
+- id: pyspark-scn-004
+  title: A UDF makes the job ten times slower than the SQL equivalent
+  technologies: [pyspark, sql]
+  difficulty: intermediate
+  prompt: |
+    A pipeline enriches events with a Python UDF that normalises a URL: parse it, lowercase the
+    host, strip tracking parameters, and map a few dozen domains to a category. The job processes
+    800 million rows and takes four hours. A colleague rewrote the same logic in SQL and it runs in
+    25 minutes. The team wants to know whether to keep Python, and how.
+  approach: |
+    First explain the cost, then decide the rewrite.
+
+    1. **Name the three costs.** Per-row pickle over the Python worker socket, loss of whole-stage
+       codegen (`BatchEvalPython` splits the pipeline), and loss of optimizer rules — a UDF is
+       opaque, so filters and column pruning stop at it.
+    2. **Try built-ins first.** URL parsing and normalisation is mostly `regexp_extract`,
+       `split`, `lower`, `trim`, `concat_ws`, plus a `CASE`/mapping table join for the domain
+       categories. A small dimension table joined (broadcast) is much cheaper than a Python dict in
+       a closure.
+    3. **If Python is required, vectorise.** `pandas_udf` over a `Series`, or `mapInPandas` if the
+       logic needs whole batches. Keep the batch size at the default 10,000 unless rows are wide.
+    4. **If it must be row-at-a-time**, enable `spark.sql.execution.pythonUDF.arrow.enabled` (3.5)
+       to remove the pickling, filter and select before the UDF so it sees fewer rows and columns,
+       and consider a Scala/Java UDF if the logic is stable.
+    5. **Measure.** Compare stage duration and rows processed, not just end-to-end wall time, and
+       state what the UDF costs as a fraction of the job.
+
+    The best answer usually keeps a small Python step if it is genuinely complex, and moves the
+    bulk of the logic into expressions.
+  red_flags:
+    - Saying "Python UDFs are slow, rewrite everything in Scala" without measuring.
+    - Switching to `pandas_udf` without vectorising the body — a row loop inside pandas is slower.
+    - Ignoring that the filter after the UDF is what makes it slow.
+    - Quoting speedups with no measurement plan.
+
+- id: pyspark-scn-005
+  title: Intermittent FetchFailedException on a spot-instance cluster
+  technologies: [pyspark, airflow]
+  difficulty: advanced
+  prompt: |
+    A nightly job succeeds about three nights a week and fails the rest with
+    `org.apache.spark.shuffle.FetchFailedException: Failed to connect to host ...`. The cluster runs
+    on spot/preemptible instances with dynamic allocation enabled. Re-running the same job often
+    succeeds. The team has been treating it as a data problem and re-running until it passes.
+  approach: |
+    Reframe it: `FetchFailedException` means a reducer could not read map output, which is a
+    lifecycle problem, not a query problem.
+
+    1. **Explain the mechanism.** Shuffle files live on executor local disk. When an executor is
+       preempted, released by dynamic allocation, or dies, its map output disappears and every
+       reducer that needs it fails.
+    2. **Check the shuffle service.** `spark.shuffle.service.enabled=true` (or shuffle tracking)
+       keeps shuffle files available after an executor is released. Without it, dynamic allocation
+       and spot instances are incompatible with long shuffle stages.
+    3. **Tune the allocation policy.** `executorIdleTimeout` too aggressive, or `minExecutors=0`,
+       releases executors that still hold needed shuffle data. Set a floor, and use
+       `spark.dynamicAllocation.shuffleTracking.enabled` where the service is unavailable.
+    4. **Reduce the exposure window.** Fewer, larger partitions mean fewer shuffle blocks and
+       shorter stages; a stage that finishes in ten minutes is less likely to lose an executor
+       mid-flight than one that runs for two hours.
+    5. **Use retries as a safety net, not a strategy.** `spark.task.maxFailures=4` and stage
+       retries exist; if they are firing nightly, the underlying churn is the bug. Consider
+       `spark.speculation` only with idempotent writes.
+    6. **Make the write idempotent** so a retry does not duplicate output, and alert on stage
+       retries rather than on job failure.
+
+    A strong answer also mentions that re-running until green hides an availability problem that
+    will get worse as the cluster grows.
+  red_flags:
+    - Rewriting the join to "fix" a fetch failure.
+    - Increasing `spark.shuffle.io.maxRetries` and calling it solved.
+    - Turning off dynamic allocation without understanding the cost.
+    - Saying "just use on-demand instances" with no discussion of the trade.
+
+- id: pyspark-scn-006
+  title: A backfill that must be re-runnable and correct
+  technologies: [pyspark, delta-lake, airflow]
+  difficulty: advanced
+  prompt: |
+    You need to reprocess 18 months of daily partitions after a logic fix in the aggregation. The
+    target is a partitioned Delta table read by dashboards. The first attempt used
+    `mode("overwrite")` on the whole table, which worked but rewrote everything and left the table
+    unreadable for 40 minutes. A second attempt with per-day writes produced duplicate rows for
+    days that had partially succeeded before the failure. Design the backfill.
+  approach: |
+    Start with the write semantics, then the execution plan.
+
+    1. **Dynamic partition overwrite.** Set
+       `spark.sql.sources.partitionOverwriteMode=dynamic` so each day's write replaces only that
+       day's partitions. Without it, every iteration deletes history.
+    2. **One day per job run, parameterised.** Airflow runs 548 tasks (or a chunked subset) with
+       `ds` as a parameter; each task is independently retryable and idempotent. Chunk to control
+       concurrency and cost.
+    3. **Deduplicate inside each day.** Even with overwrite, a source with duplicate event ids
+       produces duplicate aggregates. Dedupe with `row_number()` over the natural key ordered by
+       `updated_at`, or `dropDuplicates` on the key if any row is acceptable.
+    4. **Or MERGE.** If the target is a snapshot rather than date-partitioned, use `MERGE INTO` on
+       the key with a deduplicated source; it handles late-arriving corrections that a partition
+       overwrite cannot.
+    5. **Keep readers working.** Delta commits atomically, so readers see the old snapshot until
+       the commit lands. Avoid `VACUUM` with a short retention during the backfill — it can delete
+       files that time travel or concurrent readers still need.
+    6. **Verify.** Row counts per day against the source, no duplicate keys, and a checksum on a
+       sample of days. Run one day twice and prove the second run changes nothing.
+    7. **Monitor and cap.** Track per-day duration and failures; stop the backfill if the error rate
+       crosses a threshold rather than burning the cluster.
+
+    The key insight to state: idempotency is a property you test by re-running, not one you assert.
+  red_flags:
+    - Using `mode("overwrite")` without dynamic partition overwrite.
+    - Dropping and recreating the table, breaking readers and history.
+    - Relying on `distinct()` across the whole table to clean up duplicates after the fact.
+    - No verification step beyond "the job succeeded".

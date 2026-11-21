@@ -1,0 +1,86 @@
+concepts:
+  - title: Airflow is a state machine over intervals
+    detail: A run covers `data_interval_start` to `data_interval_end` and becomes eligible when the interval closes, not when it starts. Every task must be a pure function of that interval.
+  - title: Two planes, not one
+    detail: The metadata database is the control plane (who runs what, and what happened); the data lives in the warehouse, object storage or the source system. Tasks hand off URIs and manifests, not payloads.
+  - title: DAG serialization
+    detail: DAG files are imported by the scheduler or DAG processor and stored as JSON; the API server and UI read that, so user code never runs in the web tier.
+  - title: Logical date
+    detail: The identifier of a run, equal to the start of its interval. It was `execution_date` until 2.2; use `logical_date` and `data_interval_*`, and never `now()` inside task logic.
+  - title: catchup
+    detail: With `catchup=True` (default) enabling a DAG creates a run for every interval since `start_date`. With `False`, only the most recent closed interval, and missing history then has to be backfilled explicitly.
+  - title: Backfill versus clear
+    detail: A backfill creates DagRuns for intervals that have none; clearing resets existing TaskInstances so they re-run. Both reuse production code, and both re-execute side effects.
+  - title: Four concurrency limits
+    detail: Deployment-wide `parallelism`, per-DAG `max_active_tasks`, per-DAG `max_active_runs`, and pool slots for an arbitrary group. All four must allow a task before it runs.
+  - title: Scheduled is not queued
+    detail: A `scheduled` task is blocked by a scheduler-side limit (dependency, pool, concurrency); a `queued` task has cleared those and is waiting for an executor slot or a worker on its queue.
+  - title: Trigger rules
+    detail: The default is `all_success`. Branch joins need `none_failed_min_one_success`, cleanup needs `all_done`, early alerting `one_failed`; skipped states propagate and silently skip downstream.
+  - title: The task is the unit of retry and visibility
+    detail: Retries, timeouts, logs and state all operate per task instance. One 40-minute function gives you a single coarse state; many small tasks give you diagnosis and partial recovery.
+  - title: XCom is a control channel
+    detail: One row per dag, run, task, map_index and key in the metadata database, JSON-serialized by default. Manifests, paths and counts fit; DataFrames belong in object storage.
+  - title: Connection versus Variable
+    detail: Connections hold endpoints and credentials, encrypted with the Fernet key; Variables hold plaintext configuration. Both come from the database, so neither belongs in a DAG's module body.
+  - title: Slots and the executor
+    detail: Executors place tasks and account for slots. LocalExecutor forks, CeleryExecutor publishes to a broker, KubernetesExecutor creates a pod per task with 20 to 60 seconds of cold start.
+  - title: Deferral moves the wait off the worker
+    detail: A deferrable operator raises `TaskDeferred`, releases its slot, and a trigger coroutine in the triggerer resumes it on an event. Slot-free waiting, at the cost of a new component to keep alive.
+  - title: Idempotency is not optional
+    detail: At-least-once execution means a task can run twice for one interval. Partition-scoped delete-then-insert, `MERGE` on a deduplicated key, or an atomic swap; derive every key from the interval.
+  - title: Assets invert the schedule
+    detail: A producer declares `outlets=[asset]`, a consumer `schedule=[asset]`, and the run is created by data arriving rather than by the clock. `AssetAll`/`AssetAny` and aliases cover AND/OR and dynamic names.
+traps:
+  - Reading a task stuck in `queued` as a worker problem. It is usually a pool, a queue with no consumer, or `parallelism`; check all of them before scaling anything.
+  - Using `catchup=False` to clear a backlog. It stops new runs being created for old intervals, so the missing partitions are never built. Backfill them explicitly.
+  - Expecting `catchup=True` to run a task at the start of its interval. A run for 1 March 02:00 becomes eligible at 02:00 on 2 March, when the interval closes.
+  - Clearing a task that already succeeded and assuming it is harmless. It re-executes the writes, which double-counts anything non-idempotent.
+  - Calling `Variable.get()` at DAG import time. It is a database query on every parse cycle of every file, and it makes the DAG unparseable when the database is briefly down.
+  - Relying on `sla=` as the alerting mechanism. SLAs are checked only when the scheduler sweep reaches them, and Airflow 3 removed the feature; deadline alerts (3.1+) or a "no successful run" check are the replacements.
+advanced:
+  - Multiple schedulers coordinate through row locks in the metadata database, which gives failover rather than throughput, and requires PostgreSQL or MySQL, never SQLite.
+  - A task exceeding `execution_timeout` is failed, so the timeout consumes a retry. Size it to a realistic p95 and keep it below `dagrun_timeout`, or a wedged run holds `max_active_runs=1` forever.
+  - Setting `depends_on_past=True` serialises runs through the previous run's task state; one failed day then blocks every later run of that task, which is a correctness guarantee and an availability risk.
+  - Airflow 3 pins each DagRun to the `DagVersion` that created it, so a deploy mid-run no longer changes the graph underneath a running pipeline, though renamed `task_id`s still orphan history.
+  - The `dag.test()` helper runs the graph in-process against a real metadata database and real connections; it tests templating, signatures and hook calls, not concurrency, retries or deferral.
+  - Metadata database growth is driven by `task_instance`, `dag_run`, `log` and `xcom`. Retention (`airflow db clean`) and payload discipline are capacity planning, not housekeeping.
+comparisons:
+  - a: Backfill
+    b: Clear
+    difference: Backfill creates DagRuns for intervals that have none; clear resets existing TaskInstances (optionally downstream) so they re-run. Backfill adds history, clear repeats it.
+  - a: catchup=True
+    b: catchup=False
+    difference: True materialises every interval since `start_date` when the DAG is enabled; False only the latest closed interval. Neither changes what a run means, only how many appear at once.
+  - a: Operator
+    b: TaskFlow @task
+    difference: An operator is a configured class wrapping a hook, with templated fields and provider maintenance; a `@task` is a function whose return value and arguments become XCom dependencies.
+  - a: CeleryExecutor
+    b: KubernetesExecutor
+    difference: Celery has near-zero per-task overhead but idle workers, a broker and no isolation; Kubernetes gives per-task resources and isolation at 20 to 60 seconds of cold start per task.
+  - a: mode="reschedule"
+    b: Deferrable
+    difference: A rescheduling sensor releases its slot between pokes but is woken by the scheduler; a deferred task leaves the worker entirely and is resumed by a triggerer within seconds.
+  - a: Asset schedule
+    b: TriggerDagRunOperator
+    difference: An asset schedule is a decoupled signal fired when a producer succeeds, with no payload and no explicit lineage; a trigger operator is a task in the graph that passes `conf` and shows the dependency.
+  - a: XCom
+    b: Object storage pointer
+    difference: XCom is a small JSON row in the metadata database for control values; a pointer hands off kilobytes by reference and keeps the scheduler's database out of the data path.
+commands:
+  - label: Run a whole DAG in-process for one interval
+    code: airflow dags test orders_daily 2025-03-01
+  - label: Run a single task without a DagRun record
+    code: airflow tasks test orders_daily extract_orders 2025-03-01
+  - label: Backfill a date range, recreating runs
+    code: airflow dags backfill orders_daily -s 2024-01-01 -e 2024-06-30 --reset-dagruns
+  - label: Inspect every task state for one run
+    code: airflow tasks states-for-dag-run orders_daily manual__2025-03-01T02:00:00+00:00
+  - label: Find DAGs that failed to import
+    code: airflow dags list-import-errors
+  - label: Set pool capacity for a downstream system
+    code: airflow pools set warehouse_load 8 "Warehouse concurrent load limit"
+  - label: Check retention before deleting history
+    code: airflow db clean --clean-before-timestamp 2024-09-01 --tables task_instance,dag_run,log,xcom --dry-run
+  - label: Lint airflow.cfg for removed settings
+    code: airflow config lint

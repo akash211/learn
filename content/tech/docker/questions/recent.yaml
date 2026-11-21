@@ -1,0 +1,274 @@
+- id: docker-recent-001
+  topic: rootless and daemonless
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What does rootless Docker change, and when would you choose a daemonless builder instead?
+  answer: |
+    Rootless Docker runs the daemon itself as an unprivileged user, using `rootlesskit` to create
+    a user namespace and `slirp4netns` or pasta for networking. Container root maps to your UID on
+    the host, so a compromised daemon or a container escape lands as a normal user rather than
+    host root.
+
+    What changes: no `--privileged`, no arbitrary bind mounts outside your home, ports below 1024
+    need `net.ipv4.ip_unprivileged_port_start`, cgroup limits require systemd delegation, and the
+    storage driver is usually `fuse-overlayfs` rather than native `overlay2`. Builds and I/O are
+    slower, which is why it is the default on developer machines and CI runners rather than on
+    high-throughput production hosts.
+
+    A daemonless builder (Buildah, Kaniko, or BuildKit in `oci` mode) removes the long-running
+    privileged process entirely: each build is a short-lived user process. That suits CI where
+    giving every job access to a Docker socket is equivalent to giving it root on the runner.
+
+    The interview point is the trade: rootless reduces blast radius and costs performance and
+    compatibility. Daemonless is about not running a root service at all.
+  tags: [rootless, podman, buildah, userns]
+
+- id: docker-recent-002
+  topic: builds and multi-arch
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How do you produce and verify a multi-architecture image in CI?
+  answer: |
+    Build with buildx against the `docker-container` driver, which supports multiple platforms,
+    cache export and attestations — the default `docker` driver does not.
+
+    ```bash
+    docker buildx create --name ci --driver docker-container --use --bootstrap
+    docker buildx build --platform linux/amd64,linux/arm64 \
+      --cache-from type=gha --cache-to type=gha,mode=max \
+      --provenance=mode=max --sbom=true \
+      --push -t registry/app:1.4.2 .
+    ```
+
+    The result is an OCI image index referencing one manifest per platform. Verify with
+    `docker buildx imagetools inspect registry/app:1.4.2`, which prints each platform digest —
+    that is the check for "no matching manifest for linux/arm64".
+
+    Cross-building needs either native arm64 runners or QEMU registered via
+    `tonistiigi/binfmt`. Emulation is correct but slow: compilation-heavy builds can go from
+    minutes to tens of minutes, so a native runner per architecture usually pays for itself.
+
+    Two traps: `--load` only works single-platform and drops attestations, and a build that pushes
+    with `--provenance=false` to satisfy an old registry silently loses the audit trail.
+  tags: [buildx, multi-arch, ci, attestations]
+
+- id: docker-recent-003
+  topic: compose
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: What changed from docker-compose v1 to Compose v2, and what should a new project rely on?
+  answer: |
+    Compose v2 is a Go CLI plugin invoked as `docker compose`, replacing the Python
+    `docker-compose` binary that reached end of life in 2023. It implements the Compose
+    Specification, so the schema is no longer tied to Docker Engine versions and the top-level
+    `version:` key is obsolete — it produces a warning, not behaviour.
+
+    What a new project should use:
+
+    - `compose.yaml` / `compose.override.yaml` naming, with `docker compose` (space, not hyphen).
+    - `name:` for the project instead of relying on the directory name.
+    - `depends_on` long form with `condition: service_healthy`, backed by real healthchecks.
+    - `profiles:` for optional services such as admin UIs, so `up` stays small.
+    - `develop.watch` with `action: sync` instead of a bind mount for hot reload.
+    - `docker compose config` in CI to validate and render the merged file.
+    - `docker compose up --wait` in scripts, which blocks until healthchecks pass.
+
+    v2 also adds `include:` for composing fragments across repositories, and honours
+    `deploy.resources.limits` locally without Swarm. The failure mode to avoid is a repository that
+    still documents `docker-compose` commands nobody's machine has installed.
+  tags: [compose, compose-v2, dev-experience]
+
+- id: docker-recent-004
+  topic: supply chain
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What does a defensible container supply chain produce for every image?
+  answer: |
+    Four artefacts tied to one digest, produced by the pipeline rather than assembled afterwards:
+
+    1. **A content digest** pinned in the deployment manifest, with the image built once and
+       promoted between environments by reference.
+    2. **An SBOM** in SPDX or CycloneDX, listing OS packages and language dependencies, so a new
+       CVE can be answered by querying an inventory instead of rescanning images.
+    3. **Provenance** — source repository, commit, builder identity, build parameters —
+       attached as an attestation (`--provenance=mode=max`). This is the evidence that the digest
+       came from your pipeline and your commit.
+    4. **A signature** over the digest, verified at admission. Keyless Sigstore signing binds the
+       image to a CI OIDC identity, so policy can require "signed by this workflow in this repo"
+       rather than "signed by some key".
+
+    The interview distinction is between *evidence* and *enforcement*. SBOMs and provenance are
+    evidence; nothing about them prevents a bad image from running. Enforcement is the admission
+    policy that rejects unsigned images and the deploy tooling that refuses a mutable tag. Teams
+    that produce beautiful attestations and never verify them have documentation, not a control.
+  tags: [sbom, provenance, signing, slsa]
+
+- id: docker-recent-005
+  topic: security
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: "Walk me through hardening a container image and its runtime. What do you change first?"
+  answer: |
+    Start with the things that remove whole categories of risk, then the per-workload tuning.
+
+    **Image:** a minimal base (distroless or `-slim` rather than a full OS), multi-stage build so
+    no compiler or package manager ships, a numeric non-root `USER`, no secrets in layers, a pinned
+    base digest, and a scan plus signature in the pipeline.
+
+    **Runtime:** `--cap-drop ALL` with capabilities added back individually,
+    `--security-opt no-new-privileges`, the default seccomp profile left on, `--read-only` with a
+    `noexec,nosuid` tmpfs for `/tmp`, `--pids-limit`, memory and CPU limits, and no Docker socket
+    mounted.
+
+    ```bash
+    docker run -d --user 10001:10001 --cap-drop ALL \
+      --security-opt no-new-privileges --read-only \
+      --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+      --pids-limit 200 --memory 1g --cpus 1.5 app:1.4
+    ```
+
+    **Host:** patched kernel and container runtime, user-namespace remapping or rootless where
+    possible, and admission policy that rejects privileged pods.
+
+    The senior framing: these reduce likelihood and blast radius, but they do not create a
+    boundary where the kernel is shared. For untrusted workloads the boundary is a VM.
+  tags: [hardening, capabilities, seccomp, non-root]
+
+- id: docker-recent-006
+  topic: supply chain
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How do you verify an image before it is deployed, and what breaks in practice?
+  answer: |
+    Verification is a policy decision expressed as code, evaluated on the digest:
+
+    ```bash
+    cosign verify registry.example.com/team/app@sha256:9f2c… \
+      --certificate-identity-regexp 'https://github.com/acme/app/.github/workflows/release.yml@.*' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    ```
+
+    The identity constraints are the substance. "Signed by anyone" is worthless if any developer
+    can mint a signature; pinning the workflow and issuer is what makes the check meaningful.
+    Enforcement belongs at admission (Kyverno, Sigstore policy-controller, the platform's policy
+    engine) so an unsigned image cannot run even if someone pushes one, plus a CI gate so failures
+    surface before deployment.
+
+    What breaks: keyless verification needs network access to the transparency log, which means
+    air-gapped clusters need a mirror or key-based signing; admission policies without an audit
+    phase block production on rollout day; and re-tagging an image after signing invalidates the
+    digest the signature covers. The last one is why promotion must move the reference, never
+    rebuild or re-tag.
+  tags: [cosign, admission-control, verification]
+
+- id: docker-recent-007
+  topic: runtimes
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: Kubernetes removed dockershim. Does Docker still matter, and what changed operationally?
+  answer: |
+    Kubernetes 1.24 removed the built-in dockershim, so kubelet talks to a CRI runtime —
+    containerd or CRI-O — instead of to `dockerd`. Docker-produced images still run unchanged,
+    because they are OCI images and containerd consumes the same format. What disappeared is the
+    daemon as the node's runtime, not the image format or the Dockerfile.
+
+    Operationally:
+
+    - Node debugging moves from `docker ps` to `crictl ps` (or `nerdctl` for a Docker-like CLI).
+    - Logs come from the CRI log path or `kubectl logs`, not `docker logs`.
+    - Images are pulled by containerd, so registry credentials live in the node's CRI
+      configuration or an image pull secret, and `docker login` on the node does nothing.
+    - Container runtime settings (cgroup driver, seccomp default, registry mirrors) are configured
+      in containerd's `config.toml`, not `daemon.json`.
+
+    So Docker remains the build-and-run tool for development and single hosts, and the Dockerfile
+    remains the standard build format. What is gone is the assumption that the cluster's runtime is
+    Docker — a distinction that trips up anyone whose only debugging playbook is `docker` commands.
+  tags: [kubernetes, containerd, cri, dockershim]
+
+- id: docker-recent-008
+  topic: production
+  difficulty: intermediate
+  period: "2024-2026"
+  type: representative
+  question: Distroless images reduce CVE counts. What do they cost you operationally?
+  answer: |
+    They remove the shell, package manager and most utilities, which removes post-exploitation
+    tooling and a large share of base-image findings. The bill arrives at 2 a.m.:
+
+    - `docker exec -it app sh` fails, so the usual debugging reflex is unavailable.
+    - Healthchecks cannot use `curl` or `wget`; the probe must be the application's own subcommand
+      or a statically linked binary you copy in.
+    - `docker run --entrypoint sh` fails too, so a container that will not start gives you an exit
+      code and nothing else.
+    - Language-specific distroless images carry the distribution's interpreter version, so a
+      virtualenv built on `python:3.12` will not work inside one carrying 3.11.
+
+    The mitigation is preparation, not avoidance: keep a debug image variant in the registry, learn
+    `docker run --rm -it --pid=container:api --network=container:api busybox` plus `/proc/1/root`,
+    and use `nsenter` from the host. Teams that adopt distroless without those habits tend to
+    revert to a full base image after the first incident — which is a worse outcome than never
+    having tried.
+  tags: [distroless, debugging, operations]
+
+- id: docker-recent-009
+  topic: security
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: How do you handle base-image CVE findings at scale without drowning in alerts?
+  answer: |
+    Treat it as a pipeline problem with an inventory, not a per-alert problem.
+
+    **Reduce the surface first.** Most findings come from OS packages pulled in by a full base
+    image: a distroless or `-slim` base routinely removes half of them. That is a one-time change
+    with permanent effect.
+
+    **Rebuild on a schedule, not on demand.** A weekly automated rebuild of every service on the
+    newest base patch, opening a PR, means most CVEs are fixed before anyone reads the alert. A
+    manual quarterly pass is not a process.
+
+    **Scan what is deployed, not just what is built.** Re-scan the digests in the registry weekly;
+    new CVEs are published against images that were clean when built.
+
+    **Triage on reachability and exposure.** A critical in a package the process never loads, on a
+    port nothing can reach, is not the same as a medium in an HTTP parser. Express that
+    judgement in a VEX statement or a time-boxed exception with an owner and an expiry date.
+
+    **Measure the trend** — findings per image, mean age of an open finding. A team with 400 open
+    criticals is not triaging; a team with 6 and a rebuild cadence is.
+  tags: [cve, scanning, base-images, triage]
+
+- id: docker-recent-010
+  topic: runtimes
+  difficulty: advanced
+  period: "2024-2026"
+  type: representative
+  question: What changed with cgroup v2, and why do containers behave differently on a newer host?
+  answer: |
+    cgroup v2 replaces the per-controller v1 hierarchies with a single unified tree. The
+    behavioural differences that surface in container platforms:
+
+    - **One file per limit, different names.** `memory.max` replaces `memory.limit_in_bytes`,
+      `cpu.max` ("quota period") replaces `cpu.cfs_quota_us`/`cpu.cfs_period_us`, and
+      `memory.memsw.*` is gone — swap is controlled by `memory.swap.max`. Tooling that reads v1
+      paths silently reports nothing.
+    - **The cgroup namespace is private by default**, so `/proc/self/cgroup` inside a container no
+      longer shows the host path. Python libraries that parsed `docker/<id>` from that file to find
+      their own limits break and under-report memory.
+    - **Pressure Stall Information** (`cpu.pressure`, `memory.pressure`) becomes available, which
+      is a better saturation signal than utilisation: it measures time lost waiting for a resource.
+    - **The systemd cgroup driver is effectively required** — kubelet and Docker both default to it
+      on systemd hosts, and mixing drivers produces duplicate cgroups and limits that do not apply.
+
+    The interview answer connects the mechanism to symptoms: a Java or Python process that suddenly
+    OOMs after a node upgrade is often reading host memory because its cgroup detection still
+    expects v1.
+  tags: [cgroup-v2, psi, memory, kubernetes]

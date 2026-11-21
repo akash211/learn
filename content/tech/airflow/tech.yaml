@@ -1,0 +1,142 @@
+slug: airflow
+title: Apache Airflow
+category: data-engineering
+summary: The batch orchestrator that turns a schedule, a graph of tasks and a metadata database into repeatable, observable data pipelines.
+level: core
+relations:
+  - to: python
+    type: foundation
+    note: DAGs are Python files, operators and hooks are Python classes, and every TaskFlow pipeline is a decorated function — Airflow is a framework over the language, not a separate DSL.
+  - to: docker
+    type: uses
+    note: Production deployments run scheduler, API server, workers and triggerer as containers from the official image, and the KubernetesExecutor launches one pod per task from a pod template.
+  - to: pyspark
+    type: complements
+    note: Spark jobs are usually submitted as a task — a `SparkSubmitOperator` or a Kubernetes pod — while Airflow owns the schedule, dependencies and retries around them.
+  - to: dbt
+    type: complements
+    note: Airflow schedules and monitors dbt runs (via Cosmos or `dbt` commands) while dbt owns the SQL modelling inside each run; they divide orchestration from transformation.
+intro:
+  what: |
+    Apache Airflow is a platform for authoring, scheduling and monitoring workflows as code. A
+    workflow is a **DAG** — a directed acyclic graph of tasks with an explicit schedule — written
+    in Python. Airflow does not process the data itself: it decides what should run, in which
+    order, with which retries, and records what happened in a metadata database that the UI and
+    API read from.
+
+    The mental model that makes everything else follow: Airflow is a *state machine over time
+    intervals*. A run covers a period (`data_interval_start` to `data_interval_end`), a task is
+    the unit of retry and observability, and the guarantee is at-least-once execution. Every
+    design decision in a good pipeline — idempotent writes, partition-scoped SQL, small XComs —
+    comes from taking those three facts seriously.
+
+    This module covers Airflow 2.x behaviour and flags where 3.x differs: the split into
+    `api-server`, `scheduler`, `dag-processor` and `triggerer`, datasets renamed to assets, the
+    `airflow.sdk` task SDK, and the removal of `schedule_interval`, `execution_date` and SubDAGs.
+  why: |
+    Data pipelines fail in ways code does not: a source arrives late, a warehouse rejects the
+    ninth concurrent load, a task succeeds but writes half a partition. Cron plus a shell script
+    gives you none of the answers — no dependency graph, no retry policy, no run history, no way
+    to re-run one day without editing a script.
+
+    Airflow's value is the boring infrastructure around the work: a scheduler that understands
+    intervals and catchup, per-task retries and timeouts, a UI that shows exactly which task in
+    which run failed and why, backfills that reuse the same code path as production, and an
+    extension model (operators, hooks, providers) that already speaks to hundreds of systems.
+    It also makes the pipeline reviewable: the graph is a Python file in git, so a dependency
+    change is a pull request rather than a cron edit on a server.
+  problems:
+    - Expressing dependencies between heterogeneous jobs (SQL, Spark, Python, a vendor API) in one place.
+    - Scheduling by data interval with catchup and backfill, instead of ad-hoc cron guessing.
+    - Retrying the right failures automatically and surfacing the wrong ones immediately.
+    - Reconstructing what ran, when, with which parameters, after an incident.
+    - Re-running history safely without duplicating data.
+    - Giving non-authors visibility into pipeline health without giving them shell access.
+  where_used:
+    - Batch ELT/ETL pipelines into warehouses and lakehouses (Snowflake, BigQuery, Databricks, Iceberg).
+    - ML feature and training pipelines — scheduled Spark jobs, model refresh, batch scoring.
+    - Reverse ETL and reporting refreshes that must land before a business deadline.
+    - Operational jobs: data quality checks, retention, reconciliation, cost reports.
+    - Regulated environments where an auditable run history is a requirement, not a feature.
+  ecosystem: |
+    Airflow sits in the orchestration layer and deliberately delegates downwards. Storage and
+    compute live in the warehouse or lakehouse; transformation is usually dbt or Spark; ingestion
+    is Fivetran/Airbyte/Kafka or a custom extractor; Airflow sequences them, enforces SLAs and
+    owns the run history. Providers (`apache-airflow-providers-*`) supply the operators and hooks
+    for each system and version independently of core, which is why dependency pinning matters.
+
+    Neighbours worth knowing: **Dagster** and **Prefect** are the same job with a data-asset-first
+    model and a Python-native developer experience; **dbt Cloud** schedules dbt alone; **Argo
+    Workflows** orchestrates containers on Kubernetes without a metadata database of its own;
+    **Temporal** is durable execution for services rather than batch pipelines. Airflow's
+    advantage is breadth of integrations and operational familiarity; its cost is a heavyweight
+    scheduler, a database that must be cared for, and a task-granularity model that punishes
+    very large graphs.
+  alternatives:
+    - name: Dagster
+      note: Asset-centric orchestration with typed IO managers and a stronger local dev story; smaller integration catalogue.
+    - name: Prefect
+      note: Dynamic, Python-first flows with less scheduling ceremony; weaker built-in backfill and interval semantics than Airflow.
+    - name: Argo Workflows
+      note: Container-native DAGs on Kubernetes with no separate metadata database; no Python authoring model or provider ecosystem.
+    - name: dbt Cloud scheduler
+      note: Sufficient when everything is SQL inside dbt; cannot sequence non-dbt work or heterogeneous systems.
+    - name: Cron plus scripts
+      note: Zero infrastructure, no dependency graph, no retries, no history — fine for one job, untenable at ten.
+  related: [python, docker, pyspark, dbt]
+chapters:
+  - id: architecture
+    title: Architecture — Scheduler, Executor, Metadata Database
+    file: chapters/01-architecture.md
+    minutes: 14
+    level: core
+  - id: dags-tasks-scheduling
+    title: DAGs, Tasks and Scheduling Semantics
+    file: chapters/02-dags-tasks-scheduling.md
+    minutes: 16
+    level: core
+  - id: operators-taskflow-deferrable
+    title: Operators, TaskFlow and Deferrable Operators
+    file: chapters/03-operators-taskflow-deferrable.md
+    minutes: 15
+    level: core
+  - id: xcom
+    title: XCom — Passing Data Between Tasks
+    file: chapters/04-xcom.md
+    minutes: 12
+    level: core
+  - id: connections-hooks-secrets
+    title: Connections, Hooks, Secrets and Variables
+    file: chapters/05-connections-hooks-secrets.md
+    minutes: 13
+    level: core
+  - id: executors-scaling
+    title: Executors and Worker Scaling
+    file: chapters/06-executors-scaling.md
+    minutes: 15
+    level: advanced
+  - id: retries-slas-alerting-idempotency
+    title: Retries, SLAs, Alerting and Idempotency
+    file: chapters/07-retries-slas-alerting-idempotency.md
+    minutes: 15
+    level: advanced
+  - id: dynamic-dags-mapping-assets
+    title: Dynamic DAGs, Task Mapping and Asset Schedules
+    file: chapters/08-dynamic-dags-mapping-assets.md
+    minutes: 16
+    level: advanced
+  - id: testing-ci
+    title: Testing DAGs Locally and in CI
+    file: chapters/09-testing-ci.md
+    minutes: 13
+    level: core
+  - id: observability-failures-upgrades
+    title: Observability, Production Failures and Upgrades
+    file: chapters/10-observability-failures-upgrades.md
+    minutes: 16
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

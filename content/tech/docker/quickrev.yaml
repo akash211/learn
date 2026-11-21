@@ -1,0 +1,90 @@
+concepts:
+  - title: An image is layers plus config
+    detail: "The manifest lists content-addressed layer digests and one config digest. The config holds env, entrypoint, user and workdir; the layers hold the filesystem."
+  - title: Content addressing
+    detail: "Layers, configs and manifests are named by the SHA-256 of their own bytes, so identical content is stored and pulled once and a digest can never point at different content."
+  - title: Copy-on-write and whiteouts
+    detail: "A container's writable layer is an overlay upperdir. Writing a file copies it up first; deleting one records a whiteout, so the bytes below remain in the image."
+  - title: Only RUN, COPY and ADD make layers
+    detail: "ENV, LABEL, EXPOSE, USER, WORKDIR, ARG, CMD and ENTRYPOINT only rewrite the config JSON, which is why line count and layer count are unrelated."
+  - title: BuildKit cache keys
+    detail: "Parent layer plus instruction plus inputs. `COPY` hashes file contents; `RUN` hashes only the command string, so it cannot notice a changed file it reads."
+  - title: Cache mounts
+    detail: "`RUN --mount=type=cache` keeps data outside the layer graph: survives rebuilds, is never pushed, and is not cleared by `--no-cache`."
+  - title: Multi-stage builds
+    detail: "Each `FROM` is a stage; `COPY --from=` moves artefacts into the final stage, keeping compilers, headers and test suites out of the shipped image."
+  - title: Namespaces
+    detail: "Mount, PID, net, UTS, IPC, user, cgroup and time namespaces decide what a process can see. The container's entrypoint is PID 1 in its own PID namespace."
+  - title: cgroups v2
+    detail: "One unified hierarchy: `memory.max` for the hard cap, `cpu.max` for quota per period, `pids.max`, `io.max`. Limits are accounting, not isolation."
+  - title: PID 1 semantics
+    detail: "The kernel ignores default-disposition signals for PID 1, and PID 1 must reap orphans. A shell entrypoint without `exec` swallows `SIGTERM` and leaks zombies."
+  - title: Embedded DNS
+    detail: "A user-defined network runs a resolver at `127.0.0.11` answering for container names and aliases. The default `bridge` network has none."
+  - title: Volume versus bind mount
+    detail: "Named volumes are Docker-managed under `/var/lib/docker/volumes`; bind mounts are host paths with host ownership. State belongs in a volume, source code in a bind."
+  - title: Compose readiness
+    detail: "`depends_on` alone only orders startup. `condition: service_healthy` waits for the dependency's healthcheck, which is the only form that prevents an early connection refusal."
+  - title: Healthchecks observe, they do not act
+    detail: "Docker records health status; nothing restarts an unhealthy container. Swarm, Kubernetes and `depends_on` consume the status, plain `docker run` does not."
+  - title: Restart policy backoff
+    detail: "Consecutive failures double the delay from about 100 ms. `unless-stopped` survives a daemon restart but respects a deliberate `docker stop`."
+  - title: Capabilities and seccomp
+    detail: "Docker grants fourteen capabilities by default and applies a seccomp profile blocking about 44 privileged syscalls. `--privileged` removes both, plus every device restriction."
+
+traps:
+  - "Expecting a failing healthcheck to restart the container. Docker only records the status; replacement needs an orchestrator."
+  - "Believing `EXPOSE` publishes a port or restricts access. It is metadata; only `-p` publishes, and only the host firewall restricts."
+  - "Thinking `RUN rm -rf` in a later layer shrinks the image. It adds a whiteout and the bytes stay in the earlier layer."
+  - "Assuming Alpine is always smaller. musl forces source builds for many wheels, and the build dependencies often outweigh the base-image saving."
+  - "Reaching for `--privileged` when a container hits a permission error. It grants all capabilities, all devices, and disables seccomp and AppArmor."
+  - "Treating `depends_on` as readiness. Without `condition: service_healthy` the application starts before the database accepts connections."
+
+advanced:
+  - "`userns-remap` maps container UID 0 to an unprivileged host UID from a subordinate range; bind mounts then appear as nobody and `--privileged` stops working."
+  - "Rootless Docker runs the daemon as a user via rootlesskit: no privileged containers, ports below 1024 need a sysctl, cgroup limits need systemd delegation, and storage is usually fuse-overlayfs."
+  - "`COPY --link` puts files in a layer independent of its parent, so the image can be rebased onto a newer base without rebuilding everything above it."
+  - "A CPU quota is enforced per 100 ms period. Sustained `nr_throttled` at modest average utilisation is the usual explanation for p99 latency spikes on a busy node."
+  - "With the classic builder, a `RUN` that writes to a path declared by `VOLUME` has its changes discarded; BuildKit preserves them, so the two builders produce different images."
+  - "Mounting `/var/run/docker.sock` into a container grants host root: the container can start a privileged container and mount the host filesystem."
+
+comparisons:
+  - a: image
+    b: container
+    difference: "Immutable artefact versus a running process with a writable layer and its own namespaces; deleting a container never changes the image."
+  - a: virtual machine
+    b: container
+    difference: "Own guest kernel and a hypervisor boundary versus a process on the host kernel; seconds and GB versus milliseconds and MB, but a shared kernel."
+  - a: named volume
+    b: bind mount
+    difference: "Docker-managed and portable versus a host path with host ownership; volumes for state, binds for source code and injected config."
+  - a: CMD
+    b: ENTRYPOINT
+    difference: "CMD is the default command or default arguments and is replaced by `docker run` arguments; ENTRYPOINT is the fixed executable."
+  - a: tag
+    b: digest
+    difference: "Mutable pointer that can be re-pushed versus a content hash that cannot change; deploy by digest, read by tag."
+  - a: COPY
+    b: ADD
+    difference: "COPY only copies from the context; ADD also extracts local tarballs and fetches URLs without checksum verification."
+  - a: alpine
+    b: distroless
+    difference: "Alpine keeps a shell and package manager on musl; distroless removes both on glibc, shrinking the CVE surface and the debugging options."
+
+commands:
+  - label: Build with a registry-backed cache
+    code: docker buildx build --cache-from type=registry,ref=ghcr.io/acme/app:cache --cache-to type=registry,ref=ghcr.io/acme/app:cache,mode=max --push -t ghcr.io/acme/app:1.4.2 .
+  - label: Build and push two architectures
+    code: docker buildx build --platform linux/amd64,linux/arm64 --provenance=mode=max --sbom=true --push -t registry/app:1.4.2 .
+  - label: Confirm why a container died
+    code: docker inspect --format '{{.State.ExitCode}} oom={{.State.OOMKilled}} restarts={{.RestartCount}}' api
+  - label: Follow logs from the last ten minutes
+    code: docker logs -f --since 10m --timestamps --tail 200 api
+  - label: Run with the hardened baseline
+    code: docker run -d --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --pids-limit 200 --memory 1g --cpus 1.5 app:1.4
+  - label: See where disk went
+    code: docker system df -v
+  - label: Join a distroless container's namespaces
+    code: docker run --rm -it --pid=container:api --network=container:api busybox sh
+  - label: Clear build cache older than a week
+    code: docker builder prune --filter until=168h

@@ -1,0 +1,260 @@
+- id: pg-recent-001
+  topic: backup and recovery
+  difficulty: advanced
+  question: PostgreSQL 17 added incremental base backups. How does that change a backup strategy for a multi-terabyte database?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Before 17, every physical backup was a full copy: `pg_basebackup` or a tool like pgBackRest had
+    to read the entire data directory, so a nightly full backup of 3 TB was a 3 TB read and a 3 TB
+    write, every night, whether or not anything changed.
+
+    `pg_basebackup --incremental=/backups/inc1 --incremental-base=...` records only blocks changed
+    since a previous backup, using the WAL summariser to know which blocks were modified.
+    `pg_combinebackup` then assembles a restorable full backup from the chain. The chain must be
+    complete and in order — an incremental backup is not independently restorable, and deleting a
+    middle link invalidates everything after it.
+
+    The strategy shift: one weekly full plus daily incrementals, with retention defined over the
+    chain rather than per file, and a periodic restore test that exercises the combination step. The
+    failure mode to plan for is a missing or corrupt link discovered during a restore, which is why
+    the combine step belongs in the drill, not just the runbook.
+  tags: [pg17, backup, incremental, pitr]
+
+- id: pg-recent-002
+  topic: vector search
+  difficulty: advanced
+  question: How do you choose between HNSW and IVFFlat in pgvector, and why do filtered vector queries return too few rows?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    HNSW builds a multi-layer graph; queries walk it greedily. It gives better recall at a given
+    latency, needs no training data, and is the default choice for most workloads. Costs: build time
+    and memory scale with rows × `m` (default 16), builds are slow (parallel builds since 0.6), and
+    inserts are more expensive than appends. `hnsw.ef_search` (default 40) trades recall for latency
+    at query time.
+
+    IVFFlat clusters vectors into `lists` cells and probes `ivfflat.probes` of them. It builds fast
+    and needs less memory, but recall depends on the data being present when the index is built and
+    on `lists` matching the row count — a bad `lists` value silently costs recall.
+
+    The filtered-query problem is structural: both indexes return the top *k* candidates globally,
+    then the `WHERE` clause removes most of them, so `LIMIT 10` can come back with two rows. pgvector
+    0.8 added iterative scans (`hnsw.iterative_scan = relaxed_order`, bounded by
+    `hnsw.max_scan_tuples`) which keep scanning until enough rows pass the filter. The alternative is
+    partitioning by the filter key and searching within a partition.
+  tags: [pgvector, hnsw, ivfflat, filtered-search]
+
+- id: pg-recent-003
+  topic: logical replication
+  difficulty: advanced
+  question: What does logical replication need to be a credible feed for an analytics warehouse?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Four things have to be true: the rows must arrive promptly, the schema must be managed
+    separately, the publisher must not pay more than necessary, and the pipeline must survive a
+    failover.
+
+    Row filters and column lists (15+) let you publish the subset the warehouse needs — `FOR TABLE
+    orders (order_id, status, total) WHERE (region = 'eu')` — instead of the whole table. That cuts
+    subscriber storage and apply work, though it does not reduce WAL generated on the publisher.
+
+    Parallel apply (16+) with `max_parallel_apply_workers_per_subscription` matters when a
+    subscriber is catching up after an initial copy; a single apply worker is the usual bottleneck.
+    Logical decoding from a standby (16+) keeps decode CPU off the primary. Failover slots (17+)
+    mean a promotion does not orphan the subscription's position.
+
+    What it still does not do: DDL. Every `ALTER TABLE` on the publisher must be applied to the
+    subscriber in the same order, before the change reaches it, or apply fails and the subscription
+    stops. Sequences are not replicated either, so identity columns need explicit handling.
+  tags: [logical-replication, cdc, row-filters, failover-slots]
+
+- id: pg-recent-004
+  topic: autovacuum
+  difficulty: advanced
+  question: A 300-million-row table with heavy updates is chronically bloated. Walk through autovacuum tuning, and what changed in 16 and 17.
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Start from the trigger, because the default is the problem: `50 + 0.2 × reltuples` means 60
+    million dead tuples before a worker starts. Set per-table storage parameters instead of touching
+    the global default:
+
+    ```sql
+    ALTER TABLE events SET (autovacuum_vacuum_scale_factor = 0.01,
+                            autovacuum_vacuum_threshold = 10000,
+                            autovacuum_vacuum_cost_limit = 2000,
+                            autovacuum_analyze_scale_factor = 0.02,
+                            fillfactor = 85);
+    ```
+
+    Then make sure the workers can finish: `autovacuum_max_workers` (default 3) is often the queue
+    bottleneck, but the cost budget is shared across workers, so raise the cost limit at the same
+    time or each worker runs slower. `autovacuum_vacuum_insert_threshold` (13+) matters for the
+    append-only part of the table, which otherwise never triggers a vacuum and never sets the
+    visibility map.
+
+    In 16/17: `pg_stat_io` shows which backend type is doing the I/O, so you can prove vacuum is
+    actually the consumer; 17 raised the maintenance memory ceiling to 2 GB and added
+    `VACUUM (BUFFER_USAGE_LIMIT)` to bound its ring buffer. `fillfactor` is not optional — without
+    free space on the page, every update misses the HOT path and index bloat follows heap bloat.
+  tags: [autovacuum, tuning, bloat, pg17]
+
+- id: pg-recent-005
+  topic: upgrades
+  difficulty: advanced
+  question: How do you do a major version upgrade with minutes of downtime on a 1 TB database?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Logical replication is the standard answer, and 17's `pg_createsubscriber` made it much less
+    manual. The shape:
+
+    1. Provision the new major version and create the schema on it — DDL is not replicated, so the
+       schema must match exactly, including indexes and constraints.
+    2. Take a physical base backup of the old primary into the new instance, or let
+       `pg_createsubscriber` do it: it converts a physical replica of the old cluster into a logical
+       subscriber, which avoids a separate initial copy and a long `copy_data` phase.
+    3. Let it catch up; watch `pg_stat_subscription` and compare LSNs.
+    4. Freeze writes, wait for the apply lag to reach zero, fix sequences
+       (`setval(pg_get_serial_sequence(...), max(id))`), then repoint the application.
+    5. Keep the old cluster read-only for a rollback window. Rolling back after the new cluster has
+       taken writes means reconciling both, so decide the window before starting.
+
+    `pg_upgrade --link` is still faster for a planned window — minutes, not hours — but it needs
+    both binaries on one host, `--check` passing, and it leaves no rollback path once `--link` runs.
+  tags: [upgrade, logical-replication, pg-createsubscriber]
+
+- id: pg-recent-006
+  topic: monitoring
+  difficulty: intermediate
+  question: What does pg_stat_io tell you that pg_stat_bgwriter could not?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    `pg_stat_bgwriter` was a single global counter: it told you how many buffers the background
+    writer cleaned and how many checkpoints happened, which is enough to know the system is doing
+    I/O and not enough to know who is doing it or whether it was useful.
+
+    `pg_stat_io` (16+) breaks I/O down by **backend type** (`client backend`, `autovacuum worker`,
+    `checkpointer`, `bgwriter`, `walwriter`, `walreceiver`, …), by **object** (`relation`, `temp
+    relation`) and by **context** (`normal`, `vacuum`, `bulkread`, `bulkwrite`). For each cell it
+    reports reads, read time, writes, write time, writebacks, extends, hits, evictions and fsyncs.
+
+    That lets you answer questions that previously required guesswork: is the write amplification
+    coming from checkpoints or from backends evicting dirty pages? Is vacuum consuming the IOPS
+    budget? Are temporary files being written because of `work_mem` spills, and by which workload?
+    A high `evictions` count on `client backend` reads means the working set no longer fits
+    `shared_buffers` — a capacity signal, not a tuning one.
+
+    In 17 the checkpointer counters moved into `pg_stat_checkpointer`, removing the double counting
+    that made `pg_stat_bgwriter` misleading.
+  tags: [pg-stat-io, monitoring, io, pg16]
+
+- id: pg-recent-007
+  topic: jsonb
+  difficulty: intermediate
+  question: What does PostgreSQL 17's JSON_TABLE change about modelling semi-structured data?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    It makes shredding a document into typed rows a first-class operation instead of a lateral join
+    over `jsonb_array_elements` with a cast per column:
+
+    ```sql
+    SELECT o.order_id, j.sku, j.qty
+    FROM orders o,
+         JSON_TABLE (o.payload, '$.items[*]'
+           COLUMNS (sku text PATH '$.sku',
+                    qty int  PATH '$.qty')) AS j;
+    ```
+
+    `JSON_TABLE` gives column names and types up front, `JSON_VALUE` extracts a typed scalar,
+    `JSON_QUERY` a fragment, and `JSON_EXISTS` a predicate. Beyond readability, the practical win is
+    that the output looks like a normal relation to BI tools and to the planner: you can build a
+    view over it, join it, and expose it without teaching a downstream tool `jsonpath`.
+
+    It does not change the storage economics. The document is still detoasted on access, array
+    expansion still multiplies rows before aggregation, and none of this is faster than a properly
+    normalised child table. The pattern that holds: keep documents for the long tail of attributes,
+    promote hot fields to generated columns, and use `JSON_TABLE` at the boundary where
+    semi-structured data has to look relational.
+  tags: [pg17, json-table, sql-json, semi-structured]
+
+- id: pg-recent-008
+  topic: replication
+  difficulty: advanced
+  question: Why were logical replication slots a weak point in PostgreSQL HA, and how did 17 address it?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    A logical slot holds the decoding position (`confirmed_flush_lsn`) and the WAL retention promise.
+    Before 17 it existed only on the primary, in `pg_replslot`, which is not part of the physical
+    replication stream — the files are copied to a standby by base backup, but never updated
+    afterwards.
+
+    So on promotion, the new primary had a slot file frozen at the moment of the base backup. The
+    subscriber's real position was unknown, and the practical options were to recreate the
+    subscription with a fresh initial copy (expensive, and a data gap), or to hand-set the slot's
+    LSN from the subscriber's `pg_replication_origin` (fragile).
+
+    PostgreSQL 17 adds slot synchronisation: create the slot with `failover = true`, set
+    `sync_replication_slots = on` on the primary, and standbys with `sync_replication_slots = on`
+    receive the slot state continuously. `pg_replication_slots.synced` shows which slots are
+    synchronised, and `pg_sync_replication_slots()` forces a sync. On promotion the slot is already
+    there with a current position.
+
+    The caveats: it requires `wal_level = logical`, the standby must have `primary_slot_name` set,
+    and synchronisation is asynchronous — a failover can still lose the last few seconds of slot
+    state.
+  tags: [pg17, failover-slots, logical-replication, ha]
+
+- id: pg-recent-009
+  topic: dml
+  difficulty: advanced
+  question: MERGE or INSERT ... ON CONFLICT — which is correct for an upsert, and what does 17 add?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    For a plain upsert under concurrency, `INSERT ... ON CONFLICT DO UPDATE` is the correct tool. It
+    is atomic against a unique index: if a concurrent transaction inserts the same key, the
+    statement waits and then takes the update branch, with no error and no duplicate.
+
+    `MERGE` looks like the more general statement — multiple `WHEN` branches, `WHEN NOT MATCHED BY
+    SOURCE` for deletes (17+) — but it has no equivalent of `ON CONFLICT`'s speculative insertion. It
+    reads and then acts, so two concurrent `MERGE`s can both find "not matched", both insert, and one
+    fails with a unique violation; heavier cases deadlock. `MERGE` is right for set-based
+    reconciliation inside a transaction that already holds the rows (or under a lock), and wrong as
+    a concurrency-safe upsert.
+
+    PostgreSQL 17 added `MERGE ... RETURNING` and support for updatable views, which removes the
+    usual workaround of a CTE wrapping `UPDATE ... RETURNING`. If you need the affected rows back,
+    that is now one statement — but the concurrency caveat is unchanged.
+  tags: [merge, upsert, on-conflict, pg17]
+
+- id: pg-recent-010
+  topic: planner
+  difficulty: advanced
+  question: A prepared statement is fast for most tenants and catastrophic for one. How do you diagnose and fix it, and which EXPLAIN options help?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    This is the generic-plan problem. A prepared statement is planned with custom parameter values
+    for its first five executions, then PostgreSQL switches to a generic plan that ignores the
+    parameters — because it is cheaper to plan once. With a skewed distribution, the generic plan is
+    reasonable on average and terrible for the large tenant, which no longer gets the index scan that
+    its row count justified.
+
+    Diagnosis: `EXPLAIN (GENERIC_PLAN) EXECUTE stmt(...)` (16+) shows exactly the plan that will be
+    cached, so you can compare it against `EXPLAIN EXECUTE` with the bad value and see the estimate
+    collapse. `pg_stat_statements` shows one query ID with a mean driven by a minority of calls;
+    `EXPLAIN (MEMORY)` (17) adds per-node memory, which exposes the hash table sized for the wrong
+    row count.
+
+    Fixes, in order: `SET plan_cache_mode = force_custom_plan` for that statement (it only supports a
+    few parameters), raise the statistics target on the skewed column so the generic estimate is
+    less wrong, or replace the parameterised filter with an `OR`-split or a plpgsql function that
+    plans per call. `auto_explain` with `log_min_duration` catches the next occurrence before a
+    customer does.
+  tags: [prepared-statements, generic-plan, pg16, pg17]

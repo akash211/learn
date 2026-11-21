@@ -1,0 +1,492 @@
+- id: pg-basic-001
+  topic: jsonb
+  difficulty: beginner
+  question: What is the difference between the json and jsonb types, and which should you use?
+  answer: |
+    `json` stores the input text verbatim: whitespace, key order and duplicate keys are preserved,
+    and it is re-parsed on every access. `jsonb` parses the document on input into a binary tree,
+    drops whitespace and duplicate keys, and sorts keys — so it is slower to write, faster to read,
+    and the only one that can be indexed with GIN.
+
+    Use `jsonb` for anything you query. Use `json` only when you must round-trip a document
+    byte-for-byte, for example storing a signed payload whose exact bytes matter. A common mistake
+    is choosing `json` "because it preserves formatting" and then discovering that
+    `CREATE INDEX ... USING gin (col jsonb_path_ops)` does not apply to it at all.
+
+    Both are TOASTed above roughly 2 kB, and any access to an out-of-line document pays the
+    detoast cost, so neither is a good home for fields you filter or join on.
+  tags: [jsonb, types, indexing]
+
+- id: pg-basic-002
+  topic: mvcc
+  difficulty: intermediate
+  question: How does MVCC let readers proceed without blocking writers?
+  answer: |
+    An `UPDATE` never overwrites a row in place. It writes a new tuple version with its own `xmin`
+    (the inserting transaction ID) and sets the old version's `xmax` to the updating transaction,
+    so the old bytes remain readable. `DELETE` only sets `xmax`.
+
+    A reader takes a snapshot — `xmin`, `xmax` and the list of in-flight transaction IDs — and
+    decides per tuple whether the inserting transaction was committed and visible to that snapshot,
+    and whether the deleting transaction was. A version deleted after the snapshot was taken is
+    still visible to that reader, even though newer sessions no longer see it.
+
+    Because readers never take row locks, a long `SELECT` cannot block an `INSERT`, and writers do
+    not block readers. The cost is deferred: dead versions accumulate and vacuum reclaims them.
+    That is why the same mechanism that gives you concurrency is also the reason tables bloat.
+  tags: [mvcc, snapshots, xmin-xmax]
+
+- id: pg-basic-003
+  topic: mvcc
+  difficulty: intermediate
+  question: Why does an UPDATE create a new row version, and what is a HOT update?
+  answer: |
+    MVCC requires that any snapshot still able to see the old version keeps a readable copy, so an
+    `UPDATE` always writes a new tuple and marks the previous one dead. Every index entry pointing
+    at the old tuple must then either be updated or left to be cleaned up by vacuum — which is why
+    writes are more expensive than the row count suggests.
+
+    A **HOT** (heap-only tuple) update avoids the index work entirely. It applies when no indexed
+    column changed, the new version fits on the same page, and the page has free space. PostgreSQL
+    writes the new tuple on the same page and turns the old line pointer into a redirect, so index
+    entries keep pointing at the chain head.
+
+    Default `fillfactor = 100` packs pages full, so the first update on a page usually misses the
+    HOT path. `ALTER TABLE ... SET (fillfactor = 85)` on update-heavy tables, and not
+    over-indexing, are what raise `n_tup_hot_upd` in `pg_stat_user_tables`.
+  tags: [hot, fillfactor, bloat]
+
+- id: pg-basic-004
+  topic: vacuum
+  difficulty: beginner
+  question: What does VACUUM actually do, and why doesn't the table get smaller?
+  answer: |
+    `VACUUM` scans the heap, marks dead tuple slots as reusable, prunes the corresponding index
+    entries, and sets the all-visible bit in the visibility map for pages with no dead tuples left.
+    It takes `SHARE UPDATE EXCLUSIVE`, so reads and writes continue while it runs.
+
+    It does not move live rows, so the freed space stays inside the table's existing pages and is
+    reused by later inserts and updates. Since PostgreSQL 12 it truncates all-free pages at the end
+    of the file, which helps only when the dead rows happen to be at the end. Reclaiming space in
+    the middle of a file requires rewriting it: `VACUUM FULL` (which takes `ACCESS EXCLUSIVE` and
+    needs free disk equal to the table) or `pg_repack` (online, needs a primary key).
+
+    `VACUUM` also updates the visibility map, which is what enables index-only scans, and its
+    `ANALYZE` sibling refreshes planner statistics.
+  tags: [vacuum, bloat, visibility-map]
+
+- id: pg-basic-005
+  topic: autovacuum
+  difficulty: intermediate
+  question: Why does the default autovacuum scale factor fail on large tables?
+  answer: |
+    Autovacuum triggers when dead tuples exceed
+    `autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor * reltuples`, which with the
+    defaults is `50 + 0.2 * n`. On a table of 500 million rows, that means 100 million dead tuples
+    before a worker starts. By then the table is a fifth dead, every scan reads far more pages than
+    it needs, and the vacuum that finally runs has to do a hundred million tuples of work in one
+    pass — usually while the workload continues.
+
+    The fix is a per-table scale factor, not a global one, because the right ratio depends on size:
+
+    ```sql
+    ALTER TABLE events SET (autovacuum_vacuum_scale_factor = 0.01,
+                            autovacuum_vacuum_threshold = 5000);
+    ```
+
+    Also check `autovacuum_max_workers` (default 3) and the cost limit: a worker that is throttled
+    to a few MB/s will not keep up with a high-churn table no matter how often it is triggered.
+  tags: [autovacuum, tuning, scale-factor]
+
+- id: pg-basic-006
+  topic: wraparound
+  difficulty: intermediate
+  question: What is transaction ID wraparound and how does PostgreSQL prevent it?
+  answer: |
+    Transaction IDs are 32 bits and compared modulo 2³², so the space is roughly two billion IDs.
+    If the counter were allowed to wrap, old tuples would appear to have been inserted in the
+    future and become invisible — silent data loss.
+
+    PostgreSQL prevents this by **freezing**: `VACUUM` rewrites old tuples' `xmin` to
+    `FrozenTransactionId`, which is always treated as committed and infinitely old, so their IDs can
+    be reused safely. Anti-wraparound autovacuum is forced when a table's `age(relfrozenxid)`
+    reaches `autovacuum_freeze_max_age` (default 200 million), and it ignores the cost delay — it
+    runs at full speed.
+
+    Monitor `age(datfrozenxid)` per database and alert well before the limit; at 2.1 billion the
+    database refuses writes and the only remedy is an offline `VACUUM` in single-user mode. A
+    long-running transaction or an abandoned replication slot can prevent freezing and turn this
+    from a theoretical risk into an outage.
+  tags: [freezing, wraparound, autovacuum]
+
+- id: pg-basic-007
+  topic: indexes
+  difficulty: intermediate
+  question: When does PostgreSQL use an index-only scan, and why does EXPLAIN still show Heap Fetches?
+  answer: |
+    An index-only scan is possible when a covering index supplies every column the query needs —
+    either the key columns or ones added with `INCLUDE` — so no heap access is required for the
+    data itself.
+
+    MVCC is the catch. An index entry does not record whether its tuple is still visible to the
+    current snapshot; that lives in the heap tuple header, plus the hint bits. To avoid visiting the
+    heap for every row, PostgreSQL consults the **visibility map**: one bit per page saying "no dead
+    tuples on this page". If the bit is set, the scan trusts it. If not, it fetches the heap tuple
+    to check.
+
+    `Heap Fetches: N` in `EXPLAIN (ANALYZE)` counts those visits. On a write-heavy table the bit is
+    frequently cleared, so a perfect covering index still touches the heap — that is why vacuum
+    frequency (and `autovacuum_vacuum_insert_threshold` for append-only tables) directly affects
+    read performance.
+  tags: [index-only-scan, visibility-map, vacuum]
+
+- id: pg-basic-008
+  topic: indexes
+  difficulty: intermediate
+  question: B-tree, GIN or BRIN — how do you choose?
+  answer: |
+    They answer different questions.
+
+    **B-tree** is the default: equality, ranges, prefix matching (`LIKE 'abc%'` with the right
+    collation) and ordering. It stores keys in order with `ctid` pointers, supports `INCLUDE` for
+    covering indexes, and is the only type that provides sorted output for `ORDER BY`.
+
+    **GIN** is an inverted index over elements *inside* values — array elements, `jsonb` keys and
+    paths, `tsvector` lexemes, trigrams. It is the right choice for `@>`, `?` and full-text search.
+    It is lossy (bitmap recheck), slow to build, and best created after a bulk load.
+
+    **BRIN** stores min/max per range of heap blocks, so it is tiny (kilobytes for gigabytes) but
+    only works when physical order correlates with value order — append-only time-series tables.
+    Check `pg_stats.correlation`; near 0 means the index is useless.
+
+    GiST is the fourth option when you need ranges, geometry or KNN distance ordering.
+  tags: [btree, gin, brin, access-methods]
+
+- id: pg-basic-009
+  topic: indexes
+  difficulty: intermediate
+  question: What is a partial index and when will the planner use one?
+  answer: |
+    A partial index indexes only the rows matching a predicate:
+
+    ```sql
+    CREATE INDEX idx_orders_pending ON orders (created_at)
+      WHERE status = 'pending';
+    ```
+
+    It is smaller, cheaper to maintain on writes that do not match, and often dramatically faster
+    for the queries that do. Indexing the 2% of orders that are pending avoids maintaining entries
+    for the 98% that will never be queried that way.
+
+    The planner uses it only when it can prove the query's predicate implies the index predicate.
+    `WHERE status = 'pending'` qualifies. `WHERE status IN ('pending','paid')` does not, because the
+    index cannot answer the `paid` branch. A parameterised `WHERE status = $1` generally does not,
+    because the implication is unknown at plan time.
+
+    Partial indexes are also how you enforce conditional uniqueness — `UNIQUE (customer_id) WHERE
+    canceled_at IS NULL` gives one active subscription per customer without constraining history.
+  tags: [partial-index, predicates, unique]
+
+- id: pg-basic-010
+  topic: memory
+  difficulty: intermediate
+  question: What does work_mem control, and how do you size it?
+  answer: |
+    `work_mem` is the memory limit for a single sort or hash operation *before it spills to disk*.
+    It is not a per-connection budget: one query can have several sorts, hash joins and hash
+    aggregations, each of which may use up to `work_mem`, and each of those can be multiplied by
+    parallel workers.
+
+    So the real ceiling is roughly
+    `connections × concurrent nodes × work_mem`, and a 200-connection pool with 16 MB and four
+    nodes is already 12.8 GB. This is why raising it globally to fix one bad query is how servers
+    start swapping.
+
+    Sizing approach: set a modest global default (`4MB`–`32MB`), then raise it for specific roles or
+    databases (`ALTER ROLE reporting SET work_mem = '256MB'`), and treat a spill as a signal.
+    `EXPLAIN (ANALYZE)` shows `Sort Method: external merge Disk: 48MB` or `Batches: 8` on a hash
+    join; a spill caused by a 100× row misestimate should be fixed with statistics, not memory.
+  tags: [work-mem, sorts, hash-join]
+
+- id: pg-basic-011
+  topic: explain
+  difficulty: intermediate
+  question: How do you read EXPLAIN (ANALYZE, BUFFERS) and spot the node that is actually slow?
+  answer: |
+    Read from the inside out, and compare estimated `rows` to `actual rows` at every node — after
+    multiplying by `loops`. An inner node reporting `rows=134 loops=137` produced 18,358 rows, not
+    134; comparing its estimate against 134 hides the problem entirely.
+
+    Then look at:
+
+    - `Rows Removed by Filter` — the index delivered rows the query discarded, so the predicate is
+      not selective or not sargable.
+    - `Buffers: shared hit=… read=…` — `read` is real I/O; a slow plan with a 99% hit ratio is
+      CPU-bound, not I/O-bound.
+    - `Sort Method: external merge Disk:` or `Batches: >1` — `work_mem` exceeded at that node.
+    - `Heap Fetches` on an index-only scan — visibility-map misses.
+    - `actual time` on the node with the highest *total* contribution, which is usually a nested
+      loop's inner side.
+
+    The single most useful comparison is estimate versus actual at the node with the most loops.
+  tags: [explain, buffers, loops]
+
+- id: pg-basic-012
+  topic: planner
+  difficulty: advanced
+  question: Why is random_page_cost 4.0 by default, and when should you change it?
+  answer: |
+    The default cost model assumes spinning disks, where a random read costs about four times a
+    sequential one because of seek time. `random_page_cost = 4.0` against `seq_page_cost = 1.0`
+    therefore makes the planner reluctant to choose index scans that touch many scattered pages, and
+    it prefers sequential scans and hash joins instead.
+
+    On SSD or NVMe, and especially when the working set is largely in the OS page cache, that ratio
+    is wrong: a random read may cost barely more than a sequential one. Lowering
+    `random_page_cost` to 1.1–1.5 lets the planner pick index scans it was previously rejecting,
+    and it is one of the few settings that can improve plans without a schema change.
+
+    It is not a universal fix. On a genuinely I/O-bound spinning-disk array the default is closer to
+    the truth, and dropping it too far can produce index scans that hammer the buffer cache. Change
+    it globally only if you know the storage, otherwise per tablespace or per session for a specific
+    workload.
+  tags: [cost-model, random-page-cost, ssd]
+
+- id: pg-basic-013
+  topic: statistics
+  difficulty: advanced
+  question: What problem do extended statistics (CREATE STATISTICS) solve?
+  answer: |
+    The planner assumes columns are independent: it multiplies selectivities.
+    `WHERE city = 'Berlin' AND postal_code = '10115'` is estimated as `P(city) × P(zip)`, which is
+    thousands of times too small because the two values are functionally dependent. The result is a
+    plan sized for a handful of rows when the reality is millions — usually a nested loop where a
+    hash join was needed.
+
+    Extended statistics capture the relationship:
+
+    ```sql
+    CREATE STATISTICS addr_city_zip (dependencies, ndistinct, mcv)
+      ON city, postal_code FROM addresses;
+    ANALYZE addresses;
+    ```
+
+    `dependencies` records functional dependencies between columns, `ndistinct` fixes `GROUP BY`
+    cardinality estimates over column combinations, and `mcv` stores the most common *combinations*
+    of values. They are cheap, require no query rewrite, and are the correct fix for a correlated
+    predicate — as opposed to raising the statistics target, which only helps a single column's
+    distribution.
+  tags: [extended-statistics, correlation, estimates]
+
+- id: pg-basic-014
+  topic: isolation
+  difficulty: intermediate
+  question: What is the difference between READ COMMITTED and REPEATABLE READ in PostgreSQL?
+  answer: |
+    The difference is when the snapshot is taken.
+
+    **READ COMMITTED** (the default) takes a new snapshot per statement. Two `SELECT`s in the same
+    transaction can see different data, so you get non-repeatable reads and phantoms. An `UPDATE`
+    that blocks on a concurrent writer re-evaluates its `WHERE` clause against the newly committed
+    row version when the lock is released — which is why a `WHERE balance >= 100` check can succeed
+    against data you never read.
+
+    **REPEATABLE READ** takes one snapshot for the whole transaction. Every statement sees the same
+    data, and phantoms are prevented too (PostgreSQL implements it as snapshot isolation, stricter
+    than the ANSI minimum). If another transaction updates a row you also try to update, you get
+    `ERROR: could not serialize access due to concurrent update` (SQLSTATE `40001`) instead of a
+    lost update.
+
+    That error means the application must retry the whole transaction. Neither level prevents write
+    skew; only `SERIALIZABLE` does.
+  tags: [isolation, snapshots, serialization-failure]
+
+- id: pg-basic-015
+  topic: locking
+  difficulty: intermediate
+  question: What causes a deadlock, how does PostgreSQL resolve it, and how do you prevent it?
+  answer: |
+    A deadlock is a cycle in the wait-for graph: session A holds row 1 and waits for row 2, session
+    B holds row 2 and waits for row 1. PostgreSQL runs a deadlock check after `deadlock_timeout`
+    (default 1 s) and terminates one transaction with SQLSTATE `40P01`, letting the other proceed.
+
+    Prevention is about ordering and transaction length:
+
+    - Lock rows in a deterministic order — sort keys before a batch update, and apply the same order
+      in every code path.
+    - Sort the input of a multi-row `INSERT ... ON CONFLICT DO UPDATE`; two sessions inserting
+      overlapping key sets in different orders deadlock on speculative insertion locks.
+    - Keep transactions short, so the window for a cycle is small, and set `lock_timeout` so a
+      statement fails fast rather than queueing.
+
+    Retry `40P01` — and `40001` — with backoff, wrapping the entire transaction. A retry around a
+    single statement inside an aborted transaction will loop on `25P02`.
+  tags: [deadlock, lock-ordering, retry]
+
+- id: pg-basic-016
+  topic: locking
+  difficulty: intermediate
+  question: What is SELECT ... FOR UPDATE SKIP LOCKED used for?
+  answer: |
+    It claims rows without queueing behind another session. `FOR UPDATE` locks the selected rows and
+    blocks if someone else holds them; `SKIP LOCKED` silently steps over locked rows and returns
+    only the ones it could lock.
+
+    That makes it the standard way to build a work queue in a table:
+
+    ```sql
+    WITH claimed AS (
+      SELECT id FROM jobs WHERE status = 'queued'
+      ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 10
+    )
+    UPDATE jobs j SET status = 'running'
+    FROM claimed c WHERE j.id = c.id
+    RETURNING j.*;
+    ```
+
+    Many workers can run this concurrently without contending, because each gets a disjoint batch.
+    The lock is released at commit, so the update must be in the same transaction as the claim.
+
+    It is not a strict queue: ordering is not guaranteed under contention, and a worker that dies
+    leaves rows in `running`, so you still need a reaper for stale claims. It also defeats
+    repeatable-read consistency by design.
+  tags: [skip-locked, queues, concurrency]
+
+- id: pg-basic-017
+  topic: connections
+  difficulty: intermediate
+  question: Why use a connection pooler, and what does transaction pooling break?
+  answer: |
+    PostgreSQL forks a process per connection. Each backend costs several MB of memory plus catalog
+    caches, and throughput peaks in the low hundreds of active backends. Applications typically hold
+    hundreds of mostly-idle connections, so multiplexing them onto a few dozen server connections
+    removes both the memory cost and the context-switch cost — and it caps the damage when the
+    application scales out to more pods.
+
+    PgBouncer's `transaction` mode lends a server connection for one transaction and returns it at
+    commit. It breaks anything that assumes session state:
+
+    - session-level `SET` (use `SET LOCAL`, or role/database defaults)
+    - named prepared statements (unless PgBouncer ≥ 1.21 with `max_prepared_statements`)
+    - `LISTEN`/`NOTIFY`, session advisory locks, `WITH HOLD` cursors, temporary tables
+    - `pg_backend_pid()` as a stable client identity
+
+    `session` mode is compatible with everything and pools very little. Size the pool from measured
+    concurrency, not from connection count.
+  tags: [pgbouncer, pooling, max-connections]
+
+- id: pg-basic-018
+  topic: partitioning
+  difficulty: intermediate
+  question: How does partition pruning work, and when does it fail?
+  answer: |
+    The planner compares the query's predicates against each partition's bounds and excludes
+    partitions that cannot match. Since PostgreSQL 11 it also prunes at execution time for
+    parameterised queries, which is what makes `WHERE created_at >= $1` work with prepared
+    statements.
+
+    It fails when the predicate cannot be matched to the partition key:
+
+    - The filter is on a different column than the partition key.
+    - The key is wrapped in a function: `date_trunc('day', created_at) = $1` cannot be mapped to
+      range bounds, while `created_at >= $1 AND created_at < $1 + interval '1 day'` can.
+    - Types are mismatched and an implicit cast appears on the column side.
+    - `enable_partition_pruning` is off, which is not the default but does happen after a bad
+      configuration change.
+
+    Verify with `EXPLAIN (ANALYZE, COSTS OFF)`: the `Append` node should list one partition, not
+    twelve. For inheritance children, pruning depends on `constraint_exclusion` instead.
+  tags: [partitioning, pruning, explain]
+
+- id: pg-basic-019
+  topic: partitioning
+  difficulty: advanced
+  question: Why must a unique constraint on a partitioned table include the partition key?
+  answer: |
+    Because uniqueness has to be enforced by an index, and a partitioned table's indexes are
+    partitioned too: each child has its own index over its own rows. There is no global index
+    spanning partitions, so a uniqueness check on `order_id` alone would have to search every
+    partition, and PostgreSQL does not do that.
+
+    The consequence is that `PRIMARY KEY (order_id)` is rejected on a table partitioned by
+    `created_at`, and you must write `PRIMARY KEY (order_id, created_at)` — which means `order_id`
+    is not unique table-wide. Any foreign key referencing the table must reference the full key.
+
+    Options when you need global uniqueness: partition by the unique key (hash partitioning), keep a
+    separate non-partitioned lookup table with a unique index, or generate identifiers that are
+    unique by construction (UUIDs) and accept that the database will not enforce it. The last is a
+    design decision that should be written down, not assumed.
+  tags: [partitioning, constraints, unique]
+
+- id: pg-basic-020
+  topic: jsonb
+  difficulty: intermediate
+  question: How do you index a jsonb column, and which operator class should you use?
+  answer: |
+    Three options, depending on the query shape.
+
+    **GIN with `jsonb_path_ops`** for containment, the usual case:
+
+    ```sql
+    CREATE INDEX ON orders USING gin (payload jsonb_path_ops);
+    SELECT * FROM orders WHERE payload @> '{"status":"refunded"}';
+    ```
+
+    It is roughly half the size of the default `jsonb_ops` and faster for `@>`, but it does not
+    support the key-existence operators `?`, `?|`, `?&`. Use `jsonb_ops` if you need those.
+
+    **B-tree on an expression** when you query one field by equality or range:
+
+    ```sql
+    CREATE INDEX ON orders ((payload ->> 'channel'));
+    ```
+
+    The query must use the identical expression, and any cast is part of the expression.
+
+    **A generated column** (12+) is often the best answer: promote the hot field to a real column
+    with `GENERATED ALWAYS AS (payload ->> 'channel') STORED`, then index it normally and get
+    statistics for free.
+  tags: [jsonb, gin, expression-index]
+
+- id: pg-basic-021
+  topic: replication
+  difficulty: intermediate
+  question: When would you use logical replication instead of streaming replication?
+  answer: |
+    Streaming replication ships physical WAL blocks, so the standby is a byte-identical copy: same
+    major version, same architecture, all databases, read-only. It is the right tool for failover
+    and read scaling, and it is cheap and simple.
+
+    Logical replication decodes WAL into row changes, which gives you things physical replication
+    cannot:
+
+    - **Selective replication** — one table, or rows matching a filter (15+), instead of the whole
+      cluster.
+    - **Cross-version** — a 17 subscriber can consume a 14 publisher, which makes major-version
+      upgrades possible with seconds of downtime.
+    - **Writable subscriber** — the target can have its own indexes, extra columns and other
+      writers, which suits feeding a warehouse, Kafka via Debezium, or a per-tenant database.
+
+    The costs: DDL is not replicated, sequences are not replicated, tables need a replica identity
+    (primary key) for `UPDATE`/`DELETE`, and the publisher must run `wal_level = logical`, which
+    increases WAL volume.
+  tags: [logical-replication, streaming, cdc]
+
+- id: pg-basic-022
+  topic: replication
+  difficulty: advanced
+  question: What is a replication slot, and what is the operational risk?
+  answer: |
+    A slot is a server-side promise to retain WAL until a named consumer confirms it has consumed
+    it. A physical slot keeps segments for a standby that is temporarily offline; a logical slot
+    keeps them for a subscriber or a CDC consumer, and records its decoding position.
+
+    The risk is unbounded retention. If a replica is decommissioned, a subscriber is paused, or a
+    slot is created "to test something" and forgotten, nothing consumes it, `restart_lsn` stops
+    advancing, and `pg_wal` grows until the disk fills — at which point the primary stops accepting
+    writes. The logs do not say "slot"; they say "no space left on device".
+
+    Mitigations: set `max_slot_wal_keep_size` so an over-lagging slot is invalidated
+    (`wal_status = 'lost'`) rather than filling the disk; alert on retained bytes per slot from
+    `pg_replication_slots`; and drop slots as part of decommissioning, not as an afterthought.
+  tags: [replication-slots, wal, disk]

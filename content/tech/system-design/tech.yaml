@@ -1,0 +1,124 @@
+slug: system-design
+title: System Design (Python)
+category: architecture
+summary: How to turn vague requirements into numbers, then into storage, queues and services that survive failure — with Python as the working language.
+level: advanced
+relations:
+  - to: python
+    type: foundation
+    note: The services, workers and backfills in this module are Python; concurrency, packaging and memory behaviour decide whether the design holds at load.
+  - to: sql
+    type: uses
+    note: Relational engines are the default system of record, and the modelling, indexing and transaction semantics in SQL are the constraints system design works within.
+  - to: kafka
+    type: complements
+    note: The streaming chapter uses a partitioned log as its backbone; Kafka's ordering and retention model is what makes replay and exactly-once processing tractable.
+  - to: airflow
+    type: complements
+    note: Batch platforms need an orchestrator with retries, backfills and dependency tracking; Airflow is the reference implementation used in the batch chapter.
+intro:
+  what: |
+    System design is the discipline of choosing boundaries: where state lives, how requests
+    reach it, what happens when a component is slow or dead, and which guarantees the product
+    actually needs. It is not a catalogue of boxes. The output of a design session is a set of
+    decisions with numbers attached — throughput, storage, latency, cost — and an explicit
+    statement of what the system does *not* promise.
+
+    This module teaches a repeatable method and then applies it four times: a transactional
+    service that scales reads and writes, a batch data platform ingesting 140 GB/day into a
+    300 TB lake, a streaming platform on a partitioned log, and an LLM-backed service with a
+    token budget. Every number is derived from stated assumptions, and the arithmetic is shown
+    so you can check it and substitute your own inputs.
+  why: |
+    Most production incidents are design decisions that were never made explicitly: a queue
+    with no dead-letter path, a cache with no invalidation story, a "real-time" dashboard fed
+    by an hourly job, a retry loop with no idempotency key. Interviews surface the same gap —
+    candidates can name Kafka and Redis but cannot say how many partitions, how much storage,
+    or what happens on a duplicate delivery.
+
+    The method matters more than the components because components change. Numbers force
+    honesty: "we need 1,620 events per second, so one process is not enough and twelve with
+    headroom is" is a defensible statement, while "we'll use Kafka for scalability" is not.
+  problems:
+    - Turning ambiguous product requirements into testable functional and non-functional requirements.
+    - Sizing storage, throughput and cost before writing code, so the design is affordable and operable.
+    - Choosing a consistency model and an idempotency strategy that match the business cost of duplicates and stale reads.
+    - Deciding where to cache, where to queue, and where to accept synchronous coupling.
+    - Designing for partial failure — timeouts, retries, replay, backfill and reconciliation.
+    - Communicating a design so that another engineer can implement and operate it.
+  where_used:
+    - Product and platform architecture reviews, and the design-doc process that precedes large builds.
+    - Senior and staff engineering interviews, where the same structure is expected in 45 minutes.
+    - Data platform design: ingestion, lake layout, batch and streaming pipelines, backfills.
+    - Operational work: capacity planning, incident review, and decisions about sharding or caching under growth.
+    - AI features, where latency, token cost and evaluation replace CPU and page cache as the binding constraints.
+  ecosystem: |
+    System design sits above the individual technologies. Python supplies the services and
+    workers; SQL supplies the transactional system of record and the modelling discipline;
+    Kafka supplies the durable log that decouples producers from consumers; Airflow supplies
+    scheduling and backfill semantics. The same reasoning applies in other stacks — swap the
+    components and the questions about partitions, idempotency and failure stay identical.
+  alternatives:
+    - name: Buy a managed platform
+      note: Correct when the workload is standard; you still need the numbers to size and cost it, and to know when it stops fitting.
+    - name: Modular monolith first
+      note: Usually the right first step — one database, one deployable, clear module boundaries; split only when a measured constraint forces it.
+    - name: Serverless-first
+      note: Removes capacity planning for spiky, low-volume work; makes tail latency, connection limits and per-request cost the new constraints.
+  related: [python, sql, kafka, airflow]
+chapters:
+  - id: interview-framework
+    title: A Repeatable Framework for Design Questions
+    file: chapters/01-interview-framework.md
+    minutes: 13
+    level: core
+  - id: capacity-estimation
+    title: Capacity Estimation with Worked Arithmetic
+    file: chapters/02-capacity-estimation.md
+    minutes: 15
+    level: core
+  - id: data-models-storage
+    title: Data Models, Access Patterns and Storage Selection
+    file: chapters/03-data-models-storage.md
+    minutes: 14
+    level: core
+  - id: scaling-reads-writes
+    title: Scaling Reads and Writes
+    file: chapters/04-scaling-reads-writes.md
+    minutes: 15
+    level: advanced
+  - id: caching
+    title: Caching Strategies and Invalidation
+    file: chapters/05-caching.md
+    minutes: 14
+    level: core
+  - id: async-queues
+    title: Asynchronous Processing, Queues and Delivery Claims
+    file: chapters/06-async-queues.md
+    minutes: 15
+    level: advanced
+  - id: consistency-idempotency
+    title: Consistency, Idempotency and Failure Semantics
+    file: chapters/07-consistency-idempotency.md
+    minutes: 15
+    level: advanced
+  - id: batch-platform
+    title: Designing a Batch Data Platform
+    file: chapters/08-batch-platform.md
+    minutes: 16
+    level: advanced
+  - id: streaming-platform
+    title: Designing a Streaming Data Platform
+    file: chapters/09-streaming-platform.md
+    minutes: 16
+    level: advanced
+  - id: ml-llm-service
+    title: Designing an ML and LLM-Backed Service
+    file: chapters/10-ml-llm-service.md
+    minutes: 15
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

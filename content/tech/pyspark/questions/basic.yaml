@@ -1,0 +1,487 @@
+- id: pyspark-basic-001
+  topic: lazy evaluation
+  difficulty: beginner
+  question: What does it mean that Spark is lazy, and when does work actually happen?
+  answer: |
+    Transformations such as `filter`, `select` and `join` do not touch data. They append a node to
+    a logical plan and return a new, immutable DataFrame. Nothing is read, shuffled or computed
+    until an **action** is called:
+
+    ```python
+    df2 = df.filter(F.col("dt") == "2026-01-01")   # plan only
+    df2.show()                                      # job starts here
+    ```
+
+    Actions are `show`, `count`, `collect`, `take`, `first`, `foreach`, `toPandas` and any
+    `write`. Laziness exists so the optimizer can see the whole pipeline at once: filters move
+    below joins, unused columns are pruned, and operators are fused into one pass instead of
+    materialising intermediate tables.
+
+    Two exceptions are worth knowing. `spark.read.parquet(path)` infers the schema by reading
+    file footers, so a bad path fails immediately; CSV with `inferSchema=True` reads a sample.
+    And `df.columns` triggers analysis. So "lazy" applies to execution, not to metadata
+    discovery.
+  tags: [lazy-evaluation, actions, catalyst]
+
+- id: pyspark-basic-002
+  topic: transformations
+  difficulty: beginner
+  question: What is the difference between a narrow and a wide transformation, and why does it matter?
+  answer: |
+    A narrow transformation computes each output partition from at most one input partition, so no
+    data crosses the network: `select`, `filter`, `withColumn`, `union`, `coalesce`, `explode`. A
+    wide transformation needs rows from many input partitions in the same output partition, which
+    requires a shuffle: `groupBy().agg()`, `join` (unless broadcast), `distinct`, `orderBy`,
+    `repartition`, window functions.
+
+    The distinction sets stage boundaries. Spark fuses all the narrow steps it can into a single
+    stage and runs them task by task; every wide step ends the stage, writes shuffle output, and
+    starts a new one. That is why `filter` before a `join` is cheap and `filter` after a
+    `groupBy` still pays for the shuffle.
+
+    When a job is slow, the first question is where the exchanges are. A plan with three shuffles
+    has three opportunities for skew, spill and network cost; a plan with one has one.
+  tags: [narrow, wide, stages]
+
+- id: pyspark-basic-003
+  topic: shuffle
+  difficulty: beginner
+  question: What is a shuffle, and why is it the most expensive operation in Spark?
+  answer: |
+    A shuffle redistributes rows across partitions so that all rows with the same key end up on the
+    same executor — required for `groupBy`, `join`, `distinct` and global sorts. Each map task
+    partitions its output by reducer, sorts and spills it to local disk, then reducers fetch their
+    blocks from every map task over the network.
+
+    It is expensive for four reasons: bytes move across the network, everything is written to and
+    read from disk twice, data is serialised and (by default) compressed, and the shuffle creates
+    `map_tasks × reduce_tasks` blocks. Map-side pre-aggregation softens the blow for `groupBy` —
+    one row per key leaves the map task instead of one row per record — but nothing softens it for
+    a plain repartition.
+
+    Shuffle cost is why join strategy matters so much: a broadcast join removes a shuffle
+    entirely, and a shuffle-free pipeline is usually an order of magnitude cheaper than a shuffled
+    one.
+  tags: [shuffle, exchange, network]
+
+- id: pyspark-basic-004
+  topic: partitioning
+  difficulty: beginner
+  question: When would you use `coalesce` instead of `repartition`?
+  answer: |
+    `repartition(n)` performs a full shuffle and can increase or decrease the partition count; it
+    distributes rows evenly (round-robin) or by key. `coalesce(n)` only merges adjacent partitions
+    and never shuffles, so it is nearly free — but it can only reduce, and it preserves whatever
+    skew existed.
+
+    Use `coalesce` when you have too many partitions after a filter and want fewer, or when you
+    are writing a small result and want fewer output files. Use `repartition` when you need to
+    increase parallelism, fix skew, or lay data out by a key before a write or join.
+
+    The trap is `coalesce(1)`: it routes the entire dataset through a single task, so a 500 GB
+    table is written by one core while the cluster idles. If you need one file, aggregate first,
+    then write the small result — or use `repartition` and accept the shuffle.
+  tags: [repartition, coalesce, file-count]
+
+- id: pyspark-basic-005
+  topic: joins
+  difficulty: intermediate
+  question: How does a broadcast hash join work, and when is it a bad idea?
+  answer: |
+    Spark collects the small side to the driver, builds a hash table, and broadcasts it to every
+    executor as a read-only variable. Each task then probes that hash table with its partition of
+    the large side — no shuffle, no sort, one pass. It is chosen automatically when a side is
+    below `spark.sql.autoBroadcastJoinThreshold` (10 MB by default), or explicitly with
+    `F.broadcast(df)` / `/*+ BROADCAST(t) */`.
+
+    It is a bad idea when the "small" side is not small. The driver materialises it first, so a
+    2 GB broadcast can OOM the driver before a task runs; each executor holds a full copy; and
+    each concurrent task may build its own hash map, so an 800 MB broadcast on an 8-core executor
+    can consume several gigabytes. Collection is also subject to
+    `spark.sql.broadcastTimeout` (300 s).
+
+    Raising the threshold to 100 MB is often reasonable. Raising it to 1 GB is how jobs die.
+  tags: [broadcast, join-strategy, driver-memory]
+
+- id: pyspark-basic-006
+  topic: joins
+  difficulty: intermediate
+  question: Why would Spark choose a sort-merge join over a broadcast join?
+  answer: |
+    Because neither side is small enough to broadcast. Sort-merge is the general-purpose strategy:
+    both sides are shuffled by the join key, sorted within each partition, then merged in a single
+    streaming pass. It has no size assumption, spills gracefully, and is robust when statistics
+    are wrong.
+
+    Spark picks it when both sides exceed `spark.sql.autoBroadcastJoinThreshold` (10 MB) and
+    `spark.sql.join.preferSortMergeJoin` is true — the default. It costs two shuffles and two
+    sorts, so it is the slowest of the common strategies, but it is the only one that reliably
+    handles two large inputs.
+
+    You can often avoid it. If one side is genuinely small but statistics are stale, run
+    `ANALYZE TABLE ... COMPUTE STATISTICS` or add a broadcast hint. With AQE on, Spark may
+    downgrade a planned sort-merge join to a broadcast after the shuffle, once it knows the real
+    sizes.
+  tags: [sort-merge, join-strategy, statistics]
+
+- id: pyspark-basic-007
+  topic: architecture
+  difficulty: beginner
+  question: "What is the relationship between a job, a stage, a task and a partition?"
+  answer: |
+    They nest. An **action** triggers a **job**. The job's physical plan is split at every shuffle
+    into **stages**. Each stage is a set of **tasks**, one per **partition**.
+
+    So a `groupBy` that scans 500 files and writes 200 output partitions is typically two stages:
+    stage 1 with as many tasks as input partitions (scan, filter, partial aggregate), then a
+    shuffle, then stage 2 with 200 tasks (final aggregate, write). Same job, different task counts
+    per stage.
+
+    Two practical consequences. Parallelism is `min(partitions, slots)`, where slots are executor
+    cores — extra partitions beyond the core count just queue. And because a task processes exactly
+    one partition, a single oversized partition becomes a single straggler task no matter how
+    large the cluster is.
+  tags: [jobs, stages, tasks]
+
+- id: pyspark-basic-008
+  topic: DataFrame vs RDD
+  difficulty: intermediate
+  question: When would you drop from the DataFrame API to RDDs?
+  answer: |
+    Rarely. The DataFrame API goes through Catalyst and Tungsten: predicate pushdown, column
+    pruning, whole-stage codegen, vectorised readers. An RDD pipeline gets none of that — every
+    `map` is an opaque function call on deserialised objects.
+
+    Legitimate reasons to drop down:
+
+    - **Non-tabular work**: parsing a custom binary format, writing to a system with no connector,
+      or logic that genuinely needs row-level control.
+    - **Fine-grained partition control**: `mapPartitionsWithIndex`, custom partitioners.
+    - **Graph or iterative algorithms** where you manage the state yourself.
+
+    Even then, do the tabular part in DataFrames and convert at the boundary. `df.rdd` also
+    discards schema information, and every conversion re-evaluates the plan unless the DataFrame is
+    cached. If the reason is "I know how to write it in Python", a UDF or `mapInPandas` usually
+    keeps the optimizer in play.
+  tags: [rdd, dataframe, catalyst]
+
+- id: pyspark-basic-009
+  topic: caching
+  difficulty: beginner
+  question: What do `cache()` and `persist()` do, and which storage level should you use?
+  answer: |
+    They mark a DataFrame or RDD so its partitions are stored after the first action and reused by
+    later actions. `cache()` is shorthand for a default level; `persist(level)` lets you choose.
+
+    For DataFrames, `cache()` means `MEMORY_AND_DISK`: rows are stored in Spark's compact columnar
+    in-memory format and spill to disk if they do not fit. That is the right default — it never
+    fails for lack of memory, it just gets slower. `MEMORY_ONLY` risks recomputing evicted
+    partitions; `DISK_ONLY` trades speed for stability; `OFF_HEAP` helps when GC pressure is the
+    bottleneck.
+
+    For RDDs, `cache()` is `MEMORY_ONLY`, storing one deserialised Java object per row — often
+    several times larger than the data. `MEMORY_ONLY_SER` is usually better for RDDs.
+
+    Cache only what is used by more than one action. A single-use cache costs memory and evicts
+    blocks that something else needed.
+  tags: [cache, persist, storage-levels]
+
+- id: pyspark-basic-010
+  topic: caching
+  difficulty: intermediate
+  question: Why might a cached DataFrame not be used by a later query?
+  answer: |
+    Because a cache is keyed to a specific analysed plan, not to the data it produces.
+
+    ```python
+    enriched = orders.join(customers, "id")
+    enriched.cache()
+
+    again = spark.read.parquet(".../orders").join(
+        spark.read.parquet(".../customers"), "id")
+    again.count()          # different plan -> cache miss, full recompute
+    ```
+
+    `again` has its own scan nodes and its own expression IDs, so Spark cannot match it to the
+    cached relation. The same happens if you derive a DataFrame before caching: `base.filter(...)`
+    built before `base.cache()` will not read the cache.
+
+    Two other causes: the cached partitions were evicted under memory pressure, in which case they
+    are recomputed from lineage; and the cache is stale because the underlying files were
+    overwritten — Spark does not watch storage, so you need `unpersist()` or
+    `spark.catalog.refreshTable()`.
+  tags: [cache, plan-identity, invalidation]
+
+- id: pyspark-basic-011
+  topic: catalyst
+  difficulty: beginner
+  question: What does the Catalyst optimizer actually do for a query?
+  answer: |
+    It turns your DataFrame or SQL into an efficient physical plan in four phases. **Analysis**
+    resolves column names, expands `*`, applies implicit casts and looks up the catalog.
+    **Logical optimisation** applies rules: push filters below joins and into scans, prune unused
+    columns, fold constants, simplify boolean expressions, reorder joins when statistics allow.
+    **Physical planning** picks concrete operators and join strategies using a cost model.
+    **Codegen** compiles the chosen operators into Java.
+
+    The visible effect is large. A query that filters one day out of a year and selects three of
+    forty columns ends up reading that day's partitions and only those three columns from disk,
+    even though the Python code never mentions pruning.
+
+    Catalyst stops at black boxes: Python UDFs, `rdd.map`, non-deterministic expressions. Whatever
+    is inside those is invisible to every rule.
+  tags: [catalyst, optimizer, plans]
+
+- id: pyspark-basic-012
+  topic: codegen
+  difficulty: intermediate
+  question: What is whole-stage codegen, and how do you see it in a plan?
+  answer: |
+    Whole-stage codegen fuses the operators of a stage into a single generated Java function:
+    scan, filter, project and aggregate become one loop with no virtual dispatch and no
+    intermediate rows between operators. It is on by default (`spark.sql.codegen.wholeStage=true`).
+
+    In `explain()` output, codegen'd stages are marked with `*(n)`, where `n` is the stage id:
+
+    ```
+    *(2) HashAggregate(keys=[region#9], functions=[sum(amount#12)])
+    +- Exchange hashpartitioning(region#9, 200)
+       +- *(1) HashAggregate(keys=[region#9], functions=[partial_sum(amount#12)])
+    ```
+
+    A break in the numbering — `*(1)`, then an unmarked operator, then `*(3)` — means something
+    could not be compiled into the same pipeline. The usual culprits are Python UDFs
+    (`BatchEvalPython`), very wide rows, or a method that exceeded the JVM's 64 KB bytecode limit
+    (`spark.sql.codegen.hugeMethodLimit`).
+
+    Codegen is one reason built-in functions beat UDFs: they stay inside the fused loop.
+  tags: [codegen, tungsten, explain]
+
+- id: pyspark-basic-013
+  topic: pushdown
+  difficulty: intermediate
+  question: What is predicate pushdown, and what can prevent it?
+  answer: |
+    Predicate pushdown moves a filter as close to the data as possible: below joins and
+    aggregations, and eventually into the file reader. At the Parquet level it becomes
+    `PushedFilters` in the scan node, where row groups whose min/max statistics cannot match are
+    skipped without being decoded.
+
+    It can be prevented by:
+
+    - **Python UDFs** and `rdd.map`, which Catalyst cannot see through.
+    - **Casts and functions on the filtered column**, e.g. `filter(substr(dt, 1, 7) == "2026-01")`
+      or `cast(ts as date) == lit("2026-01-01")`. The function destroys the direct column
+      reference, so neither partition pruning nor statistics skipping can apply.
+    - **Non-deterministic expressions** such as `rand()`.
+    - **Filters on the null side of an outer join**, which cannot be pushed below the join without
+      changing results.
+
+    Check `explain("formatted")` for `PushedFilters` and `PartitionFilters`. If they are empty on
+    a partitioned table, the predicate never reached the reader.
+  tags: [predicate-pushdown, parquet, data-skipping]
+
+- id: pyspark-basic-014
+  topic: partition pruning
+  difficulty: intermediate
+  question: Why does casting a partition column break pruning?
+  answer: |
+    Partition pruning works by matching a filter value against the directory layout. If the table
+    is written as `dt=2026-01-01/`, Spark can turn `dt = '2026-01-01'` into "list only that
+    directory". The comparison has to be on the raw partition column for that mapping to be
+    possible.
+
+    Wrap the column in a function and the mapping is lost:
+
+    ```python
+    # prunes
+    df.filter(F.col("dt") == "2026-01-01")
+
+    # does not prune: Spark must list and read everything, then evaluate
+    df.filter(F.to_date(F.col("dt")) == "2026-01-01")
+    df.filter(F.substring("dt", 1, 7) == "2026-01")
+    ```
+
+    The same applies to joins: joining `fact.dt` (string) to `dim.date` (date) forces a cast on one
+    side, which can disable both partition pruning and dynamic partition pruning.
+
+    The fix is to keep partition columns as the type and literal form the directories use, and to
+    filter on ranges (`dt >= '2026-01-01' AND dt < '2026-02-01'`) rather than on derived values.
+  tags: [partition-pruning, casts, layout]
+
+- id: pyspark-basic-015
+  topic: files
+  difficulty: beginner
+  question: Why are many small files a problem, and how do you fix it?
+  answer: |
+    Because fixed costs dominate. Every file costs a footer read, an object-store `LIST`/`HEAD`
+    request, a task setup, and 4 MB of `spark.sql.files.openCostInBytes` charged against the
+    partition size — so a 3 MB file packs as if it were 7 MB. Planning time grows with file count:
+    a table with 200,000 files can take minutes before a single row is processed.
+
+    On the write side, small files come from too many partitions (`spark.sql.shuffle.partitions`
+    left at 200 for a 2 GB output), from `partitionBy` on a high-cardinality column, or from
+    frequent incremental appends.
+
+    Fixes, in order: reduce the partition count before writing (`repartition(n)`), cap file size
+    with `maxRecordsPerFile`, and run scheduled compaction — Delta `OPTIMIZE`, Iceberg
+    `rewrite_data_files`, or a plain rewrite. Compaction is maintenance, not a one-off: files
+    fragment again with every incremental write.
+  tags: [small-files, compaction, layout]
+
+- id: pyspark-basic-016
+  topic: partitioning
+  difficulty: intermediate
+  question: What does `spark.sql.shuffle.partitions` control, and how do you size it?
+  answer: |
+    It sets the number of partitions produced by a shuffle in the SQL/DataFrame engine — the
+    reducer count for `groupBy`, `join`, `distinct` and `repartition`-free exchanges. The default
+    is 200, a value from an era of much smaller clusters.
+
+    Size it from the data: aim for 100–200 MB of shuffle data per partition, and never fewer
+    partitions than 2–4× the total executor cores.
+
+    ```python
+    # 1.2 TB shuffle, 40 cores -> 120 tasks minimum, ~200 MB each
+    spark.conf.set("spark.sql.shuffle.partitions", 6000)
+    ```
+
+    Too few partitions means huge tasks, spilling and an underused cluster; too many means
+    scheduling overhead and thousands of tiny output files.
+
+    With AQE on (the default since 3.2), a good pattern is to set the count for the worst case and
+    let `spark.sql.adaptive.coalescePartitions` merge small partitions after the map stage. Note
+    that `coalescePartitions.parallelismFirst` defaults to true, so AQE will not merge as
+    aggressively as the 64 MB target suggests.
+  tags: [shuffle-partitions, tuning, aqe]
+
+- id: pyspark-basic-017
+  topic: memory
+  difficulty: advanced
+  question: How is an executor's memory divided, and where does cached data fit?
+  answer: |
+    The JVM heap is split into three regions:
+
+    - **Reserved**: 300 MB, fixed.
+    - **Unified region**: `(heap − 300 MB) × spark.memory.fraction` (0.6 by default). Inside it,
+      storage (cache) and execution (shuffle, sort, join, aggregate) share space, split 50/50 by
+      `spark.memory.storageFraction`.
+    - **User memory**: the remaining 40%, for your data structures and internal metadata.
+
+    The split inside the unified region is soft. Execution can borrow from storage and evict
+    cached blocks (LRU); storage cannot borrow from execution, it can only wait. Evicted cached
+    partitions are recomputed on next use, which is why an over-large cache silently becomes an
+    inefficient recomputation engine.
+
+    Outside the heap, `spark.executor.memoryOverhead` (max of 384 MB and 10%) holds Python
+    workers, Arrow buffers and native memory. A 16 GB executor gives about 4.7 GB of storage by
+    default — cache more than that and you are relying on eviction.
+  tags: [memory, unified-memory, storage-fraction]
+
+- id: pyspark-basic-018
+  topic: aqe
+  difficulty: intermediate
+  question: What does adaptive query execution do?
+  answer: |
+    AQE re-plans a query at shuffle boundaries, using the real sizes the map stage produced instead
+    of estimates. It is enabled by default since Spark 3.2 (`spark.sql.adaptive.enabled=true`) and
+    does three things:
+
+    1. **Coalesces shuffle partitions.** Tiny reduce partitions are merged toward
+       `spark.sql.adaptive.advisoryPartitionSizeInBytes` (64 MB), so the fixed 200 no longer
+       dictates task size.
+    2. **Switches join strategies.** If one side turns out to be small, a planned sort-merge join
+       becomes a broadcast hash join, removing a shuffle and both sorts.
+    3. **Handles skew.** Partitions above both 256 MB
+       (`skewJoin.skewedPartitionThresholdInBytes`) and 5× the median
+       (`skewedPartitionFactor`) are split into sub-partitions for sort-merge joins.
+
+    It cannot fix read-side skew, skewed aggregations, Python UDFs, small files or driver
+    bottlenecks — those are outside the query plan entirely.
+  tags: [aqe, coalesce, skew]
+
+- id: pyspark-basic-019
+  topic: udfs
+  difficulty: beginner
+  question: Why is a Python UDF so much slower than a built-in function?
+  answer: |
+    Because every row crosses the JVM/Python boundary. A built-in like `F.upper` is JVM code inside
+    the generated whole-stage pipeline: no serialisation, no function-call overhead per row. A
+    Python UDF is a separate operator (`BatchEvalPython`) that, for each row, serialises the
+    arguments, writes them to a socket, unpickles them in a worker process, calls your function,
+    pickles the result and sends it back.
+
+    Three costs stack up: per-row serialisation, the loss of codegen (the stage is split around the
+    UDF), and the loss of optimizer rules — Catalyst cannot push a filter through a function it
+    cannot see, so a filter after a UDF processes every row first.
+
+    Replacing a UDF with built-ins, a SQL expression, or a vectorised `pandas_udf` is usually the
+    single largest speedup available in a PySpark job, often an order of magnitude.
+  tags: [udf, serialisation, codegen]
+
+- id: pyspark-basic-020
+  topic: udfs
+  difficulty: intermediate
+  question: What is the difference between a regular UDF and a pandas UDF?
+  answer: |
+    Transfer format and execution shape. A regular `udf` is called once per row, with scalar
+    arguments and scalar return values, and each row is pickled across the boundary. A
+    `pandas_udf` receives a `pandas.Series` (or a batch `DataFrame`) covering up to
+    `spark.sql.execution.arrow.maxRecordsPerBatch` rows (default 10,000), transferred through
+    Arrow, and returns a Series of the same length:
+
+    ```python
+    @pandas_udf("double")
+    def zscore(s: pd.Series) -> pd.Series:
+        return (s - s.mean()) / s.std()
+    ```
+
+    Because the function sees a whole batch, the body can use numpy and vectorised pandas — that is
+    where the speed comes from, not from Arrow alone. A pandas UDF that loops row by row is slower
+    than a plain UDF.
+
+    Pandas UDFs always use Arrow regardless of `spark.sql.execution.arrow.pyspark.enabled`, which
+    only governs `toPandas` and `createDataFrame`. Nulls arrive as `NaN`/`NaT`, and integer
+    columns containing nulls become floats.
+  tags: [pandas-udf, arrow, vectorisation]
+
+- id: pyspark-basic-021
+  topic: architecture
+  difficulty: beginner
+  question: In a PySpark job, what runs on the driver and what runs on the executors?
+  answer: |
+    The driver runs your Python program and a JVM that holds the `SparkSession`, the query plans,
+    the DAG scheduler and the task scheduler. It decides what to run, splits work into stages,
+    schedules tasks, and collects results. It processes no data — unless you call `collect()`,
+    `toPandas()` or broadcast a large table, which is why those operations can kill it.
+
+    Executors are JVM processes on the cluster. They run tasks, read and write files, hold shuffle
+    output and caches. Python work happens in worker processes on the executors — one per core,
+    reused across tasks — which receive rows over a socket, run your UDFs, and send results back.
+
+    So the Python function in a UDF executes on the executors, not the driver, and the DataFrame
+    object in your program is a handle to a plan, not a copy of the data. Confusing the two is the
+    root of most "why is my laptop out of memory" incidents.
+  tags: [driver, executors, python-workers]
+
+- id: pyspark-basic-022
+  topic: caching
+  difficulty: intermediate
+  question: What is the difference between `cache()` and `checkpoint()`?
+  answer: |
+    A cache is a performance optimisation that keeps the lineage; a checkpoint is a durability
+    mechanism that cuts it.
+
+    `cache()` / `persist()` store partitions on the executors (memory, then disk). If a partition
+    is lost with an executor, Spark recomputes it from the original plan. The data disappears when
+    the application ends or you call `unpersist()`.
+
+    `checkpoint()` writes the DataFrame to a reliable location — HDFS, S3, DBFS, set with
+    `spark.sparkContext.setCheckpointDir(...)` — and truncates the lineage. It is eager: calling it
+    runs a job. Because the lineage is gone, a lost partition is read from the checkpoint instead
+    of recomputed, and the plan stops growing.
+
+    Use `cache()` for reuse within one job. Use `checkpoint()` at iteration boundaries in loops, or
+    before a long fan-out of downstream jobs where recomputing from source would be expensive.
+    `localCheckpoint()` is the middle ground: executor-local, lineage truncated, not durable.
+  tags: [cache, checkpoint, lineage]

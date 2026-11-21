@@ -1,0 +1,137 @@
+slug: pyspark
+title: PySpark
+category: data-engineering
+summary: Spark's Python API — distributed DataFrames over a JVM engine, where the hard parts are shuffles, file layout and what crosses the Python boundary.
+level: core
+relations:
+  - to: python
+    type: foundation
+    note: PySpark jobs are Python programs with Python workers on the executors; closures, pickling and per-row serialisation are what make UDFs expensive.
+  - to: parquet
+    type: uses
+    note: Parquet is the default table format, and predicate pushdown, column pruning and file sizing decide how much of it Spark actually reads.
+  - to: delta-lake
+    type: uses
+    note: Delta adds a transaction log over Parquet, which is what makes overwrite, merge, time travel and compaction safe on object storage.
+  - to: databricks
+    type: part-of
+    note: Databricks Runtime is a packaged Spark distribution; PySpark is the same API with a faster engine (Photon) and managed job, table and catalog layers around it.
+  - to: airflow
+    type: complements
+    note: Airflow decides when a PySpark job runs; PySpark decides what happens inside it. Orchestration failures and data failures are diagnosed in different places.
+  - to: sql
+    type: complements
+    note: The DataFrame API compiles to the same Catalyst plans as Spark SQL, and the two mix freely — a SQL string can be a view over DataFrames and vice versa.
+intro:
+  what: |
+    PySpark is the Python interface to Apache Spark, a distributed compute engine that runs on a
+    JVM cluster. A PySpark program is a Python driver that describes work as DataFrames — lazy,
+    immutable, schema-carrying tables — and hands that description to Spark, which plans it,
+    splits it into stages and runs it as tasks on executors.
+
+    The Python layer is thinner than it looks. Data is read, joined, aggregated and written by
+    JVM code; Python is involved when you define a UDF, call `mapPartitions`, or pull results to
+    the driver. Understanding which of those you are doing explains nearly every performance
+    difference between two jobs that look the same in a notebook.
+  why: |
+    A single machine stops being enough somewhere between a few hundred gigabytes and a few
+    terabytes, or earlier if the work is a heavy join over event data. Spark's answer is to make
+    the same code scale by moving data between machines rather than by rewriting the program:
+    you write transformations over whole tables and Spark handles partitioning, shipping and
+    retries.
+
+    PySpark matters because the people who own data pipelines already write Python. It gives
+    them the distributed engine without a Scala build, and it stays close enough to SQL that a
+    warehouse query can be ported, tuned and scheduled as one job.
+  problems:
+    - Process datasets larger than one machine's memory or disk with the same transformation code.
+    - Join and aggregate event-scale data without hand-writing distributed systems logic.
+    - Turn SQL-shaped business logic into versioned, tested, scheduled pipelines.
+    - Read and write open table formats (Parquet, Delta, Iceberg) across storage systems.
+    - Run feature engineering and model scoring next to the data instead of extracting it.
+    - Absorb machine failures and stragglers without the job failing outright.
+  where_used:
+    - Batch ETL and ELT on lakehouse storage, typically 100 GB to tens of TB per run.
+    - Lakehouse table maintenance: merges, deduplication, compaction, backfills.
+    - Feature engineering and batch scoring for ML, including pandas UDFs for grouped models.
+    - Log, clickstream and CDC processing where the volume outgrows a warehouse's ingestion path.
+    - Migration of warehouse stored procedures and legacy MapReduce/Scala jobs into maintainable Python.
+  ecosystem: |
+    PySpark sits between storage and orchestration. Below it: object storage (S3, ADLS, GCS) and
+    a table format — Parquet files, or Delta/Iceberg/Hudi when you need transactions. Above it:
+    Airflow, Dagster or a platform scheduler that starts the job; a catalog (Unity, Glue, Hive,
+    Iceberg REST) that resolves table names; and a cluster manager (Kubernetes, YARN, Databricks,
+    EMR, Dataproc) that supplies executors.
+
+    In code it borrows from both neighbours. pandas and PyArrow handle single-node work and the
+    Arrow bridge into UDFs; SQL is the same engine with a different front end. Knowing where the
+    boundary is — what stays in the JVM, what gets pickled to Python, what is a file on disk —
+    is the difference between tuning a job and guessing at it.
+  alternatives:
+    - name: DuckDB
+      note: Faster and simpler when the data fits on one machine; no cluster, no shuffle tuning.
+    - name: Polars
+      note: Single-node columnar engine with lazy plans; excellent up to the memory ceiling.
+    - name: Snowflake / BigQuery
+      note: Managed SQL warehouses — less operational work, less control over execution and file layout.
+    - name: Flink
+      note: The right tool for true streaming with per-event state; Spark's micro-batch model is a different trade.
+    - name: Dask
+      note: Python-native distributed collections that compose with the PyData stack; smaller ecosystem for SQL and table formats.
+  related: [python, sql, parquet, delta-lake, databricks, airflow]
+chapters:
+  - id: architecture
+    title: Architecture and Lazy Evaluation
+    file: chapters/01-architecture-lazy-evaluation.md
+    minutes: 12
+    level: core
+  - id: transformations-actions
+    title: Transformations, Actions and the DAG
+    file: chapters/02-transformations-actions-dag.md
+    minutes: 12
+    level: core
+  - id: partitioning-shuffle
+    title: Partitioning and Shuffle Mechanics
+    file: chapters/03-partitioning-shuffle.md
+    minutes: 14
+    level: core
+  - id: joins-and-skew
+    title: Joins, Broadcasts and Skew
+    file: chapters/04-joins-broadcast-skew.md
+    minutes: 14
+    level: advanced
+  - id: catalyst-tungsten
+    title: Catalyst and Tungsten
+    file: chapters/05-catalyst-tungsten.md
+    minutes: 13
+    level: advanced
+  - id: caching-memory
+    title: Caching, Persistence and Memory
+    file: chapters/06-caching-memory.md
+    minutes: 12
+    level: core
+  - id: file-formats-pushdown
+    title: File Formats, Parquet and Predicate Pushdown
+    file: chapters/07-file-formats-pushdown.md
+    minutes: 13
+    level: core
+  - id: aqe-tuning
+    title: Adaptive Query Execution and the Knobs That Matter
+    file: chapters/08-aqe-tuning.md
+    minutes: 14
+    level: advanced
+  - id: udfs-arrow
+    title: UDFs, Pandas UDFs and Serialisation Cost
+    file: chapters/09-udfs-pandas-arrow.md
+    minutes: 13
+    level: advanced
+  - id: production-operations
+    title: Production Operations, Monitoring and Failure Modes
+    file: chapters/10-production-operations.md
+    minutes: 14
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

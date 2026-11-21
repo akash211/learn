@@ -1,0 +1,86 @@
+concepts:
+  - title: Heap tuple header
+    detail: Every row version carries `xmin` (creator), `xmax` (deleter or locker) and `ctid` (physical address of the next version). Visibility is decided per tuple, not per row.
+  - title: Snapshot and xmin horizon
+    detail: A snapshot is `xmin`, `xmax` and the in-flight `xip` list. Nothing below the oldest snapshot any backend holds can be vacuumed, so one idle transaction freezes reclamation for the whole database.
+  - title: HOT update
+    detail: A heap-only tuple update skips index maintenance when no indexed column changed and the new version fits on the same page. `fillfactor` below 100 is what makes it possible.
+  - title: Autovacuum trigger
+    detail: A worker starts at `autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor * reltuples` dead tuples — 20% of the table by default, which is millions of rows on a large table.
+  - title: Freezing
+    detail: VACUUM rewrites old `xmin` to FrozenTransactionId so 32-bit XIDs can be reused. Anti-wraparound vacuum is forced at `autovacuum_freeze_max_age` (200M) and ignores the cost delay.
+  - title: Visibility map
+    detail: One bit per page meaning "no dead tuples here". Index-only scans trust it instead of visiting the heap, so `Heap Fetches` measures vacuum debt, not index quality.
+  - title: Leftmost prefix
+    detail: An index on `(a, b)` serves `a = ?` and `a = ? AND b > ?`, and supplies ordering for `ORDER BY b`. It cannot serve `b = ?` alone.
+  - title: GIN is lossy
+    detail: A GIN bitmap can point at pages whose rows no longer match, so `EXPLAIN` shows `Rows Removed by Index Recheck`. `fastupdate` buffers inserts in a pending list flushed by vacuum.
+  - title: BRIN needs correlation
+    detail: BRIN stores min/max per block range; it only prunes when physical order matches value order. Check `pg_stats.correlation` — near zero means the index is dead weight.
+  - title: Cost model
+    detail: Costs are dimensionless, anchored at `seq_page_cost = 1.0`. `random_page_cost = 4.0` and `effective_cache_size` are the two constants most often wrong for modern hardware.
+  - title: Extended statistics
+    detail: The planner multiplies selectivities as if columns were independent. `CREATE STATISTICS ... (dependencies, ndistinct, mcv)` captures correlation that a per-column histogram cannot.
+  - title: Generic plan
+    detail: A prepared statement uses custom plans for five executions, then a parameter-blind generic plan. On skewed data that plan is fine on average and catastrophic for the largest value.
+  - title: work_mem is per node
+    detail: It limits one sort or hash operation. A query with three sorts across 200 connections can consume 600 times the setting, and spills show as `external merge` or `Batches > 1`.
+  - title: Lock queue
+    detail: An `ALTER TABLE` takes ACCESS EXCLUSIVE, which conflicts with SELECT, and it queues ahead of later readers. Always run DDL with a `lock_timeout`.
+  - title: Partition key in unique constraints
+    detail: Indexes are partitioned with the table, so a unique constraint must include the partition key. `PRIMARY KEY (order_id)` is impossible on a table partitioned by `created_at`.
+  - title: Replication slot retention
+    detail: A slot retains WAL until its consumer confirms. An abandoned slot fills `pg_wal` and stops the primary; `max_slot_wal_keep_size` converts that into an invalidated slot instead.
+traps:
+  - Assuming a DELETE frees disk space. It sets `xmax` on every row; only `VACUUM FULL`, `pg_repack` or dropping a partition returns bytes.
+  - Leaving `random_page_cost = 4.0` on NVMe and concluding the planner refuses to use indexes — it is pricing random I/O as if it were a spinning disk.
+  - Believing REPEATABLE READ prevents write skew. It prevents lost updates by raising `40001`; only SERIALIZABLE detects the read-write dependency cycle.
+  - Running `ALTER TABLE` without `lock_timeout` on a busy table, so the ACCESS EXCLUSIVE request queues and every later SELECT waits behind it.
+  - Expecting a foreign key to index the child column. It does not, so a parent delete scans the child table and takes a lock that blocks writers.
+  - Reading `payload -> 'total'` as text and comparing it to `'100'`. The `->` operator returns jsonb; `->>` returns text, and text comparison is lexicographic.
+advanced:
+  - A prepared transaction is an xmin holder that no `pg_stat_activity` row explains — check `pg_prepared_xacts` when vacuum stalls for no visible reason.
+  - The first freeze of a large table dirties pages through hint bits, emitting full-page WAL; expect a replication lag spike the first time a table is frozen after a bulk load.
+  - Heavy `SELECT FOR UPDATE` fan-out produces multixacts, which need their own freezing and bloat `pg_multixact` in a way relation size does not show.
+  - In a nested loop, the inner node's `rows` and `actual rows` are per-loop figures. Multiply by `loops` before deciding the estimate is fine.
+  - With `synchronous_standby_names = 'FIRST 1 (a, b)'` the first standby is mandatory; if it dies, commits block. `ANY 1 (a, b)` degrades to the survivor.
+  - Setting `hot_standby_feedback = on` removes query conflicts on a replica by exporting its snapshot to the primary, which then cannot vacuum rows the replica still needs — bloat moves upstream.
+comparisons:
+  - a: VACUUM
+    b: VACUUM FULL
+    difference: VACUUM marks space reusable under SHARE UPDATE EXCLUSIVE; VACUUM FULL rewrites the table under ACCESS EXCLUSIVE and needs free disk equal to its size.
+  - a: B-tree
+    b: BRIN
+    difference: B-tree is ordered and exact, sized in gigabytes; BRIN stores min/max per block range, sized in kilobytes, and needs physical correlation to prune anything.
+  - a: jsonb_ops
+    b: jsonb_path_ops
+    difference: jsonb_ops supports `@>`, `?`, `?|` and `?&`; jsonb_path_ops supports only `@>` but is about half the size and faster for containment.
+  - a: physical replication
+    b: logical replication
+    difference: Physical ships WAL blocks and requires the same major version; logical ships row changes, allows selective tables, filters and cross-version subscribers but not DDL.
+  - a: READ COMMITTED
+    b: REPEATABLE READ
+    difference: A new snapshot per statement versus one per transaction; the latter turns concurrent updates into `40001` instead of lost updates.
+  - a: pg_dump
+    b: pg_basebackup
+    difference: Logical export, version-independent and selectively restorable, but no PITR; physical copy plus WAL is the basis of point-in-time recovery.
+  - a: HNSW
+    b: IVFFlat
+    difference: HNSW gives better recall and needs no training but builds slowly and uses more memory; IVFFlat builds fast but recall depends on `lists` and on data present at build time.
+commands:
+  - label: Show the blocking tree
+    code: SELECT pid, pg_blocking_pids(pid) AS blockers, wait_event_type, now() - xact_start AS age, left(query, 60) FROM pg_stat_activity WHERE cardinality(pg_blocking_pids(pid)) > 0 ORDER BY age DESC;
+  - label: Find transactions holding back vacuum
+    code: SELECT pid, state, backend_xmin, now() - xact_start AS age FROM pg_stat_activity WHERE backend_xmin IS NOT NULL ORDER BY age(backend_xmin) DESC LIMIT 10;
+  - label: WAL retained by replication slots
+    code: SELECT slot_name, active, wal_status, pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS retained FROM pg_replication_slots ORDER BY 4 DESC;
+  - label: Autovacuum debt per table
+    code: SELECT relname, n_live_tup, n_dead_tup, last_autovacuum, autovacuum_count FROM pg_stat_user_tables ORDER BY n_dead_tup DESC LIMIT 20;
+  - label: XID age against wraparound
+    code: SELECT datname, age(datfrozenxid) AS xid_age, round(100.0 * age(datfrozenxid) / 2000000000, 2) AS pct FROM pg_database ORDER BY 2 DESC;
+  - label: Unused indexes
+    code: SELECT relname AS table, indexrelname AS index, idx_scan, pg_size_pretty(pg_relation_size(indexrelid)) AS size FROM pg_stat_user_indexes WHERE idx_scan = 0 ORDER BY pg_relation_size(indexrelid) DESC;
+  - label: Plan with real buffers and settings
+    code: EXPLAIN (ANALYZE, BUFFERS, SETTINGS, VERBOSE) SELECT ...;
+  - label: Build an index without blocking writes
+    code: SET lock_timeout = '3s'; CREATE INDEX CONCURRENTLY idx_orders_customer_ts ON orders (customer_id, created_at DESC);

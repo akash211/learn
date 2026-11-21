@@ -1,0 +1,247 @@
+- id: pyspark-recent-001
+  topic: aqe
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: AQE has been on by default since 3.2. What should you stop tuning manually, and where does AQE still fall short?
+  answer: |
+    Since 3.2, `spark.sql.adaptive.enabled` defaults to true, and three things are handled for you:
+    coalescing shuffle partitions after the map stage, downgrading sort-merge joins to broadcast or
+    shuffled hash joins when the real sizes allow it, and splitting skewed sort-merge partitions.
+
+    So the manual work that is now mostly obsolete: hand-tuning `spark.sql.shuffle.partitions` down
+    to an exact number, forcing broadcast hints on tables whose statistics are merely missing, and
+    adding `repartition` calls purely to avoid tiny tasks. Set the shuffle count for the worst case
+    and let AQE merge.
+
+    Where it still falls short: any skew that is not a sort-merge join — `groupBy` on a hot key,
+    window functions, a single giant input file. AQE never sees read-side skew, cannot help a
+    Python UDF, and does nothing for small files or driver-side collection. And with
+    `coalescePartitions.parallelismFirst=true` (default), it deliberately keeps more partitions than
+    the 64 MB advisory target implies. That is the first setting to flip when tasks are too small.
+  tags: [aqe, defaults, tuning]
+
+- id: pyspark-recent-002
+  topic: photon
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: What does Photon actually accelerate, and what does it not?
+  answer: |
+    Photon is Databricks' vectorised query engine, written in C++ and running alongside the JVM. It
+    replaces whole-stage codegen for the operators it supports — scans, filters, projections, hash
+    aggregates, joins, sorts — processing data in columnar batches with native code and better CPU
+    cache behaviour.
+
+    It does not accelerate everything, and knowing the boundary is the interview point:
+
+    - **Python UDFs** still run in Python worker processes. Photon can speed up the scan feeding
+      them, but the UDF itself is unchanged — which is why "rewrite the UDF" often beats "turn on
+      Photon".
+    - **I/O and shuffle** are still disk and network bound. Photon reduces CPU time per row, not
+      bytes moved.
+    - **Unsupported operators** fall back to Spark's JVM engine, and the transition has a cost, so
+      plans that flip between engines repeatedly gain less.
+
+    Photon is a Databricks Runtime feature, not part of open-source Spark. On CPU-bound SQL
+    workloads it is often a large win; on I/O-bound or Python-heavy jobs the gain is modest.
+  tags: [photon, databricks, vectorised]
+
+- id: pyspark-recent-003
+  topic: lakehouse
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: Why has plain Parquet stopped being enough for production tables?
+  answer: |
+    Because Parquet is a file format, not a table. It has no transaction log, so it cannot give you
+    atomic commits across many files, concurrent writers, deletes or updates, or a consistent view
+    while a job is rewriting data.
+
+    In practice that shows up as: a failed overwrite leaving half a table behind, readers seeing a
+    mixture of old and new files, `MERGE` implemented as "rewrite the whole partition", and no way
+    to list a table's current files without a full directory scan. On object storage, where
+    listing is eventually consistent in spirit and expensive in practice, those are not theoretical
+    problems.
+
+    Delta Lake, Iceberg and Hudi add a metadata log: commits are atomic, statistics live in the log
+    rather than only in footers, and features like time travel, deletion vectors and clustering
+    become possible. The cost is a metadata layer to maintain — checkpoints, compaction of the log,
+    and `VACUUM` — which is why "just use Delta" is not the end of the operational story.
+  tags: [delta-lake, iceberg, table-format]
+
+- id: pyspark-recent-004
+  topic: skew
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: Walk me through diagnosing and fixing skew in a production join.
+  answer: |
+    Diagnose first: the Spark UI stage summary shows `Shuffle Read Size` max versus median, and
+    task duration max versus the 75th percentile. If max is many times the median, it is skew. Then
+    quantify the key distribution — `groupBy(key).count().orderBy(desc("count")).show(20)` — and
+    check whether nulls or a default value dominate.
+
+    Fix in order of cost:
+
+    1. **Remove null keys** before the join. They never match, but they all hash to one partition.
+    2. **Broadcast the small side** if it fits. No shuffle means no skew.
+    3. **Split hot keys out** and broadcast a filtered slice of the dimension for those keys, then
+       union with the normal path.
+    4. **Salt** the large side and replicate the small side N times — effective, but it multiplies
+       the dimension and must be applied consistently.
+    5. **Let AQE split** skewed sort-merge partitions (256 MB and 5× median by default), which
+       handles the common case without code changes.
+
+    Say what you would measure after each step, and note that aggregation skew is not covered by
+    AQE, so salting may still be needed.
+  tags: [skew, salting, aqe]
+
+- id: pyspark-recent-005
+  topic: cost
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: A Spark job's cost doubled with flat data volume. How do you find and fix the cause?
+  answer: |
+    Separate compute cost from data cost. Flat input volume with doubled cost means either more
+    cluster time or more cluster size, and the Spark UI tells you which: stage duration, shuffle
+    bytes, spill, and executor hours.
+
+    The usual suspects, in order:
+
+    - **Shuffle growth** from a changed join strategy or an extra `repartition`. Compare shuffle
+      write bytes per run, not just duration.
+    - **File-count growth** — an unmaintained table with 300,000 small files pays listing and
+      per-file overhead on every run, and the cost appears as planning time and task count.
+    - **Lost pruning** — a schema change that turned a direct filter into a cast or a UDF, so the
+      job now reads 20× the bytes.
+    - **Skew** introduced by a new hot key, which shows as one straggler and a long tail.
+    - **Over-provisioning** — autoscaling to a large cluster for a job that no longer needs it, or
+      idle clusters billed by the hour.
+
+    Fix the cause, then re-measure cost per TB processed. A tuning change that halves wall time but
+    doubles cluster size has not saved money.
+  tags: [cost, tuning, monitoring]
+
+- id: pyspark-recent-006
+  topic: udfs
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: What changed with Arrow-optimized Python UDFs in Spark 3.5, and when should you use them?
+  answer: |
+    Spark 3.5 added `spark.sql.execution.pythonUDF.arrow.enabled` (default false). With it on, a
+    regular Python UDF's inputs and outputs are transferred as Arrow batches instead of one pickled
+    row at a time. The function is still called once per row — this is a serialisation
+    optimisation, not vectorisation — but most of the socket-and-pickle overhead disappears.
+
+    Use it when the logic must stay row-at-a-time: complex branching, a third-party Python library
+    that does not vectorise, or code shared with a non-Spark service. In those cases it is a
+    straightforward win with no code change.
+
+    Do not use it as a substitute for vectorisation. If the logic can be expressed over a
+    `pandas.Series` or a numpy array, a `pandas_udf` is still substantially faster because it
+    amortises the Python call across a whole batch. And if the logic exists in
+    `pyspark.sql.functions`, that beats both — it stays inside whole-stage codegen with no Python
+    boundary at all.
+  tags: [arrow, udf, spark-3.5]
+
+- id: pyspark-recent-007
+  topic: architecture
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: What is Spark Connect, and what does it change about how you build PySpark applications?
+  answer: |
+    Spark Connect separates the client from the driver. Instead of your Python process talking to a
+    co-located JVM over Py4J, it sends a logical plan over gRPC to a remote Spark server that
+    executes it. The client becomes a thin library: no JVM, no Spark jars, no version-matched
+    Python workers on the driver machine.
+
+    Introduced in 3.4 and increasingly the default path in 4.0, it changes several things:
+
+    - **Upgrades decouple.** A laptop can run a client library against a cluster running a
+      different Spark version, within the protocol's compatibility window.
+    - **Embedding gets easy.** Any service that can speak gRPC can submit Spark work — notebooks,
+      IDEs, custom applications — without shipping Spark.
+    - **Isolation improves.** A client crash does not take the driver with it; the server survives
+      and can serve other sessions.
+    - **Some APIs lag.** Anything that reaches into the JVM (`df._jdf`, `spark._jsc`, some
+      third-party connectors) may not work, and custom UDFs still need their dependencies on the
+      server.
+
+    For most jobs the code is unchanged; the operational model is what shifts.
+  tags: [spark-connect, architecture, grpc]
+
+- id: pyspark-recent-008
+  topic: behaviour
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: ANSI mode is becoming the default. What breaks when `spark.sql.ansi.enabled` is true?
+  answer: |
+    ANSI mode replaces Spark's silent, permissive arithmetic with standard SQL behaviour. In 3.5 it
+    is still off by default; Databricks Runtime enables it, and Spark 4.0 turns it on by default.
+    The changes that break pipelines:
+
+    - **Invalid casts throw.** `cast("abc" as int)` used to return null; now it raises
+      `CAST_INVALID_INPUT`. Use `try_cast` where nulls are the intended result.
+    - **Overflow throws** instead of wrapping. `int` + `int` past 2,147,483,647 raises
+      `ARITHMETIC_OVERFLOW`; widen the type instead.
+    - **Division by zero throws** instead of returning null.
+    - **Array index out of bounds throws** instead of returning null.
+    - **Ambiguous string-to-number conversions** are stricter about whitespace and formats.
+
+    The migration is mostly mechanical — `try_cast`, `try_divide`, explicit widening — but it
+    surfaces latent data-quality problems that the old behaviour hid. That is the point: silent
+    nulls were corrupting aggregates without anyone noticing.
+  tags: [ansi, spark-4, type-safety]
+
+- id: pyspark-recent-009
+  topic: layout
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: Is Hive-style partitioning still the right layout for a large table?
+  answer: |
+    Only when the cardinality is low and the column is always filtered. Partitioning by date on a
+    multi-terabyte event table still works: it gives directory-level pruning and a natural unit for
+    backfills. Partitioning by anything with thousands of distinct values — `user_id`, `order_id`,
+    even `hour` on a sparse table — produces a directory explosion and a planning phase that costs
+    more than the scan it saves.
+
+    The direction since 2023 has been away from physical partitioning toward clustering that the
+    engine manages: Delta's liquid clustering (`CLUSTER BY`), Iceberg's hidden partitioning and
+    sort orders, and Z-order-style data skipping. These let you cluster on high-cardinality columns
+    without creating directories, and change the clustering key later without rewriting the table.
+
+    The practical guidance: partition only when a single value prunes at least an order of
+    magnitude of data, cluster on the columns you filter most, and keep files at 128 MB–1 GB. Then
+    measure bytes read per query — that number, not the layout style, tells you whether it worked.
+  tags: [partitioning, liquid-clustering, layout]
+
+- id: pyspark-recent-010
+  topic: reliability
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: How do you make a lakehouse write idempotent enough to re-run safely?
+  answer: |
+    Assume every job runs at least twice. Three mechanisms, depending on the write shape:
+
+    **Partition overwrite.** `spark.sql.sources.partitionOverwriteMode=dynamic` makes
+    `mode("overwrite")` replace only the partitions present in the new data. Without it, the
+    default `static` mode replaces the whole table's partitions — the classic backfill disaster.
+
+    **MERGE for upserts.** Deduplicate the source by key first, or Delta raises "multiple source
+    rows matched". Add a `WHEN MATCHED ... WHEN NOT MATCHED` pair, and a delete condition if the
+    source is authoritative.
+
+    **Idempotent append.** Delta's `txnAppId` and `txnVersion` options record the transaction in
+    the log, so replaying the same version is a no-op rather than a duplicate append. This is the
+    cheapest exactly-once pattern for scheduled streaming and retried batch jobs.
+
+    Whatever the mechanism, define the key, verify uniqueness, and test the re-run explicitly. An
+    idempotency claim that has never been tested by running the job twice is a hope.
+  tags: [idempotency, merge, delta]

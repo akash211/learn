@@ -1,0 +1,128 @@
+slug: postgresql
+title: PostgreSQL
+category: databases
+summary: The open-source relational engine whose MVCC, planner, WAL and vacuum are all visible — and therefore all tunable.
+level: core
+relations:
+  - to: sql
+    type: uses
+    note: PostgreSQL is the engine this module's SQL is executed on; everything here is what happens after the parser accepts the statement.
+  - to: duckdb
+    type: alternative
+    note: DuckDB borrows the PostgreSQL type system and SQL dialect for single-node analytics; choose it for columnar scans of files, PostgreSQL for concurrent OLTP.
+  - to: snowflake
+    type: alternative
+    note: Snowflake is the analytical counterpart — elastic compute and micro-partition pruning instead of heap tables, B-trees and vacuum.
+  - to: dbt
+    type: complements
+    note: dbt models are usually built on PostgreSQL in smaller stacks; the transformation layer sits on top of the storage and locking behaviour described here.
+intro:
+  what: |
+    PostgreSQL is a general-purpose relational database with an unusually honest
+    architecture: the things that decide performance are inspectable. Row versions live in
+    heap pages you can read with `pageinspect`, the planner's estimates are in
+    `pg_statistic`, the write-ahead log is a directory of 16 MB segments, and the background
+    maintenance that keeps all of it healthy is a set of GUCs with names you can type.
+
+    This module is about that machinery rather than about SQL syntax. It assumes you can
+    already write joins and aggregates, and covers what happens underneath: how a tuple becomes
+    visible, why a table grows when nothing is inserted, how each index access method is
+    physically different, what the cost model is actually comparing, and what an operator has
+    to monitor at 03:00. Examples use a small schema of `accounts`, `orders` and `events`, and
+    every setting quoted is a real one with its shipped default.
+  why: |
+    PostgreSQL is the default system of record for new applications, and most of its
+    production failures are not query-writing failures. They are a long-running transaction
+    holding back vacuum until the disk fills, a plan that flipped because statistics were
+    stale, an abandoned replication slot retaining WAL, or a connection count that multiplied
+    with the number of pods. Each of those is diagnosable from a view or a GUC, but only if
+    you know the mechanism behind it.
+
+    It is also the engine everything else is measured against. Understanding PostgreSQL's
+    MVCC, vacuum and planner makes the design choices of columnar warehouses, MySQL's
+    undo-log MVCC and SQL Server's locking reads legible by contrast.
+  problems:
+    - Serving concurrent reads and writes without readers waiting on writers, via row versions.
+    - Reclaiming space from dead versions without stopping the workload.
+    - Choosing a plan for a query from statistics rather than from the literal text.
+    - Surviving crash and disk loss with a defined recovery point, not a hope.
+    - Running the same engine as primary, replica, and analytical source through logical replication.
+  where_used:
+    - Application backends as the transactional system of record (SaaS, fintech, internal tools).
+    - Geospatial and time-series workloads through PostGIS, TimescaleDB and BRIN-indexed append tables.
+    - Search and retrieval alongside relational data through GIN, full-text search and pgvector.
+    - Analytics off a replica or a logical replication stream, and as the source for CDC into warehouses.
+  ecosystem: |
+    PostgreSQL sits under the application tier and beside the analytical stack. PgBouncer
+    fronts it for connection multiplexing; Patroni, repmgr or a managed control plane handles
+    failover; pgBackRest, Barman or WAL-G handle backup and PITR; Debezium or native logical
+    replication carries changes into Kafka, Snowflake or DuckDB. Extensions are the usual way
+    capability is added — `pg_stat_statements` and `auto_explain` for observability, `pgvector`
+    for embeddings, `pg_partman` for partition maintenance — and the extension list is the
+    first thing to check before any major-version upgrade.
+  alternatives:
+    - name: MySQL / InnoDB
+      note: Simpler replication topology and a smaller tuning surface; undo-log MVCC and clustered primary keys instead of heap plus vacuum.
+    - name: SQL Server
+      note: Stronger built-in tooling and locking reads by default; licensing cost and a different concurrency model.
+    - name: Snowflake / BigQuery
+      note: Far better for large analytical scans; no per-row OLTP, no indexes, no vacuum to operate.
+    - name: SQLite
+      note: Embedded and zero-operations; single writer, no replication, no concurrent maintenance story.
+  related: [sql, duckdb, snowflake, dbt]
+chapters:
+  - id: mvcc-tuple-visibility
+    title: MVCC and Tuple Visibility
+    file: chapters/01-mvcc-tuple-visibility.md
+    minutes: 14
+    level: advanced
+  - id: vacuum-autovacuum-bloat
+    title: Vacuum, Autovacuum, Bloat and Freezing
+    file: chapters/02-vacuum-autovacuum-bloat.md
+    minutes: 16
+    level: advanced
+  - id: indexing-deep-dive
+    title: Indexing Deep Dive
+    file: chapters/03-indexing-deep-dive.md
+    minutes: 16
+    level: advanced
+  - id: planner-statistics
+    title: The Planner and Statistics
+    file: chapters/04-planner-statistics.md
+    minutes: 15
+    level: advanced
+  - id: connections-pooling
+    title: Connections, Pooling and Limits
+    file: chapters/05-connections-pooling.md
+    minutes: 12
+    level: core
+  - id: locking-deadlocks-isolation
+    title: Locking, Deadlocks and Isolation in Practice
+    file: chapters/06-locking-deadlocks-isolation.md
+    minutes: 15
+    level: advanced
+  - id: partitioning-inheritance
+    title: Partitioning and Table Inheritance
+    file: chapters/07-partitioning-inheritance.md
+    minutes: 14
+    level: advanced
+  - id: jsonb-semi-structured
+    title: JSONB and Semi-Structured Data
+    file: chapters/08-jsonb-semi-structured.md
+    minutes: 13
+    level: core
+  - id: replication
+    title: Replication — Streaming, Logical, and Slots
+    file: chapters/09-replication.md
+    minutes: 16
+    level: advanced
+  - id: operations-backups-upgrades
+    title: Operations — Backups, PITR, Monitoring, Upgrades
+    file: chapters/10-operations-backups-upgrades.md
+    minutes: 16
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

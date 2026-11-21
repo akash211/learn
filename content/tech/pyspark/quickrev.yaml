@@ -1,0 +1,90 @@
+concepts:
+  - title: Lazy plan
+    detail: "A DataFrame is a logical plan plus a schema. Transformations append nodes; only actions (`show`, `count`, `collect`, `write`) create jobs. Schema inference on `read` is the exception — it touches storage immediately."
+  - title: Narrow vs wide
+    detail: "Narrow transformations compute each output partition from one input partition (`select`, `filter`, `coalesce`); wide ones require a shuffle (`groupBy`, `join`, `distinct`, `orderBy`, `repartition`). Wide steps are stage boundaries."
+  - title: Task equals partition
+    detail: "A stage runs one task per partition, and an executor core runs one task at a time. Effective parallelism is `min(partitions, cores)` — extra partitions queue, missing partitions idle the cluster."
+  - title: Shuffle lifecycle
+    detail: "Map tasks partition, sort and spill output to local disk (data file plus index file); reducers fetch blocks over the network, decompress and merge. Files vanish when executors do, which is why a shuffle service matters."
+  - title: Hash partitioning
+    detail: "`pmod(murmur3_hash(keys), n)` decides the bucket. Same key means same partition, which is what makes `groupBy` and joins correct — and what makes a hot key a hot task."
+  - title: Shuffle partition count
+    detail: "`spark.sql.shuffle.partitions` defaults to 200. Size from `shuffle_bytes / 150 MB`, floored at 2–4× total cores, and let AQE coalesce upward."
+  - title: AQE defaults
+    detail: "On since 3.2. Coalesces partitions, switches join strategies using real sizes, and splits skewed sort-merge partitions above 256 MB and 5× the median."
+  - title: Broadcast threshold
+    detail: "`spark.sql.autoBroadcastJoinThreshold` is 10 MB. Under it, the small side is collected to the driver and shipped to every executor: no shuffle, but driver and executor memory both pay."
+  - title: Sort-merge join
+    detail: "Shuffle both sides by key, sort each partition, merge. No size assumption, spills safely, costs two shuffles and two sorts — the default when neither side is small."
+  - title: Skew signature
+    detail: "Task duration max ≫ median, or shuffle read max ≫ median, with the stage stuck at n−1/n. One partition carries a hot key; the rest of the cluster waits."
+  - title: Catalyst phases
+    detail: "Analysis resolves names and types, logical rules rewrite the plan (pushdown, pruning, folding), physical planning picks operators and join strategies, codegen compiles them."
+  - title: Whole-stage codegen
+    detail: "Fused operators compile into one Java method per stage, marked `*(n)` in `explain()`. A break in numbering means something — usually a Python UDF — could not be fused."
+  - title: Tungsten row format
+    detail: "`UnsafeRow` stores a row as bytes: null bitmap, fixed-width fields, offsets for variable-length data. Sorting, hashing and shuffling operate on bytes, avoiding per-field Java objects and GC pressure."
+  - title: Unified memory
+    detail: "`(heap − 300 MB) × 0.6` is shared by execution and storage, split 50/50 by `spark.memory.storageFraction`. Execution evicts cache; cache never evicts execution."
+  - title: Parquet pruning
+    detail: "Partition directories prune files, footer min/max statistics prune row groups, and column pruning reads only referenced columns. All three require a direct predicate on the raw column."
+  - title: Cache vs checkpoint
+    detail: "A cache keeps lineage and lives on executors; a checkpoint writes to reliable storage, is eager, and truncates lineage. Cache for reuse, checkpoint for long chains."
+
+traps:
+  - "Thinking `cache()` is eager. It marks the plan; the first action pays for both computation and storage."
+  - "Setting `spark.sql.shuffle.partitions` equal to the core count. That leaves no headroom for stragglers and produces multi-GB tasks."
+  - "Assuming AQE fixes all skew. It splits skewed sort-merge join partitions only — not aggregations, windows or single skewed input files."
+  - "Broadcasting anything under a gigabyte by raising `autoBroadcastJoinThreshold`. The driver collects it first, and every task may build its own hash map."
+  - "Believing a filter is pushed into the scan when a Python UDF or a cast sits between the filter and the column."
+  - "Treating `coalesce` and `repartition` as interchangeable. `coalesce` cannot increase parallelism and preserves existing skew."
+
+advanced:
+  - "`spark.sql.adaptive.coalescePartitions.parallelismFirst` defaults to true, so AQE respects the 1 MB minimum rather than the 64 MB target. Set it false when tasks are too small."
+  - "A cache is keyed to an analysed plan, not to data. Rebuilding a DataFrame from the same source produces a cache miss, and overwriting files leaves the cache serving stale rows until `unpersist()`."
+  - "Salting a deduplication key silently changes semantics: rows of one key spread across salts can no longer be compared by a window function."
+  - "`Dynamic partition pruning` needs a broadcast-able dimension, statistics on the join key, and the partition column surviving into the join. A cast on it disables the optimisation."
+  - "Bucketing enables shuffle-free sort-merge joins only with identical bucket counts on managed Hive tables; Delta and Iceberg do not support it, and AQE plus good layout replaced most uses."
+  - "Executor overhead (`max(384 MB, 10%)`) is where Python workers, Arrow buffers and native memory live. A PySpark job killed for exceeding container memory is usually an overhead problem, not a heap problem."
+
+comparisons:
+  - a: repartition
+    b: coalesce
+    difference: "Full shuffle, can grow or shrink, evens distribution vs narrow merge that can only shrink and preserves skew."
+  - a: cache
+    b: checkpoint
+    difference: "Executor memory/disk, lazy, lineage kept and lost partitions recomputed vs reliable storage, eager, lineage truncated."
+  - a: broadcast hash join
+    b: sort-merge join
+    difference: "No shuffle but the small side must fit driver and executor memory vs two shuffles and two sorts with no size assumption."
+  - a: DataFrame
+    b: RDD
+    difference: "Schema, Catalyst optimisation, codegen and vectorised reads vs arbitrary Python with no optimisation and JVM object overhead."
+  - a: udf
+    b: pandas_udf
+    difference: "One pickled row per call vs Arrow batches and vectorised pandas/numpy; pandas UDFs still lose codegen and pushdown."
+  - a: partitionBy
+    b: repartition
+    difference: "`partitionBy` is a write-time directory layout for pruning; `repartition` is an in-job redistribution that costs a shuffle."
+  - a: Delta
+    b: Parquet
+    difference: "Transaction log with atomic commits, merges, time travel and statistics vs bare files with no concurrency or delete semantics."
+
+commands:
+  - label: Submit a job with Python dependencies
+    code: spark-submit --master yarn --deploy-mode cluster --py-files deps.zip job.py --date 2026-01-01
+  - label: Inspect the optimised and physical plan
+    code: df.explain("formatted")   # or df.explain("cost") with CBO statistics
+  - label: Set shuffle parallelism for a run
+    code: spark.conf.set("spark.sql.shuffle.partitions", "4000")
+  - label: Make AQE respect the partition size target
+    code: spark.conf.set("spark.sql.adaptive.coalescePartitions.parallelismFirst", "false")
+  - label: Find skew by shuffle partition
+    code: df.groupBy(F.spark_partition_id()).count().orderBy(F.desc("count")).show(10)
+  - label: Refresh table statistics for CBO
+    code: spark.sql("ANALYZE TABLE db.orders COMPUTE STATISTICS FOR ALL COLUMNS")
+  - label: Compact a Delta table
+    code: spark.sql("OPTIMIZE db.events ZORDER BY (customer_id)")
+  - label: Inspect table size, files and partitions
+    code: spark.sql("DESCRIBE DETAIL db.events").select("numFiles", "sizeInBytes", "partitionColumns").show()

@@ -1,0 +1,227 @@
+- id: docker-scn-001
+  title: A 1.4 GB image with twelve-minute builds, deployed forty times a day
+  technologies: [docker]
+  difficulty: intermediate
+  prompt: |
+    A Python API image is 1.4 GB and a clean build takes twelve minutes. The team deploys about
+    forty times a day, so CI spend is significant and developers have started batching changes to
+    avoid pushing. The Dockerfile is forty lines: a full `python:3.12` base, `apt-get install` of
+    build tools and `libpq-dev`, `COPY . .`, then `pip install -r requirements.txt`, then
+    `pip install -e .`. There is no `.dockerignore`; the repository contains a 600 MB `data/`
+    directory of test fixtures and a checked-in `.venv`. Gzip compression is disabled on push
+    because it "made the build slower".
+  approach: |
+    Measure before changing anything. `docker image history --no-trunc` names the large layers;
+    `docker build --progress=plain` shows which steps miss the cache and how long the context
+    upload takes.
+
+    1. Fix the cache order first, because it is the cheapest change with the largest effect:
+       copy `requirements.txt` (or the lock file), install, then `COPY . .`. Today every source
+       edit reinstalls the entire dependency tree.
+    2. Write a `.dockerignore` for `.git`, `data/`, `.venv`, `__pycache__`, `.pytest_cache` and
+       local env files. The 600 MB of fixtures are uploaded on every build before the first
+       instruction runs, which alone can be minutes.
+    3. Multi-stage: a builder stage with `build-essential` and `libpq-dev`, and a runtime stage on
+       `python:3.12-slim` that copies only the virtualenv and the application. The compilers and
+       headers are the bulk of the size and most of the CVE count.
+    4. Add `--mount=type=cache,target=/root/.cache/pip` to the install step so repeated builds reuse
+       downloaded wheels, and `--cache-to type=registry` (or the CI cache) so a cold runner is not
+       actually cold.
+    5. Re-enable compression and check the result: the goal is a runtime image under 250 MB and a
+       warm rebuild under a minute. Then add the size delta to CI so it cannot silently regress.
+  red_flags:
+    - Adding more CI runners or a bigger machine instead of fixing the Dockerfile.
+    - Squashing the image to hide the size, which destroys layer sharing and provenance.
+    - Deleting `data/` from the repository as the only fix, without a `.dockerignore` to prevent it
+      coming back.
+    - Switching to Alpine to save size when the dependency tree needs compilation.
+    - Copying the host virtualenv into the image instead of building one inside a stage.
+
+- id: docker-scn-002
+  title: A nightly batch job is OOM-killed at the same point every night
+  technologies: [docker]
+  difficulty: advanced
+  prompt: |
+    A nightly pandas job runs as a container with `--memory 2g` on a 32 GB host. It processes a
+    4 GB Parquet file, joins it against a 900 MB dimension table, writes aggregates to Postgres.
+    For two weeks it has been killed around 70% of the way through, with exit code 137. The host
+    reports 20 GB free. Raising the limit to 4 GB moved the failure to 90% rather than fixing it.
+    The container shows `OOMKilled: true`; CPU peaks at 1.2 cores and the job has no streaming
+    path.
+  approach: |
+    Confirm the mechanism, then find the allocation, not the limit.
+
+    1. `docker inspect --format '{{.State.OOMKilled}}'` and `dmesg -T` confirm the cgroup OOM killer
+       rather than an application abort. `docker stats` on a smaller input plus
+       `memory.current` over time shows whether memory is flat-then-spike (allocation) or steadily
+       rising (leak or unbounded cache).
+    2. The likely cause is that the whole file is materialised: `pd.read_parquet` loads everything,
+       and `merge` creates a second full copy, plus the result. Peak RSS is roughly source plus
+       join output plus overhead, which is why 4 GB moved the finish line instead of removing it.
+    3. Fix the shape of the work: read in row groups or with `pyarrow.dataset` and process
+       partitions, push the join's filter columns down, and aggregate before returning. A job that
+       needs the whole table in memory needs a distributed engine, not a bigger container.
+    4. Size the limit from measurement: peak working set plus 20–30% headroom, and remember page
+       cache counts toward `memory.max` but is reclaimable, so a container sitting at 95% is not
+       necessarily about to die.
+    5. Add a guard so the next regression is visible: log `ru_maxrss` or emit
+       `memory.current`, and fail the job on a threshold rather than being killed.
+  red_flags:
+    - Raising the limit as the fix and calling it done — twice.
+    - Blaming the host's free memory, which is unrelated to a cgroup limit.
+    - Setting `--memory-swap` higher so the job "fits", turning an OOM into an hour of thrash.
+    - Rewriting in another language before looking at the read pattern.
+    - Adding `docker restart` or a scheduler retry so the failure is less visible.
+
+- id: docker-scn-003
+  title: A Compose stack works for hours, then the API cannot reach Postgres
+  technologies: [docker, postgresql]
+  difficulty: intermediate
+  prompt: |
+    A local/staging stack runs `api`, `db` and `redis` from one `compose.yaml`. The API connects
+    using `postgresql://shop:shop@db:5432/shop`. It works after `docker compose up`, then fails
+    after a few hours of idling with `connection refused` and occasionally
+    `could not translate host name "db"`. Restarting only the API fixes it. Nothing in the
+    application changed. Someone recently ran `docker compose up -d` after an image rebuild,
+    which recreated the `db` container. The API has `depends_on: [db]` and no healthcheck of its
+    own.
+  approach: |
+    Two failures are being conflated: a stale connection pool and DNS resolution after the
+    database container was recreated with a new IP.
+
+    1. Reproduce, then separate the paths. From inside the API container, `getent hosts db` tests
+       DNS and `ss -lntp` on the db container confirms the listener. If resolution works but
+       connections fail, the pool is holding sockets to a container that no longer exists.
+    2. Check history: `docker events --since 12h --filter container=db` and `docker compose ps`
+       show the recreate, and `docker inspect` shows the new container ID and IP. Any client that
+       resolved `db` once at startup — or cached DNS indefinitely — is now pointing at a dead
+       address.
+    3. Fix the pool: enable validation before checkout (`pool_pre_ping` in SQLAlchemy,
+       `testOnBorrow`/`validationQuery` in Java pools), set a short `max_lifetime`, and make the
+       initial connection retry with backoff. A pool that never revalidates is a latent outage
+       after every database restart, in Compose and in Kubernetes alike.
+    4. Fix the topology awareness: `depends_on` should use `condition: service_healthy` against a
+       `pg_isready` healthcheck, so the API does not start against a database still initialising.
+    5. Prevent the cause: give the stack a restart policy that keeps the API alive through a
+       dependency blip, and avoid recreating stateful services as a side effect of unrelated
+       rebuilds (`docker compose up -d api` targets one service).
+  red_flags:
+    - Adding `restart: always` to the API so the symptom disappears every few hours.
+    - Hardcoding the database container's IP.
+    - Increasing the connection pool size.
+    - Concluding "Docker DNS is broken" without checking whether the client caches resolution.
+    - Recreating everything with `down`/`up` as the fix, which loses the database volume's state if
+      `-v` is used.
+
+- id: docker-scn-004
+  title: arm64 images fail with exec format error and take forty minutes to build
+  technologies: [docker, kubernetes]
+  difficulty: advanced
+  prompt: |
+    A service builds on amd64 CI runners and deploys to a mixed cluster with Graviton (arm64)
+    nodes. Two problems appeared at once. Pods on arm64 nodes crash with
+    `exec format error`, and the workaround — adding `--platform linux/amd64,linux/arm64` to the
+    build — takes forty minutes instead of six and occasionally fails with a timeout during
+    `pip install`. The team also notices that after adding the flag, `docker run` locally uses the
+    amd64 image on an M2 laptop.
+  approach: |
+    Separate the correctness problem from the performance problem; they have different fixes.
+
+    1. Correctness: inspect what was published with `docker buildx imagetools inspect`. If there is
+       a single manifest rather than an index with a `linux/arm64` entry, the build never produced
+       a multi-platform image. `exec format error` is the kernel saying the binary is the wrong
+       architecture, not a missing library.
+    2. Check the builder: the default `docker` driver cannot build other platforms. Create a
+       `docker-container` builder (`docker buildx create --driver docker-container --use`) and
+       ensure QEMU binfmt is registered on the runner.
+    3. Performance: emulated arm64 compilation is roughly an order of magnitude slower. Two
+       legitimate answers — native arm64 runners per architecture, or cross-compilation where the
+       toolchain supports it (`FROM --platform=$BUILDPLATFORM` in the builder stage with
+       `$TARGETARCH`, so the compiler runs natively and only the final artefact is arm64).
+    4. The `pip install` timeout under emulation usually means a dependency is compiling from
+       source. Prefer wheels for the target platform, or build wheels once in a native stage and
+       copy them.
+    5. Local behaviour: `docker run` on an arm64 host pulls the matching manifest entry when one
+       exists. If it ran amd64, the published image had no arm64 variant or was built with
+       `--load`, which is single-platform. Push multi-platform builds with `--push`, never `--load`.
+  red_flags:
+    - Pinning `platform: linux/amd64` on the whole deployment to avoid the problem.
+    - Adding `--platform` without checking that an index was actually published.
+    - Running the build on a privileged host and calling the QEMU slowness unexpected.
+    - Using `--load` for a multi-platform build and wondering where the second platform went.
+    - Blaming the base image before inspecting the manifest list.
+
+- id: docker-scn-005
+  title: A production credential is found inside a published image layer
+  technologies: [docker]
+  difficulty: advanced
+  prompt: |
+    A security scan flags an AWS access key inside an image in a shared registry. The key was used
+    during a build eighteen months ago to pull a private package, then removed in a later
+    Dockerfile line that deletes the config file. The image has been pulled by staging and
+    production for a year; 40 tags point at related digests. The registry is readable by every
+    engineer in the company. The team's first instinct is to delete the affected tags and rebuild.
+  approach: |
+    Order matters: contain, rotate, then clean up. Deleting tags does not delete layers other
+    digests still reference, and it removes the evidence you need.
+
+    1. Scope it: identify every digest containing the secret (`docker history`, or pull and inspect
+       layer contents), every repository it was pushed to, and the credential's blast radius in the
+       cloud provider's audit logs — was it used, from where, when.
+    2. Rotate the credential immediately and revoke the old one. This is the only step that
+       actually removes risk; everything else is hygiene. Assume it is compromised, because it has
+       been readable for a year.
+    3. Rebuild without the secret and republish. The correct mechanism is a BuildKit secret mount
+       (`RUN --mount=type=secret,...`), which never writes the value to a layer or to history. A
+       `RUN rm` in a later layer does not remove bytes from the earlier one.
+    4. Delete the affected manifests from the registry, not just the tags, and re-run garbage
+       collection so the layers are unreachable. Understand that node-level caches may still hold
+       them until pruned.
+    5. Prevent recurrence: `.dockerignore` for local env files, a secret scanner (gitleaks,
+       trufflehog) in pre-commit and CI, a check that fails the build when a high-entropy string
+       appears in a layer, and a documented rule that build-time credentials go through
+       `--secret` and runtime credentials never enter the image at all.
+  red_flags:
+    - Deleting the tags and declaring the incident closed.
+    - Adding `RUN rm config.json` and calling the layer clean.
+    - Rotating the key after the postmortem rather than during the incident.
+    - Rebuilding the image but leaving the old digests pullable.
+    - Adding the registry to a private network as the remediation.
+
+- id: docker-scn-006
+  title: A production host fills its disk and the Docker daemon stops working
+  technologies: [docker]
+  difficulty: intermediate
+  prompt: |
+    A single-host deployment has been running for fourteen months. One morning containers start
+    failing to start and `docker pull` errors with `no space left on device`. Monitoring shows the
+    root filesystem at 100%. `docker system df` reports 61 GB of images, 4 GB of containers, 9 GB
+    of volumes and 22 GB of build cache. `/var/lib/docker/containers` contains several 12 GB
+    `json-file` logs from a chatty service. There is no log rotation configured, and the deploy
+    script runs `docker system prune -f` weekly, which has not helped.
+  approach: |
+    Free space safely first, then remove the cause so it does not recur.
+
+    1. Confirm what is actually consuming space: `du -sh /var/lib/docker/*` plus
+       `docker system df -v`. Deleted-but-open log files held by a running process
+       (`lsof +L1`) explain a gap between `du` and `df` and require restarting that container to
+       release.
+    2. Reclaim only the safe categories: dangling images, old build cache
+       (`docker builder prune --filter until=168h`), and stopped containers that are genuinely
+       unwanted. Do not run `docker volume prune`; the 9 GB of volumes may include a database, and
+       `system prune -a --volumes` would destroy it.
+    3. Fix the logs, which are the growth engine. Set `log-driver: local` (or `json-file` with
+       `max-size` and `max-file`) in `/etc/docker/daemon.json` and recreate the affected
+       containers — log options are applied at container creation, not to running ones.
+    4. Check retention: registry-side policies, a `--filter until=` on automated image pruning, and
+       a cap on build cache (`docker builder prune --keep-storage 10GB`) on build hosts.
+    5. Add capacity and alerting: move `data-root` to a dedicated volume with room to grow, alert at
+       80%, and track the size trend — a host that fills once will fill again in the same number of
+       months without a retention policy.
+  red_flags:
+    - "`docker system prune -a --volumes` as the first response, destroying data to reclaim space."
+    - Deleting files from `/var/lib/docker` by hand while the daemon runs.
+    - Raising the disk size with no log rotation, which just moves the failure date.
+    - Setting `max-size` on the daemon without recreating existing containers and assuming it
+      applied.
+    - Blaming images when the growth is logs.

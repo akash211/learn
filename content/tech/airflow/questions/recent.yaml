@@ -1,0 +1,262 @@
+- id: airflow-recent-001
+  topic: architecture
+  difficulty: advanced
+  question: What did AIP-44 change about how workers talk to Airflow, and why does it matter operationally?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Historically every worker opened a direct connection to the metadata database. That made the
+    worker a database client with the same credentials and the same schema knowledge as the
+    scheduler: any network path to Postgres was enough to run tasks, and a schema upgrade meant
+    every worker image had to be upgraded in lockstep.
+
+    AIP-44 introduced an internal API so the scheduler and workers stop talking to the database
+    directly. In Airflow 3 it becomes the **task execution API**: workers authenticate to the API
+    server with short-lived, task-scoped JWT tokens, fetch the task definition, and report state
+    back over HTTP. The worker no longer needs a database route at all.
+
+    Operationally this changes several things worth saying out loud. Workers can run in a network
+    segment with no database access — the security win. The API server becomes a scaling and
+    availability concern, because it now sits in the task hot path, not just the UI path. Task
+    logging and XComs become API calls. And "the workers cannot reach the database" stops being a
+    valid explanation for a stuck task; the question becomes whether they can reach the API server
+    and whether its token signing key matches.
+  tags: [aip-44, task-execution-api, airflow-3, security]
+
+- id: airflow-recent-002
+  topic: assets and datasets
+  difficulty: intermediate
+  question: Datasets became Assets in Airflow 3. What else changed beyond the name?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    The rename from `Dataset` to `Asset` (and `airflow.datasets` to `airflow.sdk`) is the visible
+    part; the model changed too.
+
+    In 2.4 a dataset was a URI and an event was "the producing task succeeded". Multiple datasets
+    in `schedule=[a, b]` meant *any* of them. 2.9–2.10 added aliases for dynamically named
+    datasets and `DatasetAll` / `DatasetAny` for explicit AND/OR.
+
+    In 3.x an asset can be **partitioned**: rather than one opaque blob, the asset has identifiable
+    partitions, so a consumer can be triggered for a specific partition and ask which partition
+    fired. That closes the biggest practical gap — "the orders asset updated" was previously
+    indistinguishable from "the orders asset updated for a date I already processed".
+
+    Migration reality: `Dataset` → `Asset`, `DatasetAlias` → `AssetAlias`, `outlets=[ds]` →
+    `outlets=[asset]`, and asset-triggered runs no longer have meaning for `catchup`. What does not
+    change is the mental model — a decoupled signal published on producer success, not a task in
+    the graph, so there is no ordering beyond "after the producer" and no payload. Use
+    `TriggerDagRunOperator` when you need to pass `conf` and see lineage.
+  tags: [assets, datasets, airflow-3, migration]
+
+- id: airflow-recent-003
+  topic: deferrable operators
+  difficulty: advanced
+  question: Deferrable operators are now the default in many providers. What breaks when you adopt them at scale?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    The conversion itself is easy — `deferrable=True`, or the provider's new default — and the slot
+    savings are real. The failure modes are operational.
+
+    First, capacity moves to the **triggerer**. Each triggerer process runs one asyncio loop with
+    `[triggerer] default_capacity` triggers (default 1000); exceed it and new deferrals queue. Most teams
+    run one triggerer, which is now a single point of failure for every sensor in the platform.
+
+    Second, deferred tasks fail *silently*. A normal sensor that cannot reach its target times out
+    and goes red; a deferred task whose triggerer is dead simply waits, and nothing in the
+    task-failure alerting fires. You need an alert on "tasks deferred for more than N minutes",
+    not on task failure.
+
+    Third, `serialize()` must be importable and side-effect free. A trigger that captures a client
+    object, or imports a module present only in the worker image, fails in the triggerer process —
+    often only under load, when the triggerer is recreated.
+
+    Fourth, per-trigger `timeout=` is not inherited from the operator's retry policy. Set it
+    explicitly, and test that a resumed task handles a partition that appeared while it was
+    deferred.
+  tags: [deferrable, triggerer, sensors, reliability]
+
+- id: airflow-recent-004
+  topic: dag versioning
+  difficulty: advanced
+  question: How does Airflow 3's DAG versioning change what happens when you deploy during a running DAG?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    In 2.x, the serialized DAG in the database was overwritten on every parse. A run that started
+    before a deploy and finished after it could see a different graph: a task that no longer
+    existed, a templated field with new content, or a dependency change that made the run's history
+    unreadable. The familiar symptom is a run stuck with tasks in `none` that cannot be cleared
+    because they are not in the current DAG.
+
+    Airflow 3 versions DAGs. Parsing produces a `DagVersion` tied to a DAG bundle, and a run is
+    pinned to the version that created it, so the graph a run started with is the graph it
+    finishes with. The UI can show which version produced a run and diff versions.
+
+    Practical consequences: deploys stop corrupting in-flight runs, so you can ship during a long
+    backfill. Renaming a task still creates a new task and orphans old TaskInstances — versioning
+    preserves the *graph*, not the identity of your `task_id`s. And the mental model of "the DAG in
+    the database" becomes "the DAG bundle plus its versions", which is what makes bundle-based
+    deployment (git-sync, object storage, custom loaders) coherent.
+  tags: [dag-versioning, dag-bundles, airflow-3, deploys]
+
+- id: airflow-recent-005
+  topic: managed airflow
+  difficulty: intermediate
+  question: What are the real constraints of MWAA, Cloud Composer and Astronomer, beyond the marketing?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    All three remove the scheduler-database-worker operations and hand you back a different set of
+    constraints. No pricing here, because it changes by region and contract; the operational
+    realities are more stable.
+
+    **MWAA** pins the Airflow version available to you, resolves Python packages from a
+    `requirements.txt` against a constraints set it controls, so a provider version that exists on
+    PyPI may simply be unavailable. Environment size is a class, not a dial, and the web server is
+    managed for you — which is welcome until you need a plugin or a config key that is not exposed.
+    DAGs come from an S3 bucket; there is no shell.
+
+    **Cloud Composer 3** removed cluster and node sizing in favour of autoscaling workers; you
+    still choose an environment size, and DAGs live in a bucket. Access to the underlying
+    infrastructure is deliberately limited.
+
+    **Astronomer** gives you an Astro Runtime image you can pin per deployment and an Astro CLI
+    that runs a local Airflow matching production — the best local-dev story of the three, at the
+    cost of running your own Kubernetes footprint.
+
+    In all three the DAG code, providers and config remain yours, and version upgrades are gated by
+    the vendor's supported matrix.
+  tags: [mwaa, composer, astronomer, managed]
+
+- id: airflow-recent-006
+  topic: task sdk and providers
+  difficulty: intermediate
+  question: Why did Airflow 3 introduce airflow.sdk, and what does provider decoupling mean for dependency management?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Airflow 2 shipped DAG-authoring code inside the core package, which meant authoring and
+    executing were the same dependency. `airflow.sdk` separates them: DAGs, tasks, assets,
+    variables and the operator base class are importable from a thin SDK package, and the scheduler
+    and workers can evolve independently of what a DAG file imports.
+
+    The second half is provider decoupling. `apache-airflow-providers-*` packages release on their
+    own cadence — often weekly — and carry the operators and hooks for each system. In 2.x several
+    core operators lived in core; in 3.x `BashOperator`, `PythonOperator`, `EmptyOperator` and
+    friends moved to `apache-airflow-providers-standard`; the old `airflow.operators.bash` path
+    still imports with a deprecation warning in early 3.x releases, but the provider path is the
+    one that will survive.
+
+    Dependency management consequences: pin core *and* every provider, and install with the
+    official constraints file, because unconstrained resolution will happily upgrade a provider
+    that changed a hook signature. Read provider changelogs before a minor bump, and treat a
+    provider upgrade as a code change requiring the same tests as a DAG change.
+  tags: [airflow-sdk, providers, dependencies, airflow-3]
+
+- id: airflow-recent-007
+  topic: migration
+  difficulty: advanced
+  question: Which Airflow 2.x features are gone in 3.x, and what replaces each?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    The removals that actually break DAGs:
+
+    | Removed | Replacement |
+    |---|---|
+    | `schedule_interval` | `schedule` (cron, timedelta, timetable, asset list, `None`) |
+    | `execution_date` | `logical_date`; use `data_interval_start` / `data_interval_end` |
+    | SubDAGs | `TaskGroup`s, or dynamic task mapping when the count varies |
+    | `airflow.datasets` | `airflow.sdk.Asset` |
+    | Core operators in core | `apache-airflow-providers-standard` |
+    | `sla` / `sla_miss_callback` | Deadline alerts in the 3.x line |
+    | Direct DB access from workers | Task execution API over HTTP |
+
+    Most are mechanical: `grep` for `schedule_interval=`, `execution_date`, `SubDagOperator` and
+    `from airflow.operators.` and fix each site. `airflow config lint` finds deprecated config keys
+    in `airflow.cfg`.
+
+    The non-mechanical ones are SubDAGs with dynamic structure (mapping is not a drop-in: it changes
+    how instances are addressed and retried) and anything that reached into the database from task
+    code — that has to become an API call or a task that talks to the warehouse instead. Budget most
+    of the migration time for those two.
+  tags: [migration, airflow-3, deprecations, subdags]
+
+- id: airflow-recent-008
+  topic: upgrades
+  difficulty: advanced
+  question: What is a realistic 2.x to 3.x upgrade plan for a production deployment?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Sequence matters more than tooling.
+
+    1. **Land on 2.10.x.** It is the last 2.x feature line and the supported bridge; fix deprecation
+       warnings there, where a regression costs one DAG rather than the platform.
+    2. **Freeze and inventory.** Pin core and all providers with a constraints file. Count DAGs,
+       custom operators, plugins and direct-database access in task code.
+    3. **Migrate the database on a restore.** `airflow db migrate` rewrites large tables and is not
+       reversible; measure it against a production-sized copy and schedule the window from that
+       number, not from a guess.
+    4. **Upgrade every component together** — scheduler, workers, API server, triggerer, CLI. There
+       is no rolling upgrade across a major version.
+    5. **Test in staging with the production image and `airflow.cfg`**, running the import and
+       structure tests plus `dag.test()` on the critical DAGs. Most 3.0 breakage is import-time.
+    6. **Keep the rollback written down**: restore the snapshot, redeploy the previous image. That
+       is the only downgrade path.
+
+    Managed services add a gate: the vendor's supported version matrix decides when, not you.
+  tags: [upgrade, airflow-3, migration, rollback]
+
+- id: airflow-recent-009
+  topic: executors
+  difficulty: advanced
+  question: Teams keep moving between Celery and Kubernetes executors. What is driving that in 2024–2026?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Two forces: cost of idle capacity, and the operational cost of a mixed fleet.
+
+    Celery is cheap per task but you pay for a floor of workers that must exist at 04:00 even when
+    nothing runs, and you own a broker. Kubernetes gives zero idle cost and per-task resource
+    requests, but 20–60 seconds of cold start makes it wrong for short tasks — and that trade-off
+    got sharper as teams consolidated onto Kubernetes for everything else.
+
+    The compromise most teams land on is `CeleryKubernetesExecutor`: bulk work on a small Celery
+    fleet, heavy or isolated tasks routed to a `kubernetes` queue (`queue="kubernetes"` on the
+    operator). `LocalKubernetesExecutor` does the same on a single host for smaller deployments.
+
+    Airflow 3 adds a real third option: with the task execution API, a worker no longer needs
+    database access and only needs outbound connectivity, which makes remote and edge workers
+    viable — the `EdgeExecutor` case. If your workers sit behind a firewall, that is now a supported
+    shape rather than a hack. What has not changed: sensor fleets are still better fixed by
+    deferring them than by adding workers of any kind.
+  tags: [executors, kubernetes, celery, edge, cost]
+
+- id: airflow-recent-010
+  topic: observability
+  difficulty: advanced
+  question: What does good Airflow observability look like now, beyond the grid view?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    The grid view answers "what happened to this DAG". Production needs four questions it cannot
+    answer: is the scheduler alive, is the fleet saturated, is parsing degrading, and is the
+    database growing.
+
+    Concretely: scheduler heartbeat age (`airflow jobs check`, `scheduler_heartbeat`), queued tasks
+    versus open slots (`executor.queued_tasks`, `executor.open_slots`, `pool.queued_slots`), parse
+    time and import errors (`dag_processing.total_parse_time`, `dag_processing.import_errors`), and
+    `pg_database_size` plus row counts of `task_instance` and `dag_run`. Add "no successful run in
+    N intervals" per production DAG — it catches a paused DAG or a dead scheduler, which no
+    task-level alert will.
+
+    Airflow 3 adds OpenTelemetry tracing (`[traces] otel_on` with an OTLP endpoint), which finally
+    shows where a task spends its time across scheduler, worker and external calls, and structured
+    JSON logs that are queryable rather than grep-able. Remote logging stops being optional on
+    Kubernetes, where the pod and its local log disappear together.
+
+    The habit that beats all of it: read task state history before the log.
+  tags: [observability, metrics, tracing, logging]

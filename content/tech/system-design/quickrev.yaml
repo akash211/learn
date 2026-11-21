@@ -1,0 +1,86 @@
+concepts:
+  - title: Envelope before architecture
+    detail: Convert requirements to QPS, bytes and cost before drawing components. 140M events/day at 1 KB is 1,620/s average, 4,860/s at 3× peak, 140 GB/day.
+  - title: Peak, not average
+    detail: Provision for the peak factor (2–5×). A system sized for 1,620/s is correct for eleven hours a day and failing at the evening peak.
+  - title: Read/write ratio
+    detail: 30,000 reads/s against 400 writes/s means the read path is the problem. Optimising the quieter side is the most common misdirected effort in a design.
+  - title: Access-pattern table
+    detail: For each operation record frequency, latency target, consistency and result shape. The table chooses the engine; the engine does not choose itself.
+  - title: Replication lag
+    detail: Async replicas are 10–500 ms behind, more under load. Read-your-writes requires pinning the author to the primary for a short window after their own write.
+  - title: Shard key
+    detail: Choose from the hottest query, so a typical request touches one shard. Hash gives even distribution and loses range locality; range keeps locality and concentrates sequential writes.
+  - title: Hot key
+    detail: One key lives on one partition, so more partitions cannot help. Fix at the producer — split the key, fan out on read, cache with coalescing, or isolate the client.
+  - title: Cache-aside
+    detail: Read cache, miss to origin, populate with a TTL; invalidate on write after commit. Fails gracefully when the cache is down, which is why it is the default.
+  - title: Staleness bound
+    detail: A TTL is a promise about maximum staleness. If reads pass through a lagging replica, the real bound is replica lag plus TTL, not the TTL.
+  - title: Exactly-once effects
+    detail: Delivery is at-least-once. Exactly-once is a property of an idempotent handler keyed by a producer-generated id, with the dedupe row committed alongside the effect.
+  - title: Timeout ambiguity
+    detail: A timeout means unknown, not failed. Retrying an unkeyed write after a timeout is how duplicate charges happen.
+  - title: Event time and watermarks
+    detail: Event-time windows give the same answer regardless of when the job ran. A watermark ("no data older than 10 minutes") closes windows and bounds state.
+  - title: Partition-scoped writes
+    detail: Batch jobs should replace exactly one partition idempotently. Iceberg/Delta dynamic overwrite makes a retry safe; an unscoped INSERT makes it a duplicate.
+  - title: Small files
+    detail: Per-file overhead dominates when files are kilobytes. A five-minute flush is 288 files/day, 105,000 a year; compact to 512 MB–1 GB.
+  - title: Token economics
+    detail: 1,500 input and 400 output tokens at $3/$15 per million is $0.0105 per request — $2,100/day at 200,000 requests. Caching the stable 1,200-token prefix cuts 90% of that input cost.
+  - title: Three budgets
+    detail: An LLM service trades quality, latency and cost. Prefill sets time-to-first-token, decode sets total time, and the output cap is the only lever that moves both cost and latency.
+traps:
+  - Adding partitions to fix a hot key. The key still hashes to one partition; the extra partitions stay idle while one consumer saturates.
+  - Acknowledging a message before processing it. That converts at-least-once into at-most-once and loses work on every crash.
+  - Treating a timeout as a failure and retrying. It may have succeeded; without an idempotency key the retry duplicates the effect.
+  - Claiming exactly-once across a database and a third-party API. Atomicity ends at the boundary of the system that can coordinate the commit.
+  - Adding a cache to fix a write bottleneck. Caches absorb reads; write capacity is unchanged and the invalidation cost is new.
+  - Checking availability with a SELECT and updating afterwards. Two concurrent checkouts both see the last unit and both take it.
+advanced:
+  - PACELC is the useful dial, not CAP. Even with no partition, each replicated write chooses between waiting for acknowledgement and returning early, and that choice can differ per endpoint.
+  - The outbox relay must publish in id order and consumers must partition by aggregate id; otherwise the atomic write is preserved but per-entity ordering is not.
+  - A backfill is safe only when it writes to a shadow or a new snapshot and the swap is atomic. Progress tracking is what turns a 2.8-hour job from a gamble into a resumable one.
+  - Prefill and decode have different throughput. 1,500 prompt tokens at 3,000 tokens/s is 500 ms; 400 output tokens at 60 tokens/s is 6.7 s. Budget them separately.
+  - Streaming state is bounded by users, not events, only if the window is short. A 24-hour window accumulates per-event state and grows with traffic.
+  - One copy of the data beats two. An open table format lets Spark, Trino and the warehouse share 300 TB instead of duplicating it at $6,900 per month per copy.
+comparisons:
+  - a: Queue
+    b: Log
+    difference: A queue deletes on acknowledgement and distributes each message to one worker; a log retains records and gives every consumer group its own offset and replay.
+  - a: Read replica
+    b: Shard
+    difference: A replica copies all data to add read capacity and costs staleness; a shard splits data to add write and storage capacity and costs cross-shard queries.
+  - a: Hash sharding
+    b: Range sharding
+    difference: Hash spreads writes evenly and scatters range queries; range keeps locality and concentrates sequential inserts on the last shard.
+  - a: Cache-aside
+    b: Write-behind
+    difference: Cache-aside treats the cache as disposable and fails back to the database; write-behind makes the cache the write buffer and loses data if it dies.
+  - a: Batch
+    b: Streaming
+    difference: Batch recomputes over bounded history with cheap, reproducible correction; streaming bounds latency and pays for always-on state and late-data handling.
+  - a: RAG
+    b: Fine-tuning
+    difference: RAG supplies facts at request time and changes in minutes; fine-tuning changes behaviour and style and goes stale as the corpus moves.
+  - a: At-least-once
+    b: Exactly-once effects
+    difference: The first is a delivery guarantee with duplicates; the second is idempotent handling that makes duplicates harmless — the only claim that survives an external API.
+commands:
+  - label: Validate the content module
+    code: .venv/bin/python -m backend.app.content
+  - label: Consumer group lag in seconds, not just messages
+    code: kafka-consumer-groups.sh --bootstrap-server $BROKERS --describe --group session-aggregator-v3
+  - label: Inspect a topic's partition and replica layout
+    code: kafka-topics.sh --bootstrap-server $BROKERS --describe --topic events
+  - label: Redis hit rate and evictions
+    code: redis-cli info stats | grep -E 'keyspace_hits|keyspace_misses|evicted_keys'
+  - label: Read a Postgres plan with real timings and buffers
+    code: EXPLAIN (ANALYZE, BUFFERS) SELECT ...;
+  - label: Count output files per partition before compacting
+    code: duckdb -c "SELECT partition, count(*) FROM read_parquet('s3://lake/silver/events/*/*.parquet', filename=true) GROUP BY 1 ORDER BY 2 DESC LIMIT 20;"
+  - label: Re-run one Airflow interval idempotently
+    code: airflow dags backfill -s 2026-11-01 -e 2026-11-01 --reset-dagruns session_builder
+  - label: Load test a read path at the target rate
+    code: hey -z 60s -q 500 -c 200 https://api.example.com/v1/products/42

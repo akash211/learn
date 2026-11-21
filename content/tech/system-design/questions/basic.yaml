@@ -1,0 +1,474 @@
+- id: sd-basic-001
+  topic: requirements
+  difficulty: beginner
+  question: What is the difference between functional and non-functional requirements, and why does the distinction matter in a design?
+  answer: |
+    Functional requirements describe what the system does — "post a message", "fetch the last 50
+    messages", "delete an account". Non-functional requirements describe how well it does it:
+    latency, throughput, availability, durability, consistency, retention and cost.
+
+    The distinction matters because only non-functional requirements constrain architecture. Two
+    systems with identical functional lists can need completely different designs: a 200 ms p95
+    with strong consistency needs synchronous replication and a primary read path, while a
+    60-second bounded staleness allows caches, replicas and asynchronous pipelines.
+
+    A functional requirement without a volume is untestable. "Users can upload images" says nothing
+    about whether you need a CDN, a queue or a transcoding fleet. Attach numbers at the point of
+    collection: how many users, how often, how large, how fresh, how available. Then park explicit
+    non-goals — search, editing history, attachments — because a design that silently omits scope
+    will be judged as if it had included it.
+  tags: [requirements, non-functional, scope]
+
+- id: sd-basic-002
+  topic: capacity estimation
+  difficulty: beginner
+  question: How do you estimate QPS and storage from a daily active user count?
+  answer: |
+    Multiply, then divide by the right constant, and state every assumption.
+
+    QPS: `DAU × actions per user per day ÷ 86,400`. For 3.5 million DAU at 40 events each,
+    `3.5M × 40 = 140M events/day`, and `140M ÷ 86,400 = 1,620 events/s` on average. Peak is
+    typically 2–5× the average; at 3× that is 4,860/s, and peak is what you provision for.
+
+    Storage: `events/day × bytes per event`. At 1 KB per event, 140M events is 140 GB/day, and
+    `140 GB × 365 = 51.1 TB/year` raw. Compression changes the answer: Parquet with zstd on
+    JSON-shaped events at 4× gives 12.8 TB/year, and replicas or derived copies multiply it again.
+
+    Round aggressively and keep the units visible. A reviewer should be able to challenge "1 KB per
+    event" rather than argue with "we need a lot of storage". The conclusion is a sentence:
+    "1,620/s average and 4,860/s peak means one primary is not enough at peak."
+  tags: [qps, storage, estimation, peak-factor]
+
+- id: sd-basic-003
+  topic: scaling
+  difficulty: beginner
+  question: When should you scale reads with replicas versus sharding the database?
+  answer: |
+    Replicas first, almost always. A read replica is a full copy that serves reads, so it multiplies
+    read capacity without changing the data model, the query patterns or the application's key
+    logic. Four replicas at 8,000 reads/s each add 32,000 reads/s of capacity, and the failure mode
+    is bounded staleness, which you can handle with session pinning.
+
+    Sharding splits the data across independent primaries. It is necessary when one primary cannot
+    hold the write volume or the dataset, and it costs cross-shard queries, rebalancing, and a
+    distributed consistency problem. A 300 GB dataset with 400 writes/s does not need it; a 51 TB
+    event archive with 4,860 writes/s does.
+
+    The order is: cache the hot set, add replicas, build read models, then shard. Each step is
+    cheaper and less invasive than the next. Skipping to sharding because it "scales" is the most
+    common over-engineering in interviews — it adds permanent operational cost to solve a problem a
+    16 GB cache would have removed.
+  tags: [replicas, sharding, read-scaling]
+
+- id: sd-basic-004
+  topic: replication
+  difficulty: intermediate
+  question: What is replication lag, and how does it break read-your-writes?
+  answer: |
+    Replication lag is the delay between a write committing on the primary and being applied on a
+    replica. With asynchronous streaming replication it is typically 10–500 ms under normal load,
+    and seconds during bulk loads, network trouble or a replica that falls behind on replay.
+
+    It breaks read-your-writes because the user's next request may hit a replica that has not seen
+    their write. They save a profile change, the page reloads, and the old value appears — then
+    flips to the new one seconds later. Functionally the data is correct; the experience looks
+    broken and users retry, creating duplicate writes.
+
+    Fixes, in order of preference: pin the user's reads to the primary for a short window after
+    their own write (for example two seconds, or until the replica's applied LSN passes the write);
+    version keys so a stale replica miss falls through to the primary; or make one replica
+    synchronous, accepting higher write latency and lower availability. The wrong fix is to route
+    everything to the primary, which returns you to a single-node read bottleneck.
+  tags: [replication-lag, read-your-writes, replicas]
+
+- id: sd-basic-005
+  topic: sharding
+  difficulty: intermediate
+  question: How do you choose a shard key, and what goes wrong with hash versus range sharding?
+  answer: |
+    Choose the key from the hottest access pattern, not from the entity's primary key. If every
+    high-volume query is scoped to a user, `user_id` is the shard key even if `event_id` is unique.
+    The test: does a typical request touch one shard, and does a single shard stay within its
+    capacity as data grows?
+
+    Hash sharding (`hash(key) % N`) distributes evenly and avoids hot spots, but destroys range
+    locality — a query for "all events last week" hits every shard. It also moves roughly half the
+    keys when you double the shard count, so resharding needs dual writes and a backfill.
+
+    Range sharding keeps ranges on one shard, which makes time-range queries and splits efficient,
+    but sequential keys concentrate new writes on the last shard. A directory or lookup table is the
+    flexible option, at the cost of a lookup hop and a component that must be highly available.
+
+    A practical pattern is hash by tenant or user for even distribution, with a separate columnar
+    store for cross-entity analytical queries that would otherwise scatter-gather.
+  tags: [shard-key, hashing, range-partitioning, resharding]
+
+- id: sd-basic-006
+  topic: hot keys
+  difficulty: intermediate
+  question: What is a hot key, and why can't you fix it by adding more partitions?
+  answer: |
+    A hot key is a partition key that receives a disproportionate share of traffic — a celebrity
+    account, a flash-sale product, a default tenant id. Because all events for one key must land on
+    one partition to preserve ordering, that partition's capacity caps the key's throughput.
+
+    Adding partitions does not help: the key hashes to exactly one partition, so the same single
+    consumer and broker handle it while the new partitions sit idle. At 5,000 events/s for one key
+    and 200 events/s per consumer process, no partition count makes that key consumable in order.
+
+    Real fixes change the key or the work. Split machine-generated keys with a random suffix and
+    accept losing order for that traffic. Fan out on read instead of write for large accounts — a
+    50-million-follower account would otherwise require 50 million writes per post. Cache the hot
+    value with request coalescing. Or isolate high-volume clients into their own topic with
+    dedicated consumers. Monitor per-partition byte rate; the aggregate hides a 32× skew.
+  tags: [hot-key, partitioning, fan-out]
+
+- id: sd-basic-007
+  topic: caching
+  difficulty: beginner
+  question: Explain cache-aside and why it is the default caching pattern.
+  answer: |
+    In cache-aside, the application owns the cache: on a read it checks the cache, and on a miss it
+    loads from the database, writes the value into the cache with a TTL, and returns it. Writes
+    update the database and then invalidate the key.
+
+    It is the default because it fails gracefully and requires no new infrastructure behaviour. If
+    Redis is unavailable, requests fall through to the database — slower, but correct. A read-through
+    cache hides the same logic in a library; write-through makes writes pay the cache round trip;
+    write-behind makes the cache a system of record, which is dangerous because caches evict under
+    memory pressure by design.
+
+    The pattern's weakness is that invalidation is the application's job, and any writer that
+    forgets to invalidate leaves stale data until the TTL expires. That is why the TTL should be
+    chosen from the product's staleness tolerance, and why multi-writer tables are better
+    invalidated from a change-data-capture stream than from each service's write path.
+  tags: [cache-aside, invalidation, ttl]
+
+- id: sd-basic-008
+  topic: caching
+  difficulty: intermediate
+  question: Why is cache invalidation hard, and what are the reliable strategies?
+  answer: |
+    Invalidation is hard because the cache and the database are two systems with no shared
+    transaction. The classic race: a reader misses, reads the old value from the database, a writer
+    commits a new value and deletes the key, then the reader writes its stale value into the cache
+    with a fresh TTL. The cache is now wrong for the whole TTL.
+
+    Reliable strategies, in order of strength. **Versioned keys** — put a version in the key and
+    bump it on write — make the race harmless, because the stale write lands under an old key that
+    nobody reads. **TTL** bounds the damage but does not eliminate it; choose the TTL from the
+    staleness the product tolerates. **Delete after commit**, never before, and consider a delayed
+    second delete to catch the race window. **CDC-driven invalidation** centralises the logic when
+    many services write the same table, at the cost of sub-second lag.
+
+    Whatever the mechanism, write down the invalidation trigger for every key. A cache key with no
+    answer to "what invalidates this?" is a bug with a latency benefit.
+  tags: [invalidation, race, versioned-keys]
+
+- id: sd-basic-009
+  topic: caching
+  difficulty: intermediate
+  question: What is a cache stampede and how do you prevent it?
+  answer: |
+    A stampede happens when a popular key expires and thousands of concurrent requests miss at once,
+    all hitting the database for the same row. At 30,000 reads/s concentrated on one hot key, the
+    origin receives 30,000 identical queries in the window before the first one repopulates the
+    cache — enough to saturate it.
+
+    Three mitigations, often combined. **Single-flight**: the first miss takes a per-key lock (or
+    `SET NX` in Redis) and loads; the others wait and read the result. **Probabilistic early
+    refresh**: refresh before expiry with a probability that rises as the deadline approaches, so
+    one request refreshes while the rest still hit. The common formula is
+    `ttl = -beta * delta * ln(random())`, where `delta` is the recompute time. **Serve stale on
+    error**: keep a secondary stale copy and return it if the origin fails, with a metric so you
+    know it happened.
+
+    Also jitter every TTL by ±10%. Without it, keys written together after a deploy or a bulk load
+    expire together, producing a synchronised stampede across the whole keyspace rather than one key.
+  tags: [stampede, single-flight, ttl-jitter]
+
+- id: sd-basic-010
+  topic: queues
+  difficulty: beginner
+  question: When do you use a queue rather than a log like Kafka?
+  answer: |
+    Use a queue when the work is a task that should be done once by one worker: send an email,
+    transcode a video, charge a card. Use a log when the data is a stream that multiple consumers
+    need independently, and when replay matters.
+
+    The mechanical difference is deletion. A queue removes a message after acknowledgement, so
+    competing consumers each get a distinct message and there is no history to re-read. A log
+    retains records for a retention period and each consumer group tracks its own offset, so ten
+    teams can read the same events and a new team can replay last week's data.
+
+    That difference decides most cases. "Retry this job until it succeeds" is a queue. "Every
+    downstream service needs every order event, and we may need to reprocess after a bug" is a log.
+    A log also gives ordering within a partition, which queues offer only in restricted forms.
+
+    Cost follows: a log needs retention capacity (7 days × 140 GB/day × 3 replicas = 2.94 TB) and
+    offset management; a queue needs visibility timeouts and a dead-letter path.
+  tags: [queues, kafka, delivery, replay]
+
+- id: sd-basic-011
+  topic: delivery semantics
+  difficulty: advanced
+  question: Why is exactly-once delivery usually a misleading claim?
+  answer: |
+    Because delivery and effect are different things. At-most-once means a message can be lost;
+    at-least-once means it can be duplicated. Exactly-once delivery across arbitrary systems would
+    require a commit protocol spanning the broker, the consumer's database and any third-party API —
+    and the third party will not participate.
+
+    What Kafka's transactions actually provide is atomicity inside Kafka: output records and consumer
+    offsets commit together for a read-process-write loop where the sink is also a topic. The moment
+    the sink is Postgres, an object store, or a payment provider, that atomicity ends. A crash can
+    occur after the external effect and before the offset commit, and the record will be delivered
+    again.
+
+    The honest architecture is at-least-once delivery plus **exactly-once effects**: every handler
+    idempotent, keyed by a producer-generated id, with the dedupe record committed in the same
+    transaction as the effect. Then a duplicate delivery is a no-op and the claim you can defend is
+    "duplicates have no additional effect" — which is what the business actually needs.
+  tags: [exactly-once, delivery, idempotency, kafka]
+
+- id: sd-basic-012
+  topic: idempotency
+  difficulty: intermediate
+  question: How does an idempotency key work, and what must be stored with it?
+  answer: |
+    The client generates a unique key per logical operation and sends it with every retry of that
+    operation. The server records the key before doing the work, and on a repeated key returns the
+    original outcome instead of executing again.
+
+    Three things must be stored: the key, a hash of the request payload, and the response (or a
+    status plus a pointer to the result). The hash catches the client bug of reusing a key with
+    different content — return 409 rather than silently applying the new payload. The stored
+    response makes the retry return the same body and status as the original, which matters when
+    the client uses the response to continue a flow.
+
+    The insert must happen before the side effect, ideally in one transaction with it, and a
+    concurrent duplicate should see "in progress" rather than starting a second charge. Keys need a
+    retention window longer than the client's retry horizon: at 400 writes/s that is 34.6 million
+    keys/day, about 4.2 GB at 120 bytes each, so a 24-hour TTL is affordable and a 48-hour one is
+    usually fine.
+  tags: [idempotency-key, retries, payments]
+
+- id: sd-basic-013
+  topic: reliability patterns
+  difficulty: advanced
+  question: What problem does the transactional outbox solve?
+  answer: |
+    It removes the dual write between a database and a message broker. A service that commits to
+    its database and then publishes to Kafka has two independent failure points: the publish can
+    fail after the commit (the event is lost and downstream never learns), or succeed before a
+    rollback (the event is a phantom describing something that did not happen).
+
+    The outbox writes the event into a table in the same local transaction as the business change,
+    so either both commit or neither does. A relay process then reads unpublished rows in id order,
+    publishes them, and marks them sent. If the relay crashes between publishing and marking, the
+    event is published twice — acceptable, because consumers are idempotent.
+
+    The relay can be a polling worker, or a change-data-capture connector reading the outbox table
+    without application code. Either way, publish order follows the outbox's monotonic id, and
+    consumers get per-aggregate ordering if the broker partitions by aggregate id. The cost is one
+    extra table, an index on unpublished rows, and a cleanup job.
+  tags: [outbox, dual-write, cdc, events]
+
+- id: sd-basic-014
+  topic: consistency
+  difficulty: intermediate
+  question: What is the practical difference between strong consistency, read-your-writes and eventual consistency?
+  answer: |
+    Strong consistency (linearizability) means every read sees the latest completed write, as if
+    there were one copy of the data. It is what a single-node database gives you for free and what
+    multi-region writes make expensive: you either coordinate across regions on every write or
+    accept higher latency.
+
+    Read-your-writes is weaker and usually sufficient: a client is guaranteed to see its own
+    writes, while other clients may see an older version. It permits asynchronous replication with
+    a session pinned to the primary after a write, which is cheap and preserves the user experience
+    that matters most — "I saved it, I see it".
+
+    Eventual consistency promises only convergence: replicas will agree at some unspecified future
+    point. Reads may return stale or out-of-order values. It is fine for like counts, view totals
+    and search indexes; it is wrong for balances and inventory reservations.
+
+    The design skill is stating which model each endpoint needs. Most products need read-your-writes
+    plus bounded staleness — for example "at most 60 seconds behind" — and that single sentence
+    unlocks caches, replicas and read models.
+  tags: [consistency, read-your-writes, eventual-consistency]
+
+- id: sd-basic-015
+  topic: consistency
+  difficulty: advanced
+  question: What does CAP actually say, and what does PACELC add?
+  answer: |
+    CAP says that during a **network partition** a distributed system must choose between
+    availability and consistency: it can keep serving and risk stale or conflicting data, or refuse
+    requests to stay consistent. It says nothing about behaviour when the network is healthy, which
+    is most of the time — that is the source of most misuse.
+
+    PACELC extends it: if there is a Partition, choose Availability or Consistency; Else (no
+    partition), choose Latency or Consistency. The second clause is the useful one operationally.
+    Even without failures, a replicated write must either wait for acknowledgement (consistent,
+    slower) or return early (faster, briefly stale). That is a dial you set per operation, not a
+    property of the database as a whole.
+
+    In practice, most systems are neither CA nor CP globally: reads may be eventually consistent,
+    writes on the primary may be linearizable, and a payment path may be serializable while a feed
+    is not. Naming the model per endpoint is more accurate and more useful than labelling the whole
+    system with a CAP acronym.
+  tags: [cap, pacelc, trade-offs]
+
+- id: sd-basic-016
+  topic: failure semantics
+  difficulty: intermediate
+  question: Why is a timeout ambiguous, and how should callers handle it?
+  answer: |
+    A timeout means the caller stopped waiting; it does not mean the callee stopped working. The
+    server may have committed the write, may still be executing it, or may have failed before
+    starting. From the client's perspective the outcome is unknown, which is different from failure.
+
+    Treating a timeout as failure and retrying is how duplicate charges happen: the first request
+    succeeds late, the retry succeeds again. The safe handling has three parts. Every non-idempotent
+    write takes an idempotency key, so a retry returns the original result. Timeouts are set below
+    the caller's own deadline, so inner work is abandoned before the outer request gives up.
+    Deadlines are propagated, not just timeouts, so downstream services know how much time remains.
+
+    Retries themselves should be bounded, exponential and jittered, and only for errors that can
+    succeed on a second attempt — a 400 or a malformed message will not. Where the outcome must be
+    known, add a status endpoint keyed by the same idempotency key so the client can ask "did this
+    happen?" rather than guess.
+  tags: [timeout, retries, idempotency, deadlines]
+
+- id: sd-basic-017
+  topic: reliability patterns
+  difficulty: intermediate
+  question: What does a circuit breaker do that a retry does not?
+  answer: |
+    A retry assumes the failure is transient and spends more requests on it. A circuit breaker
+    assumes the dependency is broken and stops spending requests at all, which is what protects the
+    caller.
+
+    It tracks failures per dependency. After a threshold — say five failures in thirty seconds — it
+    opens and fails fast for a cooling period, without touching the network. After the period it
+    half-opens, allowing a small number of probe requests; if they succeed it closes, otherwise it
+    opens again. Callers get an immediate error or a fallback instead of waiting for a timeout.
+
+    The difference matters under overload. When a provider is slow, retries multiply load precisely
+    when it can least handle it, turning a latency incident into a rate-limit incident. The breaker
+    caps the offered load and gives the dependency room to recover.
+
+    It must be paired with a defined fallback: cached data, a smaller model, a queued retry, or a
+    degraded response. A breaker with no fallback converts a slow dependency into a hard outage,
+    just faster.
+  tags: [circuit-breaker, retries, fallback, overload]
+
+- id: sd-basic-018
+  topic: batch platforms
+  difficulty: beginner
+  question: Why keep a raw immutable layer in a data lake instead of parsing on ingest?
+  answer: |
+    Because parsing is the part most likely to be wrong, and the raw layer is the only way to
+    recover from being wrong. If a timestamp format is misread or a nested field is dropped, a
+    derived table cannot be repaired from itself — you need the original bytes.
+
+    Keeping raw also decouples ingestion from modelling. The landing job writes whatever arrived,
+    in the producer's format, partitioned by arrival date, and every downstream layer is derived
+    and rebuildable: bronze (raw) → silver (conformed) → gold (aggregated). A new consumer with a
+    different parse does not require replaying from the source system, which may have moved on or
+    deleted the data.
+
+    The cost is storage, and it is smaller than it sounds: 140 GB/day retained 30 days is 4.2 TB,
+    which at object-storage prices is under $100/month. Compare that with the cost of discovering a
+    parse bug three months after the source retention window closed.
+
+    The one discipline required is that raw is truly immutable — no in-place fixes, no schema
+    coercion, no deletion of "bad" records. Quarantine them instead.
+  tags: [data-lake, raw-layer, reprocessing]
+
+- id: sd-basic-019
+  topic: file layout
+  difficulty: intermediate
+  question: What is the small-file problem, and how do you manage it?
+  answer: |
+    Columnar query engines pay a fixed cost per file: open, read footer metadata, plan a split,
+    possibly a network round trip. When files are kilobytes rather than hundreds of megabytes, that
+    overhead dominates the actual data read.
+
+    The arithmetic is stark. A streaming sink flushing every five minutes writes 288 files/day; over
+    a year that is about 105,000 files for one table. A query over the year now plans and opens
+    105,000 objects, and a listing call alone can take longer than the scan. With 512 MB files, the
+    same 51 TB is roughly 100,000 files — but for a single year of one table that is expected, and
+    pruning to a day touches only a few dozen.
+
+    Management is compaction: a scheduled job reads many small files in a partition and rewrites
+    them into 512 MB–1 GB files, preserving the partition key. Table formats such as Iceberg and
+    Delta expose this as a rewrite action. Also avoid over-partitioning — hourly partitions multiply
+    file count by 24 for little pruning benefit when queries span days.
+  tags: [small-files, compaction, parquet, partitioning]
+
+- id: sd-basic-020
+  topic: streaming
+  difficulty: advanced
+  question: What is event time versus processing time, and what does a watermark do?
+  answer: |
+    Event time is when the event happened, recorded by the producer. Processing time is when the
+    consumer handled it. They diverge whenever there is a queue, a retry, a mobile client uploading
+    a buffered batch, or a consumer backlog — which is to say, always, to some degree.
+
+    Windows computed on processing time change their answer depending on when the job ran. A
+    five-minute window during a backlog lumps an hour of events into whichever processing minute
+    they were read, producing a spike followed by a gap. Event-time windows produce the same result
+    regardless of when or how fast the data arrives.
+
+    A watermark is the system's claim that no event older than a threshold will arrive: "we assume
+    nothing earlier than 10 minutes ago is still coming". Windows close when the watermark passes
+    their end, so state can be released and results emitted. Allowed lateness extends the wait for
+    stragglers, trading state size for completeness.
+
+    The trade is explicit: no lateness means small state and dropped stragglers; two hours means
+    correct offline uploads and much more state. Many teams compute a fast approximation in the
+    stream and let an hourly batch job recompute the authoritative value.
+  tags: [event-time, watermark, windows, late-data]
+
+- id: sd-basic-021
+  topic: llm services
+  difficulty: advanced
+  question: How do you size a vector index for retrieval, and when does it need sharding?
+  answer: |
+    Size it from chunk count, dimensions and precision. Two million chunks at 1,536 dimensions in
+    float32 is `2,000,000 × 1,536 × 4 bytes = 12.3 GB` of raw vectors. An HNSW graph adds roughly
+    50% for links and metadata, so budget about 18.4 GB resident — which fits on one 32 GB node with
+    room for the OS and query overhead.
+
+    That arithmetic is the answer to "do we need a distributed vector database": no, not at this
+    scale. Sharding becomes necessary when the index no longer fits in memory on one node, or when
+    query throughput exceeds one node, which for this workload is roughly 10× the corpus or a few
+    thousand queries per second.
+
+    Two other numbers matter. Embedding cost: 2 million chunks × 500 tokens = 1 billion tokens, at
+    $0.02 per million that is $20 to embed once — cheap enough to redo monthly. And recall: measure
+    recall@k on a golden set, because a vector index that returns plausible neighbours can still
+    miss the passage that contains the answer.
+  tags: [vector-index, embeddings, hnsw, capacity]
+
+- id: sd-basic-022
+  topic: llm services
+  difficulty: advanced
+  question: How do you build a cost and latency budget for an LLM-backed feature?
+  answer: |
+    Start from tokens per request and price per million. A request with 1,500 input tokens and 400
+    output tokens at $3/M input and $15/M output costs `1,500 × 3/1M + 400 × 15/1M = $0.0045 +
+    $0.0060 = $0.0105`. At 200,000 requests/day that is $2,100/day, or $63,000 per 30-day month —
+    a number large enough to design against rather than discover.
+
+    Then reduce the unit cost without touching quality. Put the stable prefix — system prompt and
+    retrieved context — first so prompt caching applies; caching 1,200 tokens at a 90% discount
+    saves $0.00324 per request, or $648/day. Add a response cache for repeated questions.
+
+    For latency, separate prefill from generation: 1,500 tokens at 3,000 tokens/s is 500 ms, while
+    400 output tokens at 60 tokens/s is 6.7 seconds. That is why streaming and an output cap are
+    architectural, not cosmetic. If the product needs a 3-second answer, the cap is about 130
+    tokens, derived from the budget rather than guessed.
+  tags: [llm-cost, tokens, prompt-caching, latency]

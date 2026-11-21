@@ -1,0 +1,546 @@
+- id: docker-basic-001
+  topic: images and containers
+  difficulty: beginner
+  question: What is the difference between an image and a container?
+  answer: |
+    An image is an immutable artefact: an ordered stack of read-only filesystem layers plus a
+    config document holding the entrypoint, environment, user and working directory. A container
+    is a running process started from that image, with one thin writable layer on top and its own
+    namespaces and cgroups.
+
+    The practical consequences follow from immutability. You can run a hundred containers from
+    one image and they share the lower layers on disk; deleting a container does not touch the
+    image. Changing anything inside a container writes to the writable layer only, and that layer
+    disappears with `docker rm`.
+
+    That is why `docker commit` is not a build process. The reproducible answer to "the container
+    needs this file" is to change the Dockerfile and rebuild, not to patch a running instance.
+    The same distinction explains why state must live in a volume: everything in the writable
+    layer is tied to the container's lifetime.
+  tags: [image, container, immutability]
+
+- id: docker-basic-002
+  topic: layers and cache
+  difficulty: beginner
+  question: What is a layer, and why does my image have so many of them?
+  answer: |
+    A layer is a tar diff of filesystem changes produced by one build instruction. `RUN`, `COPY`
+    and `ADD` create layers; `ENV`, `LABEL`, `EXPOSE`, `USER`, `WORKDIR`, `CMD` and `ENTRYPOINT`
+    only change image metadata, so a Dockerfile with forty lines can still have six layers.
+
+    Layers are content-addressed, which is why images share them. Two services built on the same
+    `python:3.12-slim` base pull that base once and store one copy. It is also why layers are
+    permanent: deleting a file in a later instruction adds a whiteout and leaves the bytes in the
+    earlier layer, so the image keeps the size.
+
+    Layer count itself is mostly harmless — a few dozen is normal and overlay2 handles it. What
+    matters is layer *content*. Check with `docker image history --no-trunc` and look for a
+    400 MB `apt-get install` or a `COPY . .` that dragged in `node_modules`.
+  tags: [layers, size, union-filesystem]
+
+- id: docker-basic-003
+  topic: dockerfile instructions
+  difficulty: beginner
+  question: When should you use ADD instead of COPY?
+  answer: |
+    Almost never. `COPY` copies files and directories from the build context into the image and
+    does nothing else, which is predictable and reviewable.
+
+    `ADD` does two extra things: it extracts a local tar archive into the destination, and it can
+    fetch a URL. Both are footguns. Silent extraction means `ADD app.tar.gz /app` produces a
+    directory tree you did not name, and fetching a URL downloads at build time with no checksum
+    verification and no cache invalidation when the remote content changes.
+
+    The rule most teams adopt is to ban `ADD` in review except for a genuinely needed local
+    archive, and even then prefer `COPY` plus an explicit `RUN tar -xzf` so the extraction is
+    visible. Remote downloads belong in a `RUN curl -fsSL --output …` with a checksum, or better,
+    outside the image entirely.
+
+    `COPY --from=<stage>` for multi-stage builds and `COPY --chown=user:group` are both `COPY`
+    features, not `ADD` ones.
+  tags: [copy, add, dockerfile, security]
+
+- id: docker-basic-004
+  topic: dockerfile instructions
+  difficulty: beginner
+  question: What is the difference between CMD and ENTRYPOINT, and why does the exec form matter?
+  answer: |
+    `ENTRYPOINT` is the executable the container runs; `CMD` supplies default arguments to it, or
+    the whole command if there is no entrypoint. `docker run image --verbose` replaces `CMD` but
+    keeps `ENTRYPOINT`, which is why entrypoint-plus-CMD is the flexible combination.
+
+    The form matters as much as the instruction. Shell form — `CMD python -m app` — runs
+    `/bin/sh -c "python -m app"`, so the shell is PID 1, the application is its child, and
+    `SIGTERM` from `docker stop` reaches the shell, which does not forward it. The container then
+    waits out its timeout and gets `SIGKILL`ed. Exec form — `CMD ["python", "-m", "app"]` — execs
+    the binary directly, so signals and exit codes work.
+
+    A common pattern is `ENTRYPOINT ["python", "-m", "app"]` with no `CMD`, or an entrypoint
+    script ending in `exec "$@"` so argument handling and signal forwarding both work.
+  tags: [cmd, entrypoint, signals, pid-1]
+
+- id: docker-basic-005
+  topic: networking
+  difficulty: beginner
+  question: Does EXPOSE publish a port?
+  answer: |
+    No. `EXPOSE 8000` writes metadata into the image config saying the application intends to
+    listen on 8000. It publishes nothing and it restricts nothing — a process can listen on any
+    port regardless of what is exposed, and the port is unreachable from outside the container
+    until something publishes it.
+
+    Publishing happens at run time with `-p`: `-p 8080:8000` binds host port 8080 to container
+    port 8000 on all interfaces; `-p 127.0.0.1:8080:8000` binds loopback only. The mapping is
+    implemented with an iptables DNAT rule, not by the daemon proxying traffic.
+
+    `EXPOSE` still has two real uses: `docker run -P` publishes every exposed port on random host
+    ports, and Compose uses it in documentation and for inter-service defaults. Treating it as
+    access control is a recurring audit finding, and `0.0.0.0` publishing of a database port is
+    one of the most common ways internal services end up on the public internet.
+  tags: [expose, port-mapping, networking]
+
+- id: docker-basic-006
+  topic: build cache
+  difficulty: intermediate
+  question: Why does my Docker build reinstall dependencies on every code change?
+  answer: |
+    Because the dependency install comes after `COPY . .`. BuildKit keys a `COPY` layer on a
+    checksum of the copied files, so changing one source file invalidates that layer and every
+    instruction after it — including `pip install` or `npm ci`.
+
+    Reverse the order so the manifest is copied alone, installed, and only then the source:
+
+    ```dockerfile
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir -r requirements.txt
+    COPY . .
+    ```
+
+    The general rule is to order instructions from least to most frequently changing: base image,
+    OS packages, dependency manifest, dependencies, application code, config. `RUN` layers are
+    keyed on the command string plus the parent layer, so an unchanged `apt-get install` line is
+    reused even when packages in the repository have moved — which is a caching benefit and a
+    staleness risk.
+
+    Also add a `.dockerignore` for `.git`, `node_modules` and virtualenvs; the context is sent
+    before the build starts, so ignoring a large directory speeds up every build regardless of cache.
+  tags: [build-cache, layer-ordering, dockerignore]
+
+- id: docker-basic-007
+  topic: multi-stage builds
+  difficulty: intermediate
+  question: What does a multi-stage build actually buy you?
+  answer: |
+    It separates the toolchain needed to build from the runtime needed to run. Each `FROM`
+    statement starts a new stage; `COPY --from=builder` copies artefacts across, and only the
+    final stage becomes the image.
+
+    ```dockerfile
+    FROM python:3.12-slim AS builder
+    COPY requirements.txt .
+    RUN python -m venv /opt/venv && /opt/venv/bin/pip install -r requirements.txt
+
+    FROM python:3.12-slim
+    COPY --from=builder /opt/venv /opt/venv
+    COPY app ./app
+    ENTRYPOINT ["/opt/venv/bin/python", "-m", "app"]
+    ```
+
+    The runtime image has no compilers, no headers, no pip cache and no test suite — often half
+    the size and a materially shorter CVE list, because the packages that generate most findings
+    are build-only.
+
+    Two details worth getting right: the runtime base must have a compatible interpreter if you
+    copy a virtualenv (it contains an absolute symlink to the builder's Python), and
+    `--target builder` still lets you build an intermediate stage for debugging. BuildKit runs
+    independent stages in parallel, so the extra stage is usually cheap.
+  tags: [multi-stage, image-size, buildkit]
+
+- id: docker-basic-008
+  topic: base images
+  difficulty: intermediate
+  question: How do you choose between alpine, debian-slim and distroless?
+  answer: |
+    By what you are willing to give up, not by size alone.
+
+    `alpine` has musl libc instead of glibc. That breaks binary wheel compatibility, so Python
+    packages such as numpy or cryptography compile from source and need `build-base` in a builder
+    stage — often making the final image larger than `-slim`. It is excellent for static Go and
+    Rust binaries.
+
+    `debian:bookworm-slim` is the pragmatic default: glibc, familiar package management, wheels
+    install, and it is debuggable with a shell while staying reasonably small.
+
+    `distroless` removes the shell, package manager and most utilities, which cuts the CVE surface
+    and removes post-exploitation tooling — at the cost of not being able to `exec` in and look
+    around. Go and other static binaries fit perfectly; language-specific distroless images carry
+    the distribution's interpreter version, so check it matches your build stage.
+
+    `scratch` is for static binaries only, and requires copying CA certificates, a passwd file and
+    a timezone database yourself.
+  tags: [base-images, alpine, distroless, libc]
+
+- id: docker-basic-009
+  topic: security
+  difficulty: intermediate
+  question: Why is running as root in a container a problem, and how do you fix it?
+  answer: |
+    Because root in a container is root for anything that escapes one. Without user-namespace
+    remapping, UID 0 inside the container maps to UID 0 on the host, so an application exploit
+    plus a kernel or runtime bug lands as host root. Even without an escape, root inside the
+    container can install packages, modify the application's own binaries, and read every file
+    the image contains.
+
+    Fix it in the Dockerfile, before the process starts:
+
+    ```dockerfile
+    RUN groupadd --gid 10001 app \
+     && useradd --uid 10001 --gid 10001 --no-create-home app
+    COPY --chown=10001:10001 app ./app
+    USER 10001:10001
+    ```
+
+    Use a numeric UID: Kubernetes' `runAsNonRoot` cannot verify a username. Anything below port
+    1024 then needs `--cap-add NET_BIND_SERVICE` or a capability-free alternative — bind 8000 and
+    let the ingress map 80/443.
+
+    Two things this does not fix: bind mounts from the host keep host ownership (so file
+    permissions must match), and rootless or `userns-remap` is what actually changes the host-side
+    UID mapping.
+  tags: [non-root, user, security]
+
+- id: docker-basic-010
+  topic: build context
+  difficulty: beginner
+  question: What does .dockerignore do, and why does it matter beyond speed?
+  answer: |
+    It excludes paths from the build context — the directory tarred and sent to the builder before
+    the first instruction executes. A 2 GB `node_modules` or `.git` directory is uploaded on every
+    build unless it is excluded.
+
+    Speed is the obvious benefit. The correctness benefit is larger. `COPY . .` will happily copy
+    a local `.env` containing production credentials, a `terraform.tfstate`, a private key, or
+    test fixtures with real customer data into an image layer. Because layers are permanent, those
+    bytes are in the image and in the registry even if a later instruction deletes the file.
+
+    A useful starting file:
+
+    ```
+    .git
+    .gitignore
+    node_modules
+    __pycache__/
+    *.pyc
+    .venv
+    .env
+    .pytest_cache
+    tests/
+    ```
+
+    Note that `COPY` is the only consumer of context that benefits; a `RUN` that needs a file still
+    needs it present. And if a path is both ignored and copied, the build fails — which is the
+    correct behaviour, since silently copying nothing would be worse.
+  tags: [dockerignore, build-context, secrets]
+
+- id: docker-basic-011
+  topic: storage
+  difficulty: beginner
+  question: When should you use a volume rather than a bind mount?
+  answer: |
+    A named volume is storage Docker manages under `/var/lib/docker/volumes/<name>/_data`. A bind
+    mount is a host path you choose and mount into the container.
+
+    Use a **named volume** for anything that must survive the container: database files, uploaded
+    objects, caches worth keeping. It is portable across hosts (with a volume driver), independent
+    of the host's directory layout, and `docker volume inspect` tells you where it lives. Backups
+    are a throwaway container that mounts it and writes a tarball elsewhere.
+
+    Use a **bind mount** for development source code, so an edit is visible without rebuilding,
+    and for injecting a specific host file such as a config or a CA certificate. In production it
+    creates coupling: the container depends on a host path, host UID ownership applies, and on
+    macOS or Windows the mount goes through a virtual filesystem and is much slower.
+
+    A **tmpfs** mount is for scratch data that must not touch disk — and with `--read-only` it is
+    where `/tmp` goes.
+  tags: [volumes, bind-mounts, persistence]
+
+- id: docker-basic-012
+  topic: containers vs vms
+  difficulty: beginner
+  question: How is a container different from a virtual machine?
+  answer: |
+    A VM runs its own guest kernel on emulated or virtualised hardware; a container is a process on
+    the host kernel, confined with namespaces (what it can see) and cgroups (what it can use).
+
+    That single difference explains the rest. Containers start in milliseconds because nothing
+    boots; VMs take seconds. Containers are dense — hundreds per host — because there is no
+    per-VM kernel memory. Containers have no hardware abstraction, so `uname -r` inside prints the
+    host's kernel and a kernel bug is shared by everything on the machine. A VM's hypervisor
+    boundary contains a guest kernel exploit; a container's boundary is the kernel plus the
+    runtime.
+
+    Practically: containers are the right unit for packaging and deploying trusted services, and
+    a poor boundary for running hostile code. When untrusted workloads must be isolated, the
+    usual answers are VMs, gVisor or microVMs such as Firecracker — container ergonomics with a
+    real kernel boundary.
+  tags: [containers, virtual-machines, isolation]
+
+- id: docker-basic-013
+  topic: namespaces and cgroups
+  difficulty: intermediate
+  question: Explain the division of labour between namespaces and cgroups.
+  answer: |
+    Namespaces control what a process can *see*; cgroups control what it can *use*.
+
+    Namespaces wrap global kernel resources so each container gets its own instance: mount (its
+    root filesystem), PID (its own process tree, entrypoint as PID 1), network (interfaces,
+    routes, sockets), UTS (hostname), IPC, user (UID mapping) and cgroup (view of the hierarchy).
+    Inside the container, `ps` shows only its own processes and `ip addr` shows only its own
+    interfaces.
+
+    cgroups are the accounting and limiting mechanism. `--memory 512m` writes `memory.max`,
+    `--cpus 1.5` writes `cpu.max`, `--pids-limit` writes `pids.max`. Exceeding a memory limit
+    triggers the cgroup OOM killer, which is why the container exits 137.
+
+    Neither is a security boundary on its own. Visibility and resource limits do not stop a
+    process that finds a kernel bug — capabilities, seccomp, LSMs and user namespaces are the
+    controls aimed at that, and a VM is the boundary when the workload is untrusted.
+  tags: [namespaces, cgroups, isolation]
+
+- id: docker-basic-014
+  topic: networking
+  difficulty: intermediate
+  question: Why can containers on the default bridge not resolve each other by name?
+  answer: |
+    The default `bridge` network predates Docker's service discovery and has no DNS resolver
+    attached. Containers get an IP on `172.17.0.0/16` and can reach each other by address, but name
+    resolution requires the deprecated `--link` flag or a manual `/etc/hosts` entry.
+
+    A user-defined bridge network gets an embedded DNS server at `127.0.0.11`, which answers for
+    container names and network aliases:
+
+    ```bash
+    docker network create app-net
+    docker run -d --name db --network app-net postgres:16
+    docker run --rm --network app-net postgres:16 psql -h db -U postgres
+    ```
+
+    It also gives you a dedicated subnet, isolation from other stacks, and the ability to remove a
+    container from the network without restarting it. Compose creates one per project and relies on
+    it entirely — the service name in a connection string is that DNS entry.
+
+    Treat the default bridge as a legacy default: create a named network for anything with more
+    than one container.
+  tags: [dns, bridge-network, service-discovery]
+
+- id: docker-basic-015
+  topic: compose
+  difficulty: intermediate
+  question: Does depends_on wait for a service to be ready?
+  answer: |
+    Only in the long form, and only if the dependency has a healthcheck. The short list form —
+    `depends_on: [db]` — controls start *order*, not readiness: Compose starts the database
+    container first, then starts the application, while Postgres is still initialising its data
+    directory. The application gets `connection refused` and, depending on its restart policy,
+    may or may not recover.
+
+    ```yaml
+    depends_on:
+      db:
+        condition: service_healthy
+    ```
+
+    with a healthcheck on `db`:
+
+    ```yaml
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shop -d shop"]
+      interval: 5s
+      retries: 10
+    ```
+
+    `condition: service_completed_successfully` is the variant for one-shot jobs such as
+    migrations.
+
+    Even with readiness, an application should retry its initial connection. Healthchecks are a
+    startup convenience, not a distributed-systems guarantee, and the same code has to survive a
+    database restart later in the day.
+  tags: [compose, depends-on, healthcheck]
+
+- id: docker-basic-016
+  topic: restart policies
+  difficulty: intermediate
+  question: "What is the difference between restart: always and restart: unless-stopped?"
+  answer: |
+    They differ in what happens after a daemon restart to a container you stopped on purpose.
+
+    | Policy | Non-zero exit | Daemon restart | After `docker stop` |
+    |---|---|---|---|
+    | `no` | no | no | no |
+    | `on-failure` | yes (bounded) | no | no |
+    | `always` | yes | yes | yes |
+    | `unless-stopped` | yes | yes, if it was running | no |
+
+    `unless-stopped` is the better default for services: a crashed process restarts, a host reboot
+    brings the stack back, but a deliberate `docker stop` during maintenance stays stopped. With
+    `always`, restarting the daemon resurrects containers an operator intentionally stopped, which
+    is confusing mid-incident.
+
+    Retries back off exponentially, so a crash loop does not saturate the CPU. Note two
+    interactions: restart policies and `--rm` are incompatible, and a **failing healthcheck does
+    not trigger a restart** — Docker only records the status. Replacement on failure needs an
+    orchestrator.
+  tags: [restart-policy, reliability]
+
+- id: docker-basic-017
+  topic: resource limits
+  difficulty: intermediate
+  question: A container keeps exiting with code 137. What does that mean and how do you confirm the cause?
+  answer: |
+    137 is 128 + 9: the process was killed with `SIGKILL`. The usual cause is the cgroup OOM
+    killer, but a manual `docker kill` produces the same code, so confirm rather than assume:
+
+    ```bash
+    docker inspect --format '{{.State.OOMKilled}} {{.State.ExitCode}}' api
+    ```
+
+    `true` means the kernel killed it for exceeding `memory.max`. `dmesg -T` on the host names the
+    process and the cgroup. If `OOMKilled` is false, look for an orchestrator, a healthcheck
+    failure in a platform that acts on it, or a person running `docker kill`.
+
+    The fix is usually not a bigger limit. Page cache counts toward the limit but is reclaimable,
+    so a container sitting near `memory.max` is normal; what kills it is the application heap
+    growing past the space left. Size the heap below the limit — `-XX:MaxRAMPercentage=70`,
+    `--max-old-space-size`, `GOGC` — and check for a leak with `docker stats` over hours before
+    raising the cap.
+  tags: [oom, exit-codes, memory]
+
+- id: docker-basic-018
+  topic: lifecycle
+  difficulty: intermediate
+  question: What happens between docker stop and the process actually dying?
+  answer: |
+    `docker stop` sends `SIGTERM` to PID 1, waits for the timeout (10 seconds by default), then
+    sends `SIGKILL`. The exit code records which happened: 143 for a clean `SIGTERM` exit, 137 for
+    a kill.
+
+    ```bash
+    docker stop --time 30 api
+    docker run --stop-signal SIGQUIT app
+    ```
+
+    Two things break this. If the application never installs a `SIGTERM` handler, the default
+    action terminates it immediately — fine for stateless work, but in-flight requests are dropped.
+    If the image uses shell-form `CMD` or an entrypoint script without `exec`, the shell is PID 1
+    and never forwards the signal, so the process is killed ten seconds later mid-write.
+
+    For anything with a database write or a long request, handle `SIGTERM` by flipping a readiness
+    flag, draining, then exiting; set `STOPSIGNAL` to document it and give the platform a grace
+    period longer than the drain. In Kubernetes the same contract applies through `preStop` and
+    `terminationGracePeriodSeconds`.
+  tags: [sigterm, graceful-shutdown, pid-1]
+
+- id: docker-basic-019
+  topic: registries
+  difficulty: intermediate
+  question: Why pin an image by digest instead of a tag?
+  answer: |
+    A tag is a mutable pointer. `app:1.4` can be re-pushed to reference completely different
+    content, and nothing prevents it — so "we deployed 1.4" does not identify what ran. A digest,
+    `app@sha256:9f2c…`, is the hash of the manifest and cannot refer to anything else.
+
+    ```bash
+    docker pull registry.example.com/team/app@sha256:9f2c…
+    docker inspect --format '{{index .RepoDigests 0}}' app:1.4
+    ```
+
+    The practical scheme is both: a readable release tag (`1.4.2`) plus a unique one
+    (`1.4.2-3f9a1c7`), and deployment manifests pinned to the digest the tag resolved to at
+    release time. Rollback stays human (`1.4.1`), reproduction stays exact (digest), and a
+    compromised CI token cannot change production by re-pushing a tag.
+
+    Registries that support tag immutability (ECR, Harbor) give most of the guarantee with tags
+    alone. `latest` is never a version — it is whatever was pushed last under that name, including
+    on a machine that has not pulled in two years.
+  tags: [digests, tags, registries]
+
+- id: docker-basic-020
+  topic: debugging
+  difficulty: beginner
+  question: What is the difference between docker run, docker exec and docker attach?
+  answer: |
+    They act on different things.
+
+    `docker run` creates a *new* container from an image and starts a process in it. Every run is a
+    new container with a new writable layer, even from the same image.
+
+    `docker exec` starts an additional process inside an already-running container, in the same
+    namespaces. `docker exec -it api sh` is how you get a shell; it does not restart anything and
+    exits when the command exits. It is the right tool for inspection, and a poor tool for
+    "fixing" a container, since the change is lost on the next deploy.
+
+    `docker attach` connects your terminal to PID 1's stdio streams. That sounds similar and is
+    not: pressing `Ctrl-C` sends `SIGINT` to the application and usually stops the container.
+    Detaching requires `Ctrl-P Ctrl-Q`.
+
+    For a crashed container, note that `exec` fails — there is no running process to join. Start a
+    new container from the same image with an overridden entrypoint, or inspect the stopped one
+    with `docker inspect` and `docker logs`.
+  tags: [exec, attach, run, debugging]
+
+- id: docker-basic-021
+  topic: operations
+  difficulty: beginner
+  question: The Docker host is out of disk space. What do you check and what is safe to remove?
+  answer: |
+    Start with the breakdown, not with `prune`:
+
+    ```bash
+    docker system df
+    docker system df -v
+    ```
+
+    That separates images, containers, volumes and build cache and tells you which is actually
+    large.
+
+    Safe to reclaim: dangling images (`docker image prune`), old build cache
+    (`docker builder prune --filter until=168h`), and stopped containers you have confirmed are
+    not wanted. `docker image prune -a --filter until=720h` removes unused images but costs you
+    warm caches on the next deploy.
+
+    Not safe without inspection: `docker volume prune`. A volume with no container attached may be
+    the only copy of a database, and the command gives no confirmation per volume. `docker system
+    prune -a --volumes` combines every risky category and should never run on a host you have not
+    just examined.
+
+    Also check the usual suspects: unbounded `json-file` logs under `/var/lib/docker/containers`,
+    and deleted-but-open files held by a process (`lsof +L1`).
+  tags: [disk-space, prune, operations]
+
+- id: docker-basic-022
+  topic: security
+  difficulty: advanced
+  question: Why is passing a secret as a build ARG unsafe, and what should you use instead?
+  answer: |
+    `--build-arg` values are recorded in the image's build history, so `docker history` and the
+    registry manifest expose them to anyone who can pull the image. `ENV` is worse: the value sits
+    in the config JSON, visible to `docker inspect` and to every process in the container.
+
+    Deleting the file in a later layer does not help. Layers are immutable and additive; the bytes
+    remain in the layer that wrote them, and `docker save` will hand them over.
+
+    BuildKit secrets are mounted for a single `RUN` and never written to a layer or to history:
+
+    ```dockerfile
+    RUN --mount=type=secret,id=pip_token \
+        PIP_TOKEN="$(cat /run/secrets/pip_token)" pip install -r requirements.txt
+    ```
+
+    ```bash
+    docker buildx build --secret id=pip_token,src="$HOME/.pip-token" -t app .
+    ```
+
+    The distinction to hold onto: build-time credentials (a private registry token) belong in
+    `--secret` and should not exist at runtime; runtime credentials (a database password) belong in
+    a mounted file or a secret manager, never in the image at all.
+  tags: [secrets, build-args, buildkit]

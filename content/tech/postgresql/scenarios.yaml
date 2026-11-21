@@ -1,0 +1,281 @@
+- id: pg-scn-001
+  title: Disk is filling and the wraparound warning appeared
+  technologies: [postgresql]
+  difficulty: advanced
+  prompt: |
+    A 400-million-row `events` table receives about 2,000 updates a second and gets a nightly delete
+    of rows older than 90 days. Disk usage has grown 40 GB a week for a month even though the row
+    count is flat. `pg_stat_activity` shows two sessions `idle in transaction` for over nine hours,
+    and the log has started emitting `WARNING: database "app" must be vacuumed within 120000000
+    transactions`.
+
+    There is 200 GB free. `VACUUM FULL` on `events` would take roughly six hours and block all
+    access.
+  approach: |
+    Separate the three problems — bloat, vacuum starvation, wraparound — because they have different
+    fixes and only one of them is urgent.
+
+    1. **Find what holds the horizon.** `SELECT pid, state, backend_xmin, now() - xact_start FROM
+       pg_stat_activity ORDER BY age(backend_xmin) DESC NULLS LAST`. An `idle in transaction`
+       session with an old `backend_xmin` prevents vacuum from removing *any* dead tuple in the
+       database. End it, then set `idle_in_transaction_session_timeout` so it cannot recur.
+    2. **Measure the bloat honestly.** `pgstattuple_approx('events')` gives `dead_tuple_percent` and
+       `approx_free_percent`; `pg_stat_user_tables` gives `n_dead_tup` and `last_autovacuum`. If
+       `last_autovacuum` is hours ago while dead tuples are in the millions, the worker is not
+       keeping up — check `pg_stat_progress_vacuum` while one runs and `autovacuum_max_workers`.
+    3. **Fix the trigger before the space.** Set `autovacuum_vacuum_scale_factor = 0.01` on `events`
+       and raise `autovacuum_vacuum_cost_limit` so a worker can finish. Without this, reclaimed space
+       is immediately re-bloated.
+    4. **Handle wraparound first if the age is near the limit.** Anti-wraparound vacuum runs at full
+       speed and is the priority; do not start `pg_repack` or `VACUUM FULL` while it is pending, and
+       do not restart the server.
+    5. **Reclaim space without the outage.** `pg_repack -t events` requires a primary key and free
+       disk for the table plus its indexes; it holds `ACCESS EXCLUSIVE` only briefly at the start
+       and end. Alternatively accept the free space and let it be reused — the file does not need to
+       shrink if the bloat is stable.
+    6. **Fix the delete.** The nightly `DELETE` generates the dead tuples in the first place:
+       partition by month and drop old partitions, or at minimum delete in batches with commits so
+       each vacuum has a bounded target.
+    7. **Guardrails.** `idle_in_transaction_session_timeout`, an alert on `age(datfrozenxid)`, and an
+       alert on `n_dead_tup` as a percentage of `n_live_tup`.
+
+    The strong answer orders the work by risk: horizon first, wraparound second, space third, and
+    the delete pattern last because it is the root cause.
+  red_flags:
+    - Running `VACUUM FULL` on a 400 GB table during business hours.
+    - Deleting the dead rows manually or truncating the table.
+    - Restarting PostgreSQL to "clear" the wraparound warning.
+    - Raising `autovacuum_max_workers` without touching the cost limit or the scale factor.
+    - Not identifying the idle-in-transaction sessions holding `backend_xmin`.
+
+- id: pg-scn-002
+  title: One endpoint went from 80 ms to 4 s after a data migration
+  technologies: [postgresql]
+  difficulty: intermediate
+  prompt: |
+    An order-history endpoint issues a parameterised query filtering on `customer_id` and
+    `created_at`, ordered by `created_at DESC LIMIT 50`. It was consistently under 100 ms. After a
+    migration that copied in a large tenant's data — roughly 40% of the table now belongs to one
+    customer — p99 is 4 seconds for that tenant and unchanged for everyone else.
+
+    There is an index on `(customer_id, created_at DESC)`. `EXPLAIN (ANALYZE, BUFFERS)` on the slow
+    case shows a sequential scan with a 50-million-row estimate and a top-N sort.
+
+    The team's first proposal is to add an index on `created_at`.
+  approach: |
+    This is an estimation problem, not an indexing problem, and the fix should be demonstrated
+    before it is applied.
+
+    1. **Reproduce with the real parameter.** Run the query with the large tenant's ID and with a
+       small one. If the plans differ, it is a plan choice driven by estimates, not a missing index.
+    2. **Read the estimate against the actual.** `EXPLAIN (ANALYZE, BUFFERS)` with `actual rows` far
+       from `rows=` on the scan node confirms it. Check whether the plan came from a prepared
+       statement's generic plan: `EXPLAIN (GENERIC_PLAN) EXECUTE ...` shows what is cached.
+    3. **Check statistics freshness.** The migration may not have been followed by `ANALYZE`; if
+       `pg_class.reltuples` is stale, every cost is wrong. `ANALYZE orders` and re-measure — this
+       alone fixes a surprising share of these incidents.
+    4. **Check the statistics target on `customer_id`.** With default 100, the MCV list cannot
+       represent a tenant holding 40% of the rows accurately. Raise it:
+       `ALTER TABLE orders ALTER COLUMN customer_id SET STATISTICS 1000; ANALYZE orders;`
+    5. **Test the actual index question.** For a tenant with 40% of the table, an index scan on
+       `(customer_id, created_at)` reads a huge fraction of the rows through random I/O plus a sort;
+       the planner is arguably right to scan. The endpoint probably needs a different shape: a
+       covering index `(customer_id, created_at DESC) INCLUDE (status, total)` for an index-only
+       scan, or keyset pagination instead of `OFFSET`.
+    6. **Consider the product-level fix.** A tenant with 40% of the rows may need its own partition,
+       or a pre-aggregated history table. Say so, but only after showing the measurement.
+    7. **Verify and lock it in.** Compare plans before and after on both tenants, and add an alert on
+       `mean_exec_time` for the query ID.
+
+    Strong answers distinguish "the planner chose badly" from "no plan can be fast for this
+    distribution" and say which one this is.
+  red_flags:
+    - Adding an index on `created_at` because the query sorts by it.
+    - Bumping `work_mem` to make the sort faster.
+    - Blaming the migration without checking `reltuples` and `last_analyze`.
+    - Testing only with a small tenant's ID.
+
+- id: pg-scn-003
+  title: Checkout fails with too many clients every time the service scales
+  technologies: [postgresql]
+  difficulty: intermediate
+  prompt: |
+    A Kubernetes deployment of the checkout service runs 6 pods in steady state and scales to 40
+    during a sale. Each pod opens a pool of 20 connections. PostgreSQL has `max_connections = 200`.
+    During the last sale, requests failed with `FATAL: sorry, too many clients already`, and pod
+    restarts made it worse because each new pod opened 20 connections before serving traffic.
+
+    PgBouncer is deployed, but the application still connects to it with a 20-connection pool per
+    pod in `session` mode.
+  approach: |
+    Treat it as a capacity and topology problem, then verify with measurements.
+
+    1. **Quantify the demand.** `SELECT count(*), state FROM pg_stat_activity GROUP BY 2` at peak,
+       and `pg_stat_database.numbackends`. If 40 pods times 20 is 800 and the server supports 200, no
+       amount of tuning closes the gap — the connection count has to stop scaling with pod count.
+    2. **Move PgBouncer to `transaction` mode** and set `default_pool_size` from measured concurrent
+       *active* queries (typically 10–40 for this workload), with `max_client_conn` sized for the peak
+       pod count. That is the actual fix: server connections become a function of database capacity,
+       not of replica count.
+    3. **Check what transaction mode breaks** before switching: session-level `SET`, named prepared
+       statements, advisory locks, `LISTEN`/`NOTIFY`. PgBouncer 1.21 or later with
+       `max_prepared_statements` handles the common driver case; `SET LOCAL` replaces session `SET`.
+    4. **Cap the blast radius on the server**: `max_db_connections` per database, and
+       `superuser_reserved_connections` free for operators. `query_wait_timeout` should fail fast
+       rather than queue, so the client sees a retryable error instead of a 30-second hang.
+    5. **Fix the client behaviour.** A per-pod pool of 20 is reasonable in front of a pooler, but it
+       must not be a per-pod pool of *server* connections. Set pool size, connection lifetime and a
+       startup backoff so a rolling restart does not stampede.
+    6. **Make saturation observable**: alert on `pg_stat_activity` count above 80% of
+       `max_connections`, and on PgBouncer's pool wait time.
+    7. **Verify** by load-testing the 40-pod shape against the pooler and confirming the server
+       connection count stays flat.
+
+    The answer should show the arithmetic and name the mode change as the fix.
+  red_flags:
+    - Raising `max_connections` to 1000 and calling it solved.
+    - Adding a second PgBouncer in front of the first.
+    - Leaving `session` mode because "transaction mode broke our prepared statements" without
+      checking `max_prepared_statements`.
+    - Tuning `shared_buffers` to fix a connection-limit error.
+- id: pg-scn-004
+  title: The nightly load blocks checkout, and one transaction deadlocks every night
+  technologies: [postgresql]
+  difficulty: advanced
+  prompt: |
+    Between 02:00 and 02:40, checkout requests time out with `canceling statement due to statement
+    timeout` and occasional `deadlock detected`. The nightly job upserts into `orders` in batches of
+    5,000, then rebuilds `customer_stats` with a delete followed by an `INSERT ... SELECT`.
+    Application transactions are short: one insert into `orders`, one update of
+    `customers.last_order_at`.
+
+    The on-call engineer wants to raise `deadlock_timeout` and `statement_timeout`.
+  approach: |
+    Separate blocking from deadlocking, and both from transaction length.
+
+    1. **Identify blockers, not victims.** Run `SELECT pid, pg_blocking_pids(pid), wait_event_type,
+       now() - xact_start FROM pg_stat_activity WHERE cardinality(pg_blocking_pids(pid)) > 0`. The
+       application is the victim; the batch job is the holder, and its transactions last as long as
+       the batch.
+    2. **Establish lock granularity.** A 5,000-row update in one transaction holds 5,000 row locks
+       until commit. Deleting every row of `customer_stats` takes `ROW EXCLUSIVE` and blocks
+       writers; `TRUNCATE` would take `ACCESS EXCLUSIVE` and block readers too. Either way, the
+       rebuild is the problem.
+    3. **Shorten the holders.** Commit per 500 rows instead of 5,000, and claim work with
+       `SELECT ... FOR UPDATE SKIP LOCKED` rather than queueing behind the batch. For
+       `customer_stats`, build a shadow table and swap it inside a short transaction, or use
+       `REFRESH MATERIALIZED VIEW CONCURRENTLY` if the shape allows.
+    4. **Fix the deadlock specifically.** Two causes are likely: the batch and the application touch
+       `orders` and `customers` in opposite orders, and the multi-row upsert inserts overlapping key
+       sets in a non-deterministic order. Sort by primary key before the statement, and enforce one
+       lock order across both code paths.
+    5. **Add timeouts that hurt the right side.** `lock_timeout` on the application so it fails fast
+       and retries, `statement_timeout` on the batch so it is bounded, and
+       `idle_in_transaction_session_timeout` on everything.
+    6. **Separate the workloads.** Run the batch's reads against a replica, or move the stats rebuild
+       off the OLTP primary. Nightly batch and checkout on one primary is a scheduling decision as
+       much as a locking one.
+    7. **Retry correctly**: `40P01` and `40001` retried at the transaction level with backoff, never
+       per statement inside an aborted transaction.
+
+    The best answers fix transaction length before touching isolation or timeouts.
+  red_flags:
+    - Raising `deadlock_timeout` so detection takes longer.
+    - Killing the batch job as the fix.
+    - Switching the application to `READ UNCOMMITTED`.
+    - Increasing `statement_timeout` so failures happen later.
+    - Not naming the specific lock the batch holds on `customer_stats`.
+
+- id: pg-scn-005
+  title: Upgrade 1.2 TB from PostgreSQL 14 to 17 inside a five-minute window
+  technologies: [postgresql]
+  difficulty: advanced
+  prompt: |
+    A production cluster runs PostgreSQL 14 with 1.2 TB of data, 40 extensions in use, and a
+    five-minute acceptable downtime. It is a managed instance with a read replica. The application
+    cannot tolerate a schema difference, and there is no staging environment with production-scale
+    data.
+
+    Propose the upgrade, the validation, and the rollback.
+  approach: |
+    The window rules out `pg_upgrade` on a single node unless the copy is nearly free, and rules out
+    `pg_dump` entirely. Logical replication is the only approach that fits — with its caveats stated
+    explicitly.
+
+    1. **Inventory first.** List `pg_extension` with versions and confirm each has a build for 17.
+       Check `pg_database` for `datcollate`, `datlocprovider` and `datlocversion`: a glibc or ICU
+       change alters sort order and invalidates text indexes, so plan a `REINDEX`. Confirm
+       `wal_level = logical` and that every table to be replicated has a primary key or an explicit
+       replica identity.
+    2. **Provision 17 alongside**, create the schema exactly (DDL is not replicated), and verify by
+       diffing `pg_dump --schema-only` output from both clusters.
+    3. **Seed with a physical base backup** rather than a logical initial copy. Copying 1.2 TB
+       through `copy_data` is slow and puts read load on the primary. PostgreSQL 17's
+       `pg_createsubscriber` converts a physical replica into a logical subscriber, which is exactly
+       this pattern.
+    4. **Replicate and measure.** Watch `pg_stat_subscription` for apply lag and
+       `pg_stat_replication` for the sender, and compare row counts plus a checksum on the largest
+       tables. Run it for days, so a full batch cycle is included.
+    5. **Rehearse cutover** on a clone: freeze writes, wait for lag to reach zero, reset every
+       sequence from `max(id)`, repoint the connection string, run the smoke suite. Time it — the
+       five-minute budget is spent here, not on the copy.
+    6. **Cut over** and keep the old cluster read-only for a defined rollback window. Rolling back
+       after the new cluster has taken writes means reconciling both, so the decision point is
+       whether writes have been accepted, not whether the new cluster looks healthy.
+    7. **Validate after**: `ANALYZE`, compare the top ten query plans before and after, confirm
+       autovacuum is running, and check replication to the new replica.
+
+    The answer must state the DDL and sequence caveats and name the rollback boundary.
+  red_flags:
+    - Choosing `pg_upgrade --link` for a five-minute window with no rehearsal.
+    - Assuming logical replication carries schema changes.
+    - Forgetting sequences, then failing the first insert after cutover.
+    - No rollback plan beyond restoring the backup.
+    - Skipping the extension compatibility check until the night of the change.
+
+- id: pg-scn-006
+  title: An abandoned replication slot filled the WAL disk and the primary stopped
+  technologies: [postgresql]
+  difficulty: advanced
+  prompt: |
+    At 03:10 the primary stopped accepting writes with an error about `pg_wal`: no space left on
+    device. `pg_wal` holds 380 GB on a 400 GB volume. Two logical slots exist: one belongs to an
+    active subscription, the other to a Debezium connector that was decommissioned two weeks ago and
+    shows `active = false`.
+
+    The application is down. There is a read replica that is fully caught up.
+  approach: |
+    Restore service first, then fix the class of failure.
+
+    1. **Confirm the cause before deleting anything.** Query `pg_replication_slots` for `slot_name`,
+       `active`, `restart_lsn` and the retained bytes
+       (`pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)`). The inactive slot's retained bytes
+       should account for the growth. If an active slot is also far behind, deleting the wrong one
+       destroys the subscriber's position.
+    2. **Free space with the least destructive action.** Drop the decommissioned slot, then force a
+       `CHECKPOINT` so WAL files can actually be recycled — dropping the slot only releases the
+       retention promise. On a completely full disk even the checkpoint may fail, in which case a
+       single unneeded, already-archived segment can be moved aside with `pg_archivecleanup`, after
+       checking `restart_lsn` first.
+    3. **Do not restart the server** as a first move. A restart does not delete WAL and loses the
+       in-memory state needed to diagnose. If the postmaster has already shut down, free space on
+       disk before starting it.
+    4. **Verify recovery**: writes accepted, `pg_stat_archiver.failed_count` flat, `pg_wal` size
+       falling, replica lag back to zero.
+    5. **Prevent recurrence** — this is the real answer. Set `max_slot_wal_keep_size = '20GB'` so an
+       over-lagging slot is invalidated (`wal_status = 'lost'`) instead of filling the disk; alert on
+       retained bytes per slot rather than on total disk; make slot deletion part of the
+       decommission checklist for every CDC consumer; and keep a `pg_wal` disk alert separate from
+       the data volume alert.
+    6. **Decide the fate of the stale consumer.** If Debezium's data must be recovered, recreating
+       the slot means a new snapshot and a gap in coverage. State that explicitly rather than
+       silently dropping it.
+
+    The strong answer separates stopping the bleeding from never happening again, and checks which
+    slot is which before deleting.
+  red_flags:
+    - Dropping every slot to free space.
+    - Restarting PostgreSQL and hoping the WAL is cleaned up.
+    - Deleting files from `pg_wal` by hand without checking `restart_lsn`.
+    - Fixing the disk and not adding `max_slot_wal_keep_size` or a per-slot alert.
+    - Assuming the active subscription is the culprit because it is the one being monitored.
