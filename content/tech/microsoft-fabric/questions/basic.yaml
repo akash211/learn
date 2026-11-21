@@ -117,6 +117,13 @@
     transactions, `COPY INTO`, and cross-database three-part-name queries. Spark can read its
     tables but does not own writes. Choose the warehouse for relational marts and SQL teams, the
     lakehouse for engineering, semi-structured data and medallion bronze/silver layers.
+
+    The trade-off is where concurrency is enforced. Warehouse writes are transactionally
+    safe across many tables but that engine is not where Spark-scale transformation happens;
+    lakehouse writes are cheap and schema-flexible but give file-level rather than
+    statement-level guarantees, so two writers can conflict. A bronze/silver landing zone
+    belongs in the lakehouse and the gold star schema that the semantic model serves belongs
+    in the warehouse, joined by shortcuts rather than copies.
   tags: [lakehouse, warehouse, architecture]
 
 - id: fab-basic-008

@@ -50,8 +50,8 @@ Status legend: **done** · **running** (subagent authoring now) · **queued**
 | Delta Lake | `delta-lake` | done |
 | Apache Kafka | `kafka` | done |
 | dbt | `dbt` | done |
-| Snowflake | `snowflake` | running |
-| Databricks | `databricks` | running |
+| Snowflake | `snowflake` | done |
+| Databricks | `databricks` | done |
 
 ## Cloud & infrastructure
 | Module | Slug | Status |
@@ -72,14 +72,14 @@ Status legend: **done** · **running** (subagent authoring now) · **queued**
 ## AI, LLMs & agentic systems
 | Module | Slug | Status |
 |---|---|---|
-| LLM Agents | `llm-agents` | running |
-| Tool Calling | `tool-calling` | running |
-| MCP Servers | `mcp` | running |
-| RAG | `rag` | running |
-| LangChain | `langchain` | running |
-| LangGraph | `langgraph` | running |
-| PydanticAI | `pydanticai` | running |
-| CrewAI | `crewai` | running |
+| LLM Agents | `llm-agents` | done |
+| Tool Calling | `tool-calling` | done |
+| MCP Servers | `mcp` | done |
+| RAG | `rag` | done |
+| LangChain | `langchain` | done |
+| LangGraph | `langgraph` | done |
+| PydanticAI | `pydanticai` | done |
+| CrewAI | `crewai` | done |
 
 ## Web automation
 | Module | Slug | Status |
@@ -98,7 +98,7 @@ Status legend: **done** · **running** (subagent authoring now) · **queued**
 ## Architecture
 | Module | Slug | Status |
 |---|---|---|
-| System Design (Python) | `system-design` | done — deepening queued |
+| System Design (Python) | `system-design` | done — deepening to 10 worked solutions in flight |
 | 1 | Python | `python` | programming | done |
 | 2 | SQL | `sql` | programming | done |
 | 3 | Bash & Shell Scripting | `bash` | programming | batch A |
@@ -179,10 +179,8 @@ before the next starts.
 
 ## After authoring
 
-- Current run: Pytest, Streamlit, Dash, Gradio, Selenium, Playwright, Firecrawl, n8n, Tableau,
-  Power BI (10 concurrent modules).
-- Remaining AI/LLM modules: LLM Agents, Tool Calling, MCP Servers, RAG, LangChain, LangGraph,
-  PydanticAI, CrewAI; plus the System Design deepening pass.
+All 53 modules are authored. Final passes in flight: System Design deepening (four extra fully
+worked designs, longer recent answers) and expansion of the last 16 short answers.
 
 1. Prune per feedback — Akash reviews Python first and flags questions to cut or rewrite.
 2. Deepen System Design with 10 fully worked solutions and DSA with the full classic set.

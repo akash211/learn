@@ -7,7 +7,18 @@ import { Button, Card, Spinner } from "../components/ui";
 type Node = { id: string; label: string; category: string; categoryTitle: string };
 type Link = { source: string; target: string; type: string; note?: string };
 
-const PALETTE = ["#8ea6ff", "#7dd3a0", "#f2b06a", "#e08bd0", "#6ad1e3", "#c9a2ff", "#e3d06a", "#8fd6b4"];
+const PALETTE = [
+  "#8ea6ff", // indigo
+  "#5fd39a", // green
+  "#f2a65a", // amber
+  "#e07ad0", // magenta
+  "#5ac8e3", // cyan
+  "#b18aff", // violet
+  "#e8d15a", // yellow
+  "#7fd6c0", // teal
+  "#ef7d7d", // red
+  "#9db4d6", // slate
+];
 
 export default function TechMap() {
   const [graph, setGraph] = useState<{ nodes: Node[]; links: Link[] } | null>(null);
@@ -45,8 +56,8 @@ export default function TechMap() {
   useEffect(() => {
     const g = fg.current;
     if (!g) return;
-    g.d3Force("charge")?.strength(-340);
-    g.d3Force("link")?.distance(140);
+    g.d3Force("charge")?.strength(-620);
+    g.d3Force("link")?.distance(95);
     g.d3ReheatSimulation?.();
   }, [graph, filter]);
 
@@ -55,6 +66,17 @@ export default function TechMap() {
   const nodes = filter === "all" ? graph.nodes : graph.nodes.filter((n) => n.category === filter);
   const ids = new Set(nodes.map((n) => n.id));
   const links = graph.links.filter((l) => ids.has(l.source) && ids.has(l.target));
+
+  // degree drives node size and which labels survive at overview zoom
+  const degree = new Map<string, number>();
+  for (const l of links) {
+    degree.set(String(l.source), (degree.get(String(l.source)) ?? 0) + 1);
+    degree.set(String(l.target), (degree.get(String(l.target)) ?? 0) + 1);
+  }
+  const maxDegree = Math.max(1, ...degree.values());
+  const labelled = new Set(
+    [...degree.entries()].sort((a, b) => b[1] - a[1]).slice(0, filter === "all" ? 14 : 40).map(([id]) => id),
+  );
 
   return (
     <div className="space-y-4">
@@ -87,19 +109,23 @@ export default function TechMap() {
             backgroundColor="rgba(0,0,0,0)"
             nodeLabel={(n) => (n as Node).label}
             nodeRelSize={5}
-            linkColor={() => "rgba(140,150,170,0.35)"}
-            linkWidth={1}
+            linkColor={() => "rgba(140,150,170,0.22)"}
+            linkWidth={0.7}
             linkDirectionalArrowLength={3}
             linkDirectionalArrowRelPos={0.9}
-            cooldownTicks={120}
+            cooldownTicks={260}
             onNodeClick={(n) => navigate(`/tech/${(n as Node).id}`)}
             nodeCanvasObject={(node, ctx, scale) => {
               const n = node as Node & { x: number; y: number };
-              const r = 5;
+              const deg = degree.get(n.id) ?? 0;
+              const r = 3.5 + (deg / maxDegree) * 5;
               ctx.beginPath();
               ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
               ctx.fillStyle = colorFor(n.category);
               ctx.fill();
+              // Deterministic: only the highest-degree hubs carry a permanent label.
+              // Every other node still shows its name on hover (nodeLabel tooltip).
+              if (!labelled.has(n.id)) return;
               const label = n.label;
               const fontSize = Math.max(11, 13 / scale);
               ctx.font = `600 ${fontSize}px Inter, sans-serif`;
@@ -115,6 +141,7 @@ export default function TechMap() {
         </div>
       </Card>
 
+      <p className="text-[12px] text-muted">Zoom in to read labels · click a node to open it · use the filters to isolate a cluster.</p>
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-[12px] text-muted">
         {categories.map(([key, title]) => (
           <span key={key} className="flex items-center gap-1.5">
