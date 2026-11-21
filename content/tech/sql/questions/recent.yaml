@@ -1,0 +1,296 @@
+- id: sql-recent-001
+  topic: columnar storage and pruning
+  difficulty: intermediate
+  question: Why is SELECT * materially more expensive on a columnar warehouse than on a row store?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    A row store reads whole pages: fetching one column means reading the other columns that
+    share the page, so `SELECT *` is close to free relative to any other projection. A columnar
+    warehouse stores each column separately and reads only the columns referenced. `SELECT *`
+    therefore forces every column in the table to be scanned and decompressed, not just the
+    three the query uses.
+
+    The effect compounds with pruning. Warehouses skip micro-partitions using per-column min/max
+    metadata; a narrow projection lets the engine read metadata and data for only the relevant
+    columns, while `SELECT *` can also defeat late materialisation — the engine may have to
+    assemble wide rows before it can apply a filter.
+
+    The practical rules: never `SELECT *` in a view or a dbt model that feeds other models;
+    project the columns you need at the outermost layer only if a BI tool genuinely needs them;
+    and remember that `SELECT *` in a CTE is usually fine because the optimiser prunes unused
+    columns — but a `*` that crosses a `UNION`, a window function or a materialised boundary is
+    not.
+  tags: [columnar, projection, pruning, cost]
+
+- id: sql-recent-002
+  topic: semi-structured data
+  difficulty: advanced
+  question: How do you store and query JSON in Snowflake, PostgreSQL and SQL Server, and what does each cost you?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    The storage model determines the query model.
+
+    Snowflake has a native `VARIANT` type: semi-structured documents are stored in a compressed
+    columnar form, queried with path syntax, and shredded on read.
+
+    ```sql
+    SELECT o.order_id, f.value:sku::string AS sku, f.value:qty::int AS qty
+    FROM orders o, LATERAL FLATTEN(input => o.payload:items) f;
+    ```
+
+    PostgreSQL has `JSONB` — binary, indexable with GIN, queried with `->`/`->>` and expanded
+    with `jsonb_array_elements`. `JSON` (text) is for round-tripping only.
+
+    ```sql
+    SELECT o.order_id, item->>'sku' AS sku
+    FROM orders o, jsonb_array_elements(o.payload->'items') AS item;
+    ```
+
+    SQL Server stores JSON as `NVARCHAR` and parses at query time with `JSON_VALUE` and
+    `OPENJSON`; indexing requires persisted computed columns or a full-text index.
+
+    The common cost: array expansion multiplies rows (`FLATTEN` is a lateral join), so a document
+    with 50 items turns one order into 50 rows before aggregation. Model the hot fields as real
+    columns and keep the document for the long tail, or every query pays the shredding cost.
+  tags: [json, variant, jsonb, flatten, semi-structured]
+
+- id: sql-recent-003
+  topic: incremental loads
+  difficulty: advanced
+  question: What goes wrong with MERGE in a warehouse, and how do you make it safe?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    `MERGE` fails in three ways that are all about the source, not the syntax.
+
+    **Duplicate source keys.** If the source has two rows for the same key, the target row is
+    updated twice. Snowflake raises an error or applies updates nondeterministically; SQL Server
+    errors with "The MERGE statement attempted to UPDATE or DELETE the same row more than once".
+    Deduplicate inside the `USING` clause:
+
+    ```sql
+    MERGE INTO dim_customer t
+    USING (
+      SELECT * FROM stage_customer
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY updated_at DESC) = 1
+    ) s
+    ON t.customer_id = s.customer_id
+    WHEN MATCHED AND s.updated_at > t.updated_at THEN UPDATE SET ...
+    WHEN NOT MATCHED THEN INSERT ...;
+    ```
+
+    **Missing watermark guard.** `WHEN MATCHED` without `AND s.updated_at > t.updated_at` lets a
+    late, older record overwrite a newer one. Always compare.
+
+    **Non-idempotent deletes.** `WHEN NOT MATCHED BY SOURCE THEN DELETE` against a partial source
+    deletes everything the batch did not include. Restrict the target with a partition predicate
+    or drop the clause.
+
+    Test by running the same batch twice: row counts and checksums must be identical.
+  tags: [merge, idempotency, dedupe, late-arriving]
+
+- id: sql-recent-004
+  topic: dbt modelling
+  difficulty: intermediate
+  question: How does a dbt incremental model decide what to process, and where does it go wrong?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    An incremental model wraps the transformation in `{% if is_incremental() %}`, which is true
+    only when the target exists and is not a full refresh. Inside that block you add a predicate
+    that limits the source to new data — commonly a lookback window rather than a strict
+    watermark:
+
+    ```sql
+    SELECT ...
+    FROM {{ ref('stg_orders') }}
+    {% if is_incremental() %}
+      WHERE order_ts >= (SELECT MAX(order_ts) FROM {{ this }})
+                        - INTERVAL '3 days'
+    {% endif %}
+    ```
+
+    The lookback exists because events arrive late. A strict `>` watermark drops any record that
+    lands after the job runs, permanently. Three days of overlap plus a `unique_key` merge makes
+    the model self-healing for that window.
+
+    It goes wrong when: the strategy is `append` but the source is mutable (duplicates forever);
+    the `unique_key` is not actually unique in the source (merge error or silent duplication);
+    the model reads from a table that is itself incremental and lags; or someone runs
+    `--full-refresh` on a 2 TB model during business hours. Add a `dbt_utils` uniqueness test and
+    a row-count assertion per run.
+  tags: [dbt, incremental, watermark, idempotency]
+
+- id: sql-recent-005
+  topic: text-to-sql
+  difficulty: advanced
+  question: How would you make an LLM-generated SQL query trustworthy enough to run in production?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Treat the model as an untrusted query author and put the guarantees outside the model.
+
+    1. **Ground it in a curated schema**, not `information_schema`. Expose table and column
+       descriptions, units, enum values and example values; ambiguity about whether
+       `total_amount` is gross or net produces confidently wrong SQL.
+    2. **Constrain the dialect and the shape.** Few-shot with valid examples for the target
+       engine; forbid DDL and DML unless write access is the point; require an explicit date
+       filter and a `LIMIT`.
+    3. **Validate by executing, not by reading.** Parse the SQL, check referenced tables and
+       columns against the catalog, run it with a `LIMIT` under a statement timeout, and compare
+       output shape to the question (one row? a time series?).
+    4. **Check the fan-out.** Most silently wrong generated SQL joins a fact to a dimension
+       without pre-aggregating and doubles the totals. Assert that key metrics reconcile with a
+       known-good aggregate.
+    5. **Show the SQL** and let the user accept it; log question, SQL, row count and latency for
+       evaluation.
+
+    The failure mode to design against is not syntax errors — those are visible — but plausible
+    queries that answer a slightly different question.
+  tags: [text-to-sql, llm, validation, governance]
+
+- id: sql-recent-006
+  topic: cost engineering
+  difficulty: advanced
+  question: A Snowflake dashboard costs far more than expected. What do you check, in order?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Cost is warehouse time, and warehouse time is `credits per hour × hours running`. Start with
+    `QUERY_HISTORY` and `WAREHOUSE_METERING_HISTORY`, not with the SQL.
+
+    1. **Idle warehouses.** Auto-suspend set too high (or disabled) bills for nothing. Check
+       `avg_queue_time`, `avg_idle_time`. Multi-cluster warehouses spinning up for a spike and
+       staying up are a common surprise.
+    2. **Bytes scanned per query.** `BYTES_SCANNED` and `PARTITIONS_SCANNED` against
+       `PARTITIONS_TOTAL` show whether pruning works. A dashboard filtering on a non-clustered
+       column scans everything.
+    3. **`SELECT *` and missing date filters.** Both inflate scanned bytes; both are fixable in
+       the semantic layer.
+    4. **Rebuilt dashboards.** A BI tool issuing a fresh query per tile per refresh defeats the
+       result cache. Identical query text within 24 hours is free; `WHERE ts > CURRENT_DATE`
+       makes every query unique.
+    5. **Warehouse size.** Each size step doubles the credit rate, so an XL warehouse is 8× the
+       cost per hour of a Small. Bigger is only cheaper when the query is genuinely
+       parallelisable and finishes proportionally faster.
+
+    Fix pruning and query shape before resizing. Resizing a badly pruned query just buys the
+    same full scan faster.
+  tags: [snowflake, cost, pruning, caching]
+
+- id: sql-recent-007
+  topic: dimensional modelling
+  difficulty: intermediate
+  question: Star schema or one big table? How do you decide in a dbt-era warehouse?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    The trade-off changed with columnar storage and cheap compute, but it did not disappear.
+
+    A **star schema** keeps conformed dimensions and a narrow fact table. It stores each attribute
+    once, so a change to `dim_customer` propagates everywhere, joins are on surrogate keys, and
+    BI tools can reuse the same dimension across facts. The cost is joins at query time — usually
+    cheap in a warehouse, but not free when the dimension is large and the filter is not on the
+    distribution key.
+
+    A **wide table** (one big table) pre-joins facts to dimensions. It scans a single object with
+    no joins, which is fast for a fixed dashboard, and terrible for consistency: the same
+    customer attribute is copied into five tables and drifts the moment one pipeline lags.
+    Storage and rebuild cost also grow with every added dimension column.
+
+    The defensible default: star schema in the warehouse (`fct_` and `dim_` models, tested keys),
+    plus thin wide marts for specific dashboards generated *from* the star, never maintained by
+    hand. Denormalise at the presentation layer where the requirement is stable; keep the
+    integration layer normalised so the definition of "customer" exists once.
+  tags: [dimensional-modelling, star-schema, dbt, obt]
+
+- id: sql-recent-008
+  topic: backfills
+  difficulty: advanced
+  question: How do you run a safe backfill over two years of partitioned data?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Backfills fail on cost, locks and idempotency, in that order.
+
+    **Scope it by partition, not by predicate.** Process one day (or month) at a time, driven by
+    a loop over the date spine, so a failure restarts from the failed unit. On PostgreSQL,
+    `DELETE`/rewrite per partition avoids one enormous transaction and the vacuum debt that
+    follows it; on Snowflake, each unit is a separate `MERGE` or `CREATE OR REPLACE`, which also
+    bounds the bytes scanned per statement.
+
+    **Write to a shadow table first.** `CREATE TABLE AS`, load, validate row counts and key
+    uniqueness, then swap. Never overwrite production output in place.
+
+    **Make it idempotent and restartable.** A `MERGE` on the natural key, or an
+    `INSERT OVERWRITE` of the exact partition range. Record progress in a control table
+    (`partition, status, started_at, rows`) so the job is resumable and observable.
+
+    **Throttle.** A backfill competing with production for the same warehouse or the same
+    Postgres I/O will degrade the dashboard before it finishes. Cap concurrency, run per-partition
+    during low traffic, and measure per-unit duration to forecast the total.
+
+    Finally, verify: compare pre/post aggregates over a sample of partitions, not just row counts.
+  tags: [backfill, partitions, idempotency, operations]
+
+- id: sql-recent-009
+  topic: semi-structured data
+  difficulty: advanced
+  question: What is the cardinality risk when flattening nested arrays in an analytical query?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Flattening is a lateral join: one row per array element. Any aggregate computed after the
+    flatten runs at element grain, not at the parent grain, so `SUM(order_total)` over a flattened
+    order with five items counts the order five times.
+
+    ```sql
+    -- Wrong: revenue multiplied by item count
+    SELECT SUM(o.total_amount)
+    FROM orders o, LATERAL FLATTEN(input => o.payload:items) f;
+
+    -- Right: aggregate at the parent grain, flatten separately
+    SELECT SUM(total_amount) FROM orders;
+    ```
+
+    The same trap appears with `jsonb_array_elements`, `OPENJSON`, `UNNEST` and `EXPLODE`. It is
+    invisible when every document happens to have exactly one element — which is true in staging
+    and false in production.
+
+    Defend with an assertion: `COUNT(*)` before and after the flatten, or a dbt test that the
+    row count of a flattened model equals `SUM(array_size(...))`. If you need both parent-level
+    and element-level metrics in one result, aggregate each in its own CTE at its own grain and
+    join on the key — never in a single `GROUP BY` after a cross-product.
+  tags: [flatten, fan-out, cardinality, json]
+
+- id: sql-recent-010
+  topic: latency engineering
+  difficulty: intermediate
+  question: How do you make a dashboard query return in under two seconds without lying about freshness?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Separate the freshness requirement from the latency requirement and design for both
+    explicitly.
+
+    **Precompute to the grain the dashboard needs.** A daily aggregate table
+    (`agg_orders_daily_by_country`) turns a scan of hundreds of millions of rows into a scan of
+    thousands. Refresh it on a schedule, and expose `refreshed_at` in the response so the UI can
+    show "as of 06:00" instead of implying real time.
+
+    **Make the query cacheable.** Identical SQL text against unchanged tables hits the warehouse
+    result cache for free. Relative predicates (`WHERE order_date = CURRENT_DATE`) make every
+    execution unique; have the orchestrator pass an explicit date parameter instead.
+
+    **Prune and project.** Filter on the clustering key, select only the needed columns, and push
+    the filter into the base table rather than applying it after a join.
+
+    **Cache at the application edge** for the highest-traffic tiles — a 60-second TTL on a
+    header metric is honest and cheap.
+
+    What not to do: run the heavy query on every page load and call it "real time", or widen the
+    pre-aggregation until it is a copy of the fact table. State the freshness contract in the
+    product, then meet it with the cheapest mechanism that does.
+  tags: [latency, preaggregation, caching, freshness]

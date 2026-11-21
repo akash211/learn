@@ -1,0 +1,90 @@
+concepts:
+  - title: The GIL
+    detail: "CPython allows one thread to run bytecode at a time; it is released on I/O and inside C extensions that opt in, which is why threads help I/O and not CPU work."
+  - title: Reference counting plus cyclic GC
+    detail: "Most objects die immediately when the last reference drops; the generational collector exists only to reclaim reference cycles."
+  - title: Iterator protocol
+    detail: "`__iter__` returns an iterator, `__next__` returns the next value or raises `StopIteration`. Iterators are single-use; iterables are re-iterable."
+  - title: Generator frame
+    detail: "A generator is a suspended function frame holding locals and instruction pointer. It is lazy, single-use, and not picklable."
+  - title: Closures capture variables
+    detail: "Nested functions share a cell with the enclosing scope, so they see later mutations. Bind values with default arguments or `partial` to avoid late binding."
+  - title: Descriptor lookup order
+    detail: "Data descriptors on the type beat the instance `__dict__`, which beats non-data descriptors and class attributes. That is how `property` works."
+  - title: C3 linearisation
+    detail: "`__mro__` orders bases deterministically; cooperative multiple inheritance relies on every class calling `super().__init__(**kwargs)`."
+  - title: Dataclass defaults
+    detail: "`field(default_factory=...)` for mutable defaults, `frozen=True` for hashing, `slots=True` for memory, `__post_init__` for validation."
+  - title: __slots__
+    detail: "Removes the per-instance dict, cutting memory for high-cardinality objects; costs dynamic attributes and `__dict__`-dependent features."
+  - title: Event loop
+    detail: "A single-threaded scheduler over ready callbacks and a selector. No preemption: a coroutine runs until it awaits something that actually suspends."
+  - title: TaskGroup
+    detail: "Structured concurrency since 3.11. One failure cancels siblings, waits for cleanup, then raises `ExceptionGroup`."
+  - title: Process pool boundaries
+    detail: "Arguments and results are pickled, so module-level functions only; each worker has its own GIL, memory and import cost."
+  - title: pymalloc arenas
+    detail: "Small objects come from 256 KB arenas carved into pools. A pool returns to the OS only when empty, so RSS is a high-water mark, not live memory."
+  - title: tracemalloc
+    detail: "Stdlib allocation tracer. Snapshot, run the workload, snapshot, then `compare_to(..., 'lineno')` to find the growing allocation site."
+  - title: Bounded caching
+    detail: "`lru_cache(maxsize=N)` evicts; `cache` never does. On methods the key includes `self`, pinning every instance for the cache lifetime."
+  - title: Protocol vs ABC
+    detail: "Protocols are structural, requiring no inheritance; ABCs are nominal and can carry shared implementation and instantiation-time enforcement."
+
+traps:
+  - "Claiming threads speed up CPU-bound Python — the GIL serialises bytecode, so wall time stays flat or worsens."
+  - "Believing the GIL makes compound operations atomic. `counter += 1` is load-add-store and still needs a lock."
+  - "Using a mutable default argument and assuming each call gets a fresh object."
+  - "Using `is` for integers or strings beyond the interned small range; it compares identity, not value."
+  - "Calling `groupby` without sorting by the same key, which yields one group per change instead of one per key."
+  - "Treating `deepcopy` as free or universally safe — it is slow, memory-hungry, and fails on locks, sockets and open files."
+
+advanced:
+  - "Generators cannot be pickled because their state lives in a frame; a process pool needs a factory or a materialised list."
+  - "An exception holds a traceback that references every frame and its locals, so storing exceptions is a memory leak in disguise."
+  - "`gc.freeze()` after warm-up removes long-lived objects from full collections, cutting pause time in large servers."
+  - "`except*` handles `ExceptionGroup` by matching subsets by type; unmatched exceptions keep propagating."
+  - "`asyncio.to_thread` keeps the loop responsive, but the default executor has a finite thread count, so bound concurrency with a semaphore."
+  - "The free-threaded build is a separate interpreter, needs extension opt-in via `Py_mod_gil`, and is slower single-threaded than the GIL build."
+
+comparisons:
+  - a: list
+    b: tuple
+    difference: "Mutable dynamic array vs immutable fixed record; tuples are hashable, smaller and cheaper to create."
+  - a: threading
+    b: multiprocessing
+    difference: "Shared memory and cheap, but serialised for CPU work by the GIL; processes scale CPU at the cost of pickling and memory."
+  - a: asyncio.gather
+    b: asyncio.TaskGroup
+    difference: "gather leaves siblings running after a failure; TaskGroup cancels them and raises ExceptionGroup."
+  - a: dataclass
+    b: NamedTuple
+    difference: "Dataclass offers defaults, validation and mutability control; NamedTuple is immutable, compact and unpacks like a tuple."
+  - a: lru_cache
+    b: cache
+    difference: "`lru_cache(maxsize=N)` evicts least-recently-used entries; `cache` is unbounded and will grow with key cardinality."
+  - a: ABC
+    b: Protocol
+    difference: "Inheritance-based and enforceable at instantiation vs structural typing with no base class."
+  - a: list.sort
+    b: sorted
+    difference: "In-place and returns None vs returns a new list and accepts any iterable; both are stable Timsort."
+
+commands:
+  - label: Run the suite quietly
+    code: pytest -q
+  - label: Re-run only last failures
+    code: pytest --lf -x
+  - label: Show where import time goes
+    code: python -X importtime -c "import myapp"
+  - label: Profile a module by cumulative time
+    code: python -m cProfile -s cumulative -m myapp.job
+  - label: Inspect a live process without restarting it
+    code: py-spy dump --pid <pid>
+  - label: Find growing allocations
+    code: 'python -c "import tracemalloc; tracemalloc.start(25)"  # then snapshot, run, compare_to'
+  - label: Check that every dependency has a wheel
+    code: "pip download --only-binary=:all: -d /tmp/wheels -r requirements.txt"
+  - label: Build and validate a distribution
+    code: python -m build && twine check dist/*

@@ -1,0 +1,403 @@
+- id: fab-basic-001
+  topic: onelake
+  difficulty: beginner
+  question: What is OneLake, and why does Fabric need a single lake for the whole tenant?
+  answer: |
+    OneLake is the tenant-wide logical data lake underneath every Fabric workload. Physically it
+    is Azure Data Lake Storage Gen2 with hierarchical namespace; logically it is one lake, one
+    container per workspace, one folder per item. Lakehouse tables, warehouse tables, mirrored
+    databases and KQL data with OneLake availability all land there as Delta tables.
+
+    Fabric needs it because the platform's selling point is *one copy of the data*. Spark, the
+    T-SQL engine, KQL and Power BI's Direct Lake all read the same Parquet files instead of each
+    maintaining a separate store. That removes the classic lake → warehouse → BI-extract chain,
+    and it means governance, shortcuts and lineage have one address space to reason about rather
+    than three.
+  tags: [onelake, delta, architecture]
+
+- id: fab-basic-002
+  topic: capacity
+  difficulty: beginner
+  question: What is a Fabric capacity, and what does a Capacity Unit actually measure?
+  answer: |
+    A capacity is the pool of compute that a set of workspaces shares, purchased as an F SKU
+    (F2, F4, F8 … up to the largest enterprise sizes). Capacity Units measure compute power:
+    F2 provides 2 CUs, F64 provides 64, and so on, roughly doubling per step.
+
+    CUs are consumed by *operations* — a Spark job, a warehouse query, a semantic model refresh,
+    a report render — and Fabric converts each operation's resource use into CU-seconds. The
+    capacity is both the billing boundary and the throttling boundary, so every workspace
+    assigned to it competes for the same budget. Storage is not part of the CU pool; OneLake
+    storage is metered separately, which is why keeping multiple copies of the same data is
+    expensive twice.
+  tags: [capacity, sku, billing]
+
+- id: fab-basic-003
+  topic: capacity
+  difficulty: intermediate
+  question: Explain bursting and smoothing. Why doesn't a large midnight refresh throttle a small capacity?
+  answer: |
+    Bursting lets an operation temporarily use more compute than the SKU's steady-state rate, so
+    a job finishes quickly instead of being artificially slowed. Smoothing then spreads the
+    CU-seconds that operation consumed across future 30-second timepoints — 2,880 of them in a
+    day — so no single timepoint looks like a spike.
+
+    Interactive operations are smoothed over five to 64 minutes depending on consumption;
+    background operations over 24 hours. A one-CU-hour job on an F2 (48 CU-hours per day)
+    contributes roughly 2.1% to every timepoint, which is nowhere near any throttle threshold.
+    That is why scheduling everything at midnight is mostly unnecessary. Sustained load, not a
+    single large job, is what actually overloads a capacity.
+  tags: [smoothing, bursting, throttling]
+
+- id: fab-basic-004
+  topic: capacity
+  difficulty: advanced
+  question: Describe Fabric's throttling stages and what carryforward means for recovery.
+  answer: |
+    Throttling escalates in four bands. Up to 10 minutes of future capacity consumption is
+    covered by overage protection and nothing is throttled. Between 10 and 60 minutes, new
+    interactive requests are delayed by 20 seconds. Between 60 minutes and 24 hours, interactive
+    requests are rejected while background jobs may still start. Beyond 24 hours of consumed
+    future capacity, all new requests — interactive and background — are rejected with
+    `CapacityLimitExceeded`.
+
+    Usage that exceeds the smoothing allowance becomes **carryforward** CU, applied to each
+    subsequent timepoint. Idle capacity burns it down. Recovery is therefore not instant when
+    the offending job ends: the capacity keeps throttling until the debt is paid. That is why
+    the metrics app matters — it shows carryforward and the throttle stage, so you can tell
+    "we are over capacity" apart from "we are still paying for last hour".
+  tags: [throttling, carryforward, operations]
+
+- id: fab-basic-005
+  topic: shortcuts
+  difficulty: intermediate
+  question: When would you use a OneLake shortcut instead of copying data?
+  answer: |
+    Use a shortcut when the source remains the system of record and you only need to *read* it in
+    Fabric: raw zones you already land in ADLS Gen2, an S3 bucket owned by another team, a
+    curated table in a neighbouring workspace, or Dataverse data you want to join to analytics.
+    The shortcut is metadata pointing at a target path, so new files appear immediately and
+    there is no pipeline to schedule or monitor.
+
+    Copy instead when you need to transform, compact, apply retention, or enforce per-user
+    source permissions. Also copy when the source is far away: a cross-region or cross-cloud
+    shortcut pays latency and egress on every query and makes Direct Lake framing slower. A
+    useful default is shortcuts at the bronze edge and managed Delta tables in silver and gold.
+  tags: [shortcuts, ingestion, cost]
+
+- id: fab-basic-006
+  topic: shortcuts
+  difficulty: advanced
+  question: What are the security implications of an external OneLake shortcut to S3 or ADLS Gen2?
+  answer: |
+    Internal shortcuts authorise reads against the calling user's permissions on the target
+    item. External shortcuts behave differently: OneLake stores a connection (credentials or a
+    managed identity) and every consumer of the shortcut reads with the rights of that
+    connection. A workspace Viewer can therefore read an S3 prefix they have no IAM rights to.
+
+    Source ACLs, sensitivity labels and lineage do not travel with the shortcut either — you are
+    re-governing the data at the Fabric boundary. Mitigations are pass-through authentication
+    where the source supports it, OneLake security roles for row/column/file-level enforcement,
+    or a mediated gold layer that materialises only what consumers should see. Practically,
+    maintain a list of every external shortcut and its credential; that list is your exposure
+    register.
+  tags: [security, shortcuts, governance]
+
+- id: fab-basic-007
+  topic: lakehouse
+  difficulty: beginner
+  question: What is the practical difference between a lakehouse and a warehouse in Fabric?
+  answer: |
+    Both store Delta tables in OneLake and share the same SQL engine, so the difference is the
+    write path and development surface. A lakehouse is Spark-first: you write with notebooks,
+    pipelines, dataflows or shortcuts, it holds `Files/` as well as `Tables/`, and its SQL
+    analytics endpoint is read-only T-SQL over the Delta tables.
+
+    A warehouse is T-SQL-first: full DDL and DML, `MERGE`, stored procedures, multi-table ACID
+    transactions, `COPY INTO`, and cross-database three-part-name queries. Spark can read its
+    tables but does not own writes. Choose the warehouse for relational marts and SQL teams, the
+    lakehouse for engineering, semi-structured data and medallion bronze/silver layers.
+  tags: [lakehouse, warehouse, architecture]
+
+- id: fab-basic-008
+  topic: lakehouse
+  difficulty: intermediate
+  question: What can and cannot be done through a lakehouse SQL analytics endpoint?
+  answer: |
+    It is read-only T-SQL: `SELECT`, views, table-valued functions and stored procedures. You
+    cannot `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `CREATE TABLE` or `TRUNCATE`; writes go through
+    Spark, pipelines or dataflows.
+
+    It only sees Delta tables under `Tables/`. Tables written into `Files/`, or external Delta
+    tables registered outside the managed folder, are invisible unless you add a shortcut in
+    `Tables/`. Types are projected into the warehouse type system, Delta column mapping by ID is
+    unsupported, and adding a foreign key can block later schema changes.
+
+    Security also behaves differently: SQL granular permissions and RLS apply only when the data
+    is accessed through the endpoint, not when the same user reads the table through Spark.
+  tags: [sql-analytics-endpoint, limitations, security]
+
+- id: fab-basic-009
+  topic: architecture
+  difficulty: intermediate
+  question: How would you lay out a medallion architecture in Fabric?
+  answer: |
+    Bronze as a lakehouse: raw landing, append-only, minimal typing, fed by Copy jobs, pipelines
+    or shortcuts to data you do not own, with ingestion timestamp and source file recorded.
+    Silver as a lakehouse: Spark cleanses, deduplicates, conforms types and keys, then merges
+    into Delta tables that are compacted and sensibly partitioned.
+
+    Gold is the design decision. Either a warehouse star schema built in T-SQL, or a curated
+    lakehouse schema consumed by Direct Lake. Pick one per domain — running both produces two
+    versions of the truth. Each layer gets its own workspace so permissions, deployment and
+    capacity attribution are separable, and tables are owned by exactly one writer.
+
+    Shortcuts at bronze, managed Delta in the middle, and a single gold owner is the pattern that
+    survives audits and handovers.
+  tags: [medallion, architecture, layers]
+
+- id: fab-basic-010
+  topic: data-factory
+  difficulty: beginner
+  question: When should you use a pipeline versus a Dataflow Gen2?
+  answer: |
+    A pipeline is an orchestrator: it sequences activities, passes parameters, calls notebooks
+    and stored procedures, and handles retries and dependencies. It is bad at transformation
+    beyond column mapping.
+
+    Dataflow Gen2 is Power Query Online with a destination. It is excellent for small and medium
+    data volumes, 150+ connectors, and cleansing logic an analyst can own and read. It runs on a
+    single-node mashup engine, so a wide merge over hundreds of gigabytes will be slow and
+    memory-sensitive.
+
+    The common combination is a pipeline that triggers a dataflow for a handful of awkward
+    sources and calls Spark notebooks for the heavy transformations. If the logic is not
+    Power-Query-shaped, do not force it into a dataflow just because the UI is friendlier.
+  tags: [pipelines, dataflows, orchestration]
+
+- id: fab-basic-011
+  topic: data-factory
+  difficulty: intermediate
+  question: What is the difference between a Copy job and a Copy activity?
+  answer: |
+    A Copy activity lives inside a pipeline. You get full orchestration around it — `ForEach`,
+    dependencies, parameters, retries — but you build and maintain that scaffolding, and each
+    activity is one table or one query.
+
+    A Copy job is a standalone item for movement only: bulk copy, incremental copy with change
+    tracking or a watermark, and replication of many tables with a single configuration and a
+    restartable run history. It has no transformation and no general orchestration.
+
+    Choose Copy job when the requirement is "get these tables across, then keep them in sync",
+    especially for lift-and-shift or database replication. Choose Copy activity when the move is
+    one step in a larger pipeline, or when you need custom control over parallelism and
+    dependencies.
+  tags: [copy-job, copy-activity, ingestion]
+
+- id: fab-basic-012
+  topic: data-factory
+  difficulty: advanced
+  question: How do you implement an incremental load in a Fabric pipeline without a built-in watermark feature?
+  answer: |
+    Make the pattern explicit. A `Lookup` reads the last successful high-water mark from a
+    control table. A parameterised Copy activity filters the source with
+    `WHERE ModifiedUtc > '@{activity('GetWatermark').output.firstRow.watermark}'`. On success, a
+    stored procedure or another Copy writes the new maximum watermark back.
+
+    Two details decide whether it survives production. First, make the destination write
+    idempotent — merge on the business key, or overwrite the affected partition — because
+    retries and overlapping runs happen. Second, store the watermark per entity, not globally,
+    and advance it only after a successful load; advancing first turns a transient failure into
+    permanent data loss.
+
+    For simple database replication, use a Copy job instead of hand-building this; it covers
+    backfill plus incremental follow-up natively.
+  tags: [incremental-load, watermark, idempotency]
+
+- id: fab-basic-013
+  topic: spark
+  difficulty: beginner
+  question: Why does a Fabric notebook sometimes take minutes to start, and what do starter pools change?
+  answer: |
+    A notebook needs a Spark session on a pool. A cold custom pool has to allocate nodes, so the
+    first cell waits minutes. Starter pools are pre-warmed, which brings session start down to
+    seconds and is why interactive work feels responsive by default.
+
+    The trade-off is control: starter pools use a fixed node size, so a memory-hungry job may
+    not fit. Custom pools let you pin node size and autoscaling bounds per workspace, at the cost
+    of slower cold starts. High concurrency mode shares one session across notebooks, which cuts
+    start-up further for interactive users but weakens isolation between workloads.
+
+    For production jobs, session start is a fixed tax per run, so batch several steps into one
+    notebook rather than spawning a session per small transformation.
+  tags: [spark, pools, sessions]
+
+- id: fab-basic-014
+  topic: spark
+  difficulty: intermediate
+  question: How do you run one notebook from another, and how does that differ from the pipeline Notebook activity?
+  answer: |
+    Inside a notebook, `notebookutils.notebook.run("nb_name", timeout_seconds, {"param": "value"})`
+    runs the child in the **same** Spark session and returns whatever it passes to
+    `notebookutils.notebook.exit()`. It is cheap to start and shares cached data, which suits
+    tight sequences of small steps. Failures propagate to the caller.
+
+    The pipeline Notebook activity gives each notebook its own run: separate observability in the
+    Monitoring hub, parameters, retries, dependencies and the ability to run branches in
+    parallel. It costs a session start per activity but is far easier to operate and debug.
+
+    Rule of thumb: pipeline activities for production steps that need visibility; in-notebook
+    calls for chatty sub-steps where session reuse is the point. Neither is a substitute for
+    doing the work in one well-written Spark job.
+  tags: [notebooks, orchestration, notebookutils]
+
+- id: fab-basic-015
+  topic: delta
+  difficulty: advanced
+  question: Why do thousands of small Parquet files hurt Fabric, and how do you fix them?
+  answer: |
+    Every engine pays per-file overhead: open, read footer, list, plan. Ten thousand 20 KB files
+    cost far more than ten 200 MB files for the same rows, and the penalty lands on Spark reads,
+    SQL endpoint queries, Direct Lake framing and KQL shortcuts alike. Delta merges and
+    micro-batch streaming writes produce exactly this pattern.
+
+    Fix it with compaction and layout. `OPTIMIZE` rewrites files to a healthier size and can
+    cluster with `ZORDER` on columns you filter by; `VACUUM` removes unreferenced files left by
+    rewrites and respects a retention window. Turn on Optimize Write for write-heavy jobs, avoid
+    over-partitioning, and target files in the tens-to-low-hundreds of MB. Note that V-Order and
+    Optimize Write defaults changed for workspaces created after April 2025, so set them
+    explicitly instead of relying on inherited behaviour.
+  tags: [delta, optimize, small-files]
+
+- id: fab-basic-016
+  topic: real-time
+  difficulty: beginner
+  question: What is the division of labour between Eventstream and Eventhouse?
+  answer: |
+    Eventstream moves and routes events: connect a source (Event Hubs, Kafka, IoT Hub, CDC,
+    storage), apply lightweight operators (filter, manage fields, windowed aggregate, union,
+    join, expand), and fan out to one or more destinations — Eventhouse, lakehouse, Activator, a
+    derived stream or a custom endpoint. It has no general-purpose compute.
+
+    Eventhouse stores and queries: a container for KQL databases on the Kusto engine, optimised
+    for append-heavy time-series, semi-structured and free-text data. It provides retention and
+    caching policies, materialized views, update policies and KQL queries over billions of rows.
+
+    So: Eventstream is the pipe, Eventhouse is the analytical store. Complex transformation
+    belongs in KQL or Spark, not in a chain of no-code operators that nobody can debug later.
+  tags: [eventstream, eventhouse, kql]
+
+- id: fab-basic-017
+  topic: real-time
+  difficulty: intermediate
+  question: Explain KQL retention policy versus caching policy.
+  answer: |
+    Retention controls how long data remains in the database at all. Once an extent passes the
+    retention period it is dropped and cannot be queried. It is the primary storage cost control
+    and should be set per table, not left at a generous default.
+
+    Caching (hot) policy controls how much recent data stays on local SSD for fast queries.
+    Older data beyond the hot window is still queryable from cheaper storage, just slower. That
+    lets you keep a year of data while paying SSD prices for a week.
+
+    The design question is "how far back do people actually query, and how fast must that be?" —
+    not "how much can we keep?". Set both explicitly, and remember that ingestion batching policy
+    is the third lever: it trades latency for efficiency.
+  tags: [kql, retention, caching]
+
+- id: fab-basic-018
+  topic: activator
+  difficulty: intermediate
+  question: How do you design a Data Activator rule so it doesn't cause alert fatigue?
+  answer: |
+    Alert on the decision, not the raw metric: "average speed over five minutes above 90" rather
+    than "one event with speed above 90". Use a sustained condition and a cooling-off period so
+    a ten-minute incident produces one page, not forty. Prefer a "becomes true" transition over
+    "on each event" where the condition persists.
+
+    Make the object key stable — vehicle ID, store ID, machine ID — so state is meaningful and
+    instances do not multiply per event. Send the alert to an owned channel with context: object,
+    value, threshold, window and a filtered dashboard link, plus the runbook.
+
+    Finally, add an "is empty" rule for missing data. A sensor that stops sending is
+    indistinguishable from a healthy one if you only alert on values, and that is the outage
+    nobody notices until a customer does.
+  tags: [activator, alerting, operations]
+
+- id: fab-basic-019
+  topic: semantic-models
+  difficulty: intermediate
+  question: How does Direct Lake serve a query without importing the data?
+  answer: |
+    Direct Lake reads Parquet files from Delta tables in OneLake using the VertiPaq engine. On a
+    DAX query it determines which columns are needed — those used by measures, relationships and
+    the visual — and transcodes any that are not already in memory, loading the whole column.
+    Loaded columns stay resident until evicted by memory pressure, inactivity or a new frame.
+
+    A refresh is **framing**: it reads the Delta log, validates files and updates references to
+    the latest version. That is metadata work measured in seconds, not a data copy, which is why
+    Direct Lake can be fresh without a refresh window.
+
+    The costs are first-query latency on a cold model and a hard dependency on well-formed Delta
+    tables: file counts, row-group sizes and table width all affect whether it frames and how
+    fast it queries.
+  tags: [direct-lake, vertipaq, framing]
+
+- id: fab-basic-020
+  topic: semantic-models
+  difficulty: advanced
+  question: Direct Lake versus Import — what actually decides the choice?
+  answer: |
+    Import copies and compresses data into the model. It is predictable, works on any licence
+    including Pro/PPU, supports calculated tables and columns, hybrid tables and user-defined
+    aggregations, and is bounded by model size and refresh time. For a 2 GB star schema
+    refreshed nightly, it is still the simplest correct answer.
+
+    Direct Lake avoids the copy: queries hit OneLake Parquet through VertiPaq, refresh is
+    metadata-only framing, and model size is bounded by capacity memory and Delta guardrails
+    rather than by a full in-memory replica. It requires a Fabric capacity, well-tuned Delta
+    tables, and it gives up features that depend on model-resident data (some calculated-column
+    scenarios remain preview, partitions live at the Delta level).
+
+    Decide on volume, freshness requirement and table quality. Large, well-modelled gold tables
+    with a Fabric capacity: Direct Lake. Small, messy, self-service: Import.
+  tags: [direct-lake, import, tradeoffs]
+
+- id: fab-basic-021
+  topic: governance
+  difficulty: intermediate
+  question: Which Fabric governance control protects which boundary?
+  answer: |
+    Four layers, four different bypasses. **Workspace roles** (Admin/Member/Contributor/Viewer)
+    govern items: who can edit, publish, share. **SQL permissions** on a warehouse or SQL
+    analytics endpoint govern T-SQL access only — the same user reading through Spark is not
+    covered. **OneLake security** roles govern file-level access, including row/column/file
+    predicates, and are the layer that follows the data rather than the engine. **Semantic model
+    RLS/OLS** governs DAX queries through that model.
+
+    Above them, **domains** delegate administration and organise discovery but are not a security
+    boundary, and **sensitivity labels** govern handling and export, not storage encryption.
+
+    A security review that checks only workspace roles has three holes. Write the control matrix
+    down: requirement → layer → control → auditor.
+  tags: [governance, security, domains]
+
+- id: fab-basic-022
+  topic: governance
+  difficulty: advanced
+  question: Git integration or deployment pipelines — which do you use for Fabric CI/CD?
+  answer: |
+    Both, for different jobs. Git integration connects a workspace to an Azure DevOps or GitHub
+    repository, serialising item definitions to files so you get branching, pull requests, review
+    and history. Deployment pipelines promote items across stages (dev/test/prod), with one
+    workspace per stage, deployment rules that swap connections and parameters, selective
+    deployment and a compare view.
+
+    Git does not know about environments; deployment pipelines do not do code review. The
+    combination is: develop in a feature branch, merge to main, let the dev workspace sync, then
+    promote through test to production with rules applied.
+
+    Constraints to design around: stage count is fixed at pipeline creation, supported item types
+    are a moving list, and some items cannot be fully source-controlled. Automate through the
+    REST APIs rather than the portal UI, which is itself still evolving.
+  tags: [cicd, deployment-pipelines, git]

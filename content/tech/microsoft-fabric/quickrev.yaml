@@ -1,0 +1,95 @@
+concepts:
+  - title: OneLake
+    detail: The tenant-wide logical lake. One container per workspace, one folder per item; every workload reads the same Delta files through it.
+  - title: Capacity Unit (CU)
+    detail: The unit of Fabric compute. An F2 SKU provides 2 CUs, F64 provides 64, and every workload on the capacity draws from the same pool.
+  - title: Bursting
+    detail: An operation may temporarily exceed the SKU's steady-state compute so it finishes fast instead of being throttled mid-flight.
+  - title: Smoothing
+    detail: Consumed CU-seconds are spread over future 30-second timepoints — five to 64 minutes for interactive work, 24 hours for background work.
+  - title: Throttle stages
+    detail: Ten minutes of overage is free, then new interactive calls are delayed 20 seconds, then rejected, then all requests are rejected beyond 24 hours.
+  - title: Carryforward
+    detail: Unpaid CU debt applied to later timepoints; idle capacity burns it down, so recovery lags the spike that caused it.
+  - title: Workspace and item
+    detail: The workspace is the unit of permission, Git integration, deployment and capacity assignment; items (lakehouse, notebook, report) do the work.
+  - title: Shortcut
+    detail: A metadata pointer that makes a table or folder appear locally without copying. Internal shortcuts use the caller's rights; external ones use a stored connection.
+  - title: Delta table
+    detail: Parquet files plus a transaction log, giving ACID writes, schema enforcement and time travel. Fabric's default for lakehouse and warehouse tables.
+  - title: Lakehouse
+    detail: Spark-first container with Tables/ and Files/; its SQL analytics endpoint is read-only T-SQL over the Delta tables.
+  - title: SQL analytics endpoint
+    detail: Auto-generated read-only T-SQL surface over Delta in Tables/. Supports views and TVFs, not DML or DDL on tables.
+  - title: Warehouse
+    detail: T-SQL-first store with full DDL/DML, MERGE, stored procedures and multi-table transactions; its tables are Delta in OneLake but engine-written.
+  - title: Direct Lake
+    detail: A semantic model mode that transcodes Parquet columns from OneLake on demand; refresh is metadata-only framing, not a data copy.
+  - title: Eventstream
+    detail: No-code ingestion and routing with filter, field management, windowed aggregation and fan-out to Eventhouse, lakehouse or Activator.
+  - title: Eventhouse and KQL database
+    detail: Kusto-engine storage for append-heavy time-series and semi-structured data, with retention, hot-cache and materialized-view policies.
+  - title: Deployment pipeline
+    detail: Fabric's promotion mechanism — one workspace per stage, deployment rules for connections and parameters, selective deploy and compare.
+
+traps:
+  - A Fabric F capacity is a rebranded Power BI P capacity. P SKUs top out differently, are being consolidated into F, and F64 changes who can view content for free.
+  - V-Order and Optimize Write are on by default. True only for workspaces created before April 2025; newer workspaces and runtimes differ, so set them explicitly.
+  - Shortcuts inherit the source's permissions. Internal shortcuts honour the caller, but external shortcuts read with the stored connection's rights and drop source ACLs and labels.
+  - Direct Lake never falls back to DirectQuery. Only Direct Lake on OneLake has no fallback; Direct Lake on SQL falls back for views and SQL-based security.
+  - Smoothing means any job can run at 09:00. Smoothing spreads cost, it does not create capacity; sustained load still throttles, and carryforward extends the pain.
+  - A lakehouse SQL endpoint can be written to like a warehouse. It is read-only — no INSERT, UPDATE, DELETE, MERGE or CREATE TABLE.
+
+advanced:
+  - Framing is metadata work measured in seconds; the real limits are per-model memory and the guardrails on row groups and file counts per table.
+  - Interactive work is smoothed over a minimum of five minutes and up to 64 depending on consumption, which is why a short burst can trip rejection while a long average looks fine.
+  - Direct Lake on OneLake can combine with Import tables and ignores SQL security; Direct Lake on SQL checks the endpoint and falls back to DirectQuery, so views cost performance.
+  - Four security layers protect four different access paths — workspace roles, SQL permissions, OneLake security and model RLS — and each has a bypass the others do not cover.
+  - Three-part names let a warehouse query lakehouse Delta tables without copying, which is often a better answer than duplicating silver into SQL.
+  - Changing workspace defaults can silently slow a pipeline; check V-Order, Optimize Write and runtime version before blaming the cluster size.
+
+comparisons:
+  - a: Lakehouse
+    b: Warehouse
+    difference: Spark-first with a read-only SQL endpoint versus T-SQL-first with full DML and multi-table transactions; both store Delta in OneLake.
+  - a: Direct Lake
+    b: Import
+    difference: Reads Parquet from OneLake with metadata-only framing versus copying and compressing data into the model; Import works on any licence, Direct Lake needs a Fabric capacity.
+  - a: Direct Lake
+    b: DirectQuery
+    difference: VertiPaq reads Delta files directly versus translating DAX into source queries; Direct Lake is near-Import fast, DirectQuery depends on the source.
+  - a: Shortcut
+    b: Copy
+    difference: Zero-copy pointer that follows the source versus a managed Delta copy you can compact, retain and secure per user.
+  - a: Pipeline
+    b: Dataflow Gen2
+    difference: Orchestration with activities and parameters versus single-node Power Query transformation with 150+ connectors.
+  - a: Eventstream
+    b: Spark structured streaming
+    difference: No-code routing and light operators versus arbitrary stateful processing with code; Eventstream is the pipe, not the compute.
+  - a: Git integration
+    b: Deployment pipelines
+    difference: Version control and review of item definitions versus stage-to-stage promotion with environment rules.
+
+commands:
+  - label: Read a shortcut table as Delta
+    code: 'spark.read.format("delta").load("Tables/orders_shortcut")'
+  - label: Enable V-Order on writes
+    code: 'spark.conf.set("spark.sql.parquet.vorder.default", "true")'
+  - label: Compact and cluster a Delta table
+    code: OPTIMIZE silver.orders ZORDER BY (customer_id);
+  - label: Remove unreferenced files after compaction
+    code: VACUUM silver.orders RETAIN 168 HOURS;
+  - label: Run a notebook from another notebook
+    code: 'notebookutils.notebook.run("nb_silver_orders", 3600, {"load_date": "2026-01-15"})'
+  - label: Bulk load a warehouse table
+    code: "COPY INTO dbo.orders FROM 'https://onelake.dfs.fabric.microsoft.com/ws/lh/Tables/stg' WITH (FILE_TYPE = 'PARQUET');"
+  - label: Set KQL retention
+    code: .alter-merge table VehicleEvents policy retention softdelete = 30d
+  - label: Pre-aggregate a KQL table
+    code: |
+      .create materialized-view with (backfill = true) SpeedPerMinute on table VehicleEvents
+      {
+          VehicleEvents
+          | summarize avg_speed = avg(Speed) by VehicleId, bin(EventTime, 1m)
+      }

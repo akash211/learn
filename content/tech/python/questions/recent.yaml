@@ -1,0 +1,301 @@
+- id: py-recent-001
+  topic: typing
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: What does the PEP 695 syntax change about writing generics, and what actually happens at runtime?
+  answer: |
+    PEP 695 (3.12) replaces the three-step `TypeVar` dance with inline type parameters:
+
+    ```python
+    # before
+    T = TypeVar("T")
+    class Stack(Generic[T]):
+        def push(self, item: T) -> None: ...
+
+    # after
+    class Stack[T]:
+        def push(self, item: T) -> None: ...
+    ```
+
+    It also adds the `type` statement for aliases, evaluated lazily:
+
+    ```python
+    type Vector = list[float]
+    def first[T](xs: list[T]) -> T: return xs[0]
+    ```
+
+    At runtime, `Stack.__type_params__` holds a `TypeVar` object with an inferred name, and the
+    class is still a normal generic alias target. Variance is inferred: contravariant for
+    parameters used only in argument position, covariant only when declared. Aliases are lazy,
+    so forward references work without quotes and recursive aliases are possible.
+
+    Practical impact: less boilerplate, better error messages, and no more module-level `T`, `K`,
+    `V` clutter. The cost is that libraries supporting 3.11 need the old form, and some tooling
+    still inspects `Generic.__orig_bases__`, which the new syntax does not populate.
+  tags: [pep-695, generics, typing]
+
+- id: py-recent-002
+  topic: typing
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: How do type parameter defaults and `@override` change API design in 3.13?
+  answer: |
+    PEP 696 (3.13) lets a type parameter declare a default, which removes a common reason to
+    duplicate generic classes:
+
+    ```python
+    class Response[T = str]:
+        def __init__(self, body: T) -> None: ...
+
+    Response()          # Response[str]
+    Response[int]()     # Response[int]
+    ```
+
+    Defaults must come after non-defaulted parameters, and `typing.NoDefault` marks "no
+    default" explicitly. For library authors this means a generic can be usable bare without
+    forcing callers to write `Response[Any]`.
+
+    PEP 698 (3.12) adds `@override`:
+
+    ```python
+    class Base:
+        def handle(self) -> None: ...
+
+    class Child(Base):
+        @override
+        def handle(self) -> None: ...
+    ```
+
+    It is a no-op at runtime but a type-checker error if no base method matches — catching the
+    rename that silently orphaned your override, and the typo that added a new method instead of
+    replacing one. Together these make generic library APIs both easier to consume and safer to
+    subclass, which is why they show up in current codebase-review questions.
+  tags: [pep-696, pep-698, typing, api-design]
+
+- id: py-recent-003
+  topic: concurrency
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: What is the free-threaded build of CPython, and when would you actually deploy it?
+  answer: |
+    PEP 703 removes the GIL in a separate build (`python3.13t`, `python3.14t`) that has existed
+    experimentally since 3.13 and became officially supported in 3.14. It is not a flag on the
+    standard binary; it is a different interpreter with different performance characteristics.
+
+    What you get: true parallel execution of Python bytecode across threads, so a CPU-bound
+    service can use threads instead of processes and share memory directly. What it costs:
+    single-threaded throughput is lower than the GIL build (a double-digit percentage penalty in
+    early releases, narrowing over time), per-object memory overhead is higher, and C extensions
+    must opt in via the `Py_mod_gil` slot — those that do not will re-enable the GIL for the whole
+    process with a warning.
+
+    Deploy it when: the workload is CPU-bound pure Python, process-based parallelism is painful
+    because of data copying or shared mutable state, and every extension in your dependency tree
+    is compatible. Do not deploy it by default in 2026 — audit the dependency tree first, and
+    benchmark both builds on your own workload rather than trusting a general claim.
+  tags: [pep-703, free-threading, gil]
+
+- id: py-recent-004
+  topic: performance
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: Python 3.13 ships a JIT. Should that change how you optimise code?
+  answer: |
+    The 3.13 JIT (PEP 744) is a copy-and-patch compiler, off by default, enabled at build time
+    with `--enable-experimental-jit`. It compiles hot bytecode sequences to machine code using
+    pre-compiled stencils. It is a foundation, not a speed switch.
+
+    Near-term gains are modest and workload-dependent — single-digit percentages in many
+    benchmarks, more on long-running CPU-heavy loops, nothing on I/O-bound services. Startup cost
+    can be slightly worse, which matters for CLIs and serverless.
+
+    So no: the JIT does not change optimisation priorities. The order remains algorithm, data
+    structures, reducing work, vectorising with C-backed libraries, then parallelism. A JIT
+    cannot fix an O(n²) membership test or a synchronous call blocking an event loop.
+
+    What it does change is the long-term calculus for pure-Python CPU work that resists
+    vectorisation — parsers, simulation, business-rule engines. Those are the workloads to
+    benchmark on each release, because the JIT's value compounds as it matures.
+  tags: [pep-744, jit, performance]
+
+- id: py-recent-005
+  topic: asyncio
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: p99 latency on an async service tripled after a library upgrade. How do you find the cause?
+  answer: |
+    The classic cause is a synchronous call that crept into a coroutine. One blocking call of
+    200 ms blocks every concurrent request, so p99 rises even though CPU looks idle.
+
+    Diagnose in this order:
+
+    1. **Loop lag.** Schedule `asyncio.sleep(0.05)` repeatedly and record the drift. Sustained
+       lag with low CPU means something is blocking the thread.
+    2. **Stack sampling.** `py-spy dump --pid` a few times during the spike; if most stacks sit in
+       a socket read or a `time.sleep` inside a coroutine, you have found it.
+    3. **Diff the upgrade.** Check the changelog for a driver or SDK switching to a sync client,
+       or a new default timeout.
+    4. **Enable asyncio debug mode** in staging (`PYTHONASYNCIODEBUG=1`) to log slow callbacks.
+
+    Fixes, best first: use the async-native client; wrap the blocking call in
+    `asyncio.to_thread`; move it to a process pool if it is CPU-bound. Then add a loop-lag metric
+    and an alert, because the next blocking call will arrive with a different library.
+  tags: [asyncio, debugging, latency]
+
+- id: py-recent-006
+  topic: asyncio
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: Why does `TaskGroup` raise `ExceptionGroup` instead of the original exception, and how do you handle it?
+  answer: |
+    A `TaskGroup` can have several concurrent failures, so collapsing them to one exception would
+    lose information. It raises `ExceptionGroup` containing every child error (and often an
+    empty group of cancellations is filtered out).
+
+    ```python
+    try:
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(fetch(a))
+            tg.create_task(fetch(b))
+    except* TimeoutError as eg:
+        handle_timeouts(eg.exceptions)
+    except* httpx.HTTPStatusError as eg:
+        handle_status(eg.exceptions)
+    ```
+
+    `except*` matches by type across the group; each clause receives the matching subset, and
+    unmatched exceptions continue propagating. If you want one exception, `eg.exceptions[0]`, but
+    that discards the rest — usually the wrong call.
+
+    Two behaviours to remember: the first failure cancels the remaining tasks, and the group
+    waits for that cancellation to complete before raising. So cleanup code in `finally` blocks
+    runs before your handler, which is what makes structured concurrency predictable. A bare
+    `except Exception` will catch it as one object; log `eg.exceptions`, not `str(eg)`.
+  tags: [asyncio, exceptiongroup, structured-concurrency]
+
+- id: py-recent-007
+  topic: language semantics
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: What changed about f-strings in 3.12, and why did it matter beyond cosmetics?
+  answer: |
+    PEP 701 moved f-strings into the formal grammar instead of treating them as a special lexer
+    case. Before 3.12, an f-string was tokenised as one opaque string, which produced arbitrary
+    restrictions. Now you can:
+
+    ```python
+    f"{', '.join(f'{k}={v}' for k, v in items.items())}"   # same quote type nested
+    f"{'\n'.join(lines)}"                                  # backslashes inside braces
+    f"""{
+        price * qty  # comments allowed inside multi-line f-strings
+    }"""
+    ```
+
+    Nested quotes of the same type, backslashes in expressions, comments and multi-line
+    replacement fields all work, and error positions point at the actual expression rather than
+    the whole string.
+
+    The secondary effect is tooling. Formatters, linters and syntax highlighters previously had
+    to re-implement a chunk of string parsing; now they parse f-strings with the same grammar as
+    the rest of the language. That fixed a long tail of incorrect formatting and broken
+    tracebacks. It is also slightly faster at runtime, but the correctness is the point.
+  tags: [pep-701, f-strings, parsing]
+
+- id: py-recent-008
+  topic: memory and profiling
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: A worker's RSS climbs steadily over days but CPU is flat. Walk through the investigation.
+  answer: |
+    Flat CPU plus rising RSS means retained memory, not a busy loop. Establish whether live
+    objects are growing or only fragmentation:
+
+    1. Emit `tracemalloc.get_traced_memory()` as a gauge. If current grows, objects are
+       retained. If only peak/RSS grows, suspect allocator fragmentation.
+    2. Take two snapshots hours apart, `compare_to(..., "lineno")`, and read the top ten. That
+       names the allocation site.
+    3. For survivors, `gc.get_referrers` or `objgraph.show_backrefs` on one instance to find
+       what holds it.
+
+    Common findings in this exact shape: a module-level cache keyed by request or user ID;
+    exceptions stored for later reporting (each pins a traceback and every frame's locals); a
+    callback or signal registry holding strong references; per-thread context never cleared.
+    `functools.cache` on a method is another regular offender because `self` is in the key.
+
+    Fix with bounded caches, `WeakValueDictionary`, and clearing context in `finally`. Add
+    `max_tasks_per_child` as a backstop, not a solution.
+  tags: [memory, tracemalloc, debugging]
+
+- id: py-recent-009
+  topic: packaging and migration
+  difficulty: intermediate
+  period: "2024–2026"
+  type: representative
+  question: What breaks when moving a service from Python 3.10 to 3.12/3.13, and how do you sequence the upgrade?
+  answer: |
+    The removals matter more than the features. 3.12 dropped `distutils` (use `setuptools` or
+    another build backend), plus `imp`, `asyncore`, `asynchat` and `smtpd`. 3.13 removed `cgi`,
+    `telnetlib`, `imghdr`, `pipes`, `crypt`, `nntplib` and `2to3`, among others. `datetime.utcnow()`
+    is deprecated — use `datetime.now(timezone.utc)`.
+
+    Sequence that works:
+
+    1. Pin the interpreter everywhere (`.python-version`, Docker base, CI matrix) so you can
+       reproduce.
+    2. Run the test suite and `pip check` under the new interpreter in CI, on every PR, before
+       switching production.
+    3. Run with `-W error::DeprecationWarning` in a staging job to surface what will break next.
+    4. Rebuild the lockfile — do not reuse wheels built for the old ABI. C extensions need
+       wheels for the new version or a source build.
+    5. Check the big dependencies first: ORMs, DB drivers, NumPy/pandas, cloud SDKs. A pinned
+       `psycopg2` without a cp313 wheel turns a deploy into a compile.
+
+    Keep the upgrade separate from feature work. Mixed commits make rollback impossible.
+  tags: [migration, packaging, deprecations]
+
+- id: py-recent-010
+  topic: typing
+  difficulty: advanced
+  period: "2024–2026"
+  type: representative
+  question: How do `TypeIs` and `Unpack[TypedDict]` improve typing of real function signatures?
+  answer: |
+    `TypeIs` (PEP 742, 3.13) replaces most uses of `TypeGuard`. `TypeGuard` narrows only the
+    true branch and does not check that the narrowed type is consistent with the input.
+    `TypeIs` narrows both branches and requires the narrowed type to be a subtype:
+
+    ```python
+    from typing import TypeIs
+
+    def is_str_list(val: list[object]) -> TypeIs[list[str]]:
+        return all(isinstance(x, str) for x in val)
+
+    if is_str_list(items):
+        ...            # items: list[str]
+    else:
+        ...            # items: list[object]
+    ```
+
+    `Unpack[TypedDict]` (PEP 692, 3.12) types `**kwargs` precisely instead of `Any`:
+
+    ```python
+    class FetchOpts(TypedDict):
+        timeout: float
+        retries: int
+
+    def fetch(url: str, **opts: Unpack[FetchOpts]) -> bytes: ...
+    ```
+
+    Callers now get an error for `timeoutt=5` or a wrong type, and editors autocomplete the
+    keys. Combined with `ReadOnly` (PEP 705) for TypedDict items, these close most of the gap
+    between runtime dict-shaped config and static checking — the area where `**kwargs`-heavy
+    APIs used to be effectively untyped.
+  tags: [pep-742, pep-692, typing, typeguards]

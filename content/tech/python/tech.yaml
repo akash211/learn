@@ -1,0 +1,117 @@
+slug: python
+title: Python
+category: programming
+summary: The language runtime, its data model, and the concurrency, packaging and performance habits that hold up in production.
+level: core
+relations:
+  - to: pyspark
+    type: foundation
+    note: PySpark's Python API sits directly on these concepts — closures, pickling, generators and the GIL shape how UDFs and partitions behave.
+  - to: sql
+    type: complements
+    note: Python orchestrates queries, models result sets and handles the logic SQL is awkward at; the two are used together far more often than in competition.
+  - to: fastapi
+    type: uses
+    note: FastAPI is a Python framework built on type hints, async/await and Pydantic, so its behaviour is Python's behaviour.
+  - to: airflow
+    type: uses
+    note: Airflow DAGs are Python files; scheduling semantics sit on top of imports, operators and process behaviour.
+intro:
+  what: |
+    Python is a dynamically typed, garbage-collected language built around a small object model:
+    everything is an object, names are references, and protocols (iteration, context management,
+    callability) are defined by dunder methods rather than inheritance.
+
+    The language is deliberately small. Most of what separates a competent Python developer from
+    an effective one is knowledge of the runtime — how containers cost time and memory, when the
+    GIL serialises work, how imports and packaging resolve, and which stdlib module already does
+    the job.
+  why: |
+    Python optimises for reading and changing code, not for raw speed. That trade is why it
+    dominates data engineering, scripting, backend services and ML: the expensive part of those
+    systems is iteration on logic, and Python shortens that loop. Where speed genuinely matters,
+    the answer is usually a C-backed library, vectorisation or a separate process — not a
+    rewrite in another language.
+  problems:
+    - Express data transformations and glue logic in few, readable lines.
+    - Automate files, APIs, schedulers and one-off operational tasks.
+    - Provide the orchestration layer over C/C++/Rust libraries that do the heavy computation.
+    - Serve HTTP and background work with one language across the stack.
+    - Move data between systems without writing a compiled program for each hop.
+  where_used:
+    - ETL and ingestion jobs, including PySpark and dbt-adjacent tooling.
+    - Web APIs and internal services (FastAPI, Django, Flask).
+    - Airflow DAGs, CLI tooling and CI scripts.
+    - Data analysis, notebooks and reporting.
+    - ML training, evaluation and serving pipelines.
+  ecosystem: |
+    Python is the substrate under most of the modern data stack. Pandas and Polars handle
+    in-process tabular work; PySpark distributes it; FastAPI and Django expose it; Airflow
+    schedules it. Knowing the language well enough to read a traceback, reason about a generator
+    and size a thread pool is what makes those tools debuggable rather than magical.
+  alternatives:
+    - name: Go
+      note: Better for small, fast, statically compiled services with predictable latency.
+    - name: Rust
+      note: Better when CPU and memory ceilings are the binding constraint.
+    - name: R
+      note: Preferred for classical statistics and academic analysis.
+    - name: Julia
+      note: Numerical work where Python-level loops are the bottleneck.
+related: [pyspark, pandas, sql, fastapi, airflow]
+chapters:
+  - id: data-structures
+    title: Data Structures and Complexity
+    file: chapters/01-data-structures.md
+    minutes: 12
+    level: core
+  - id: iterators-generators
+    title: Iterators, Generators and itertools
+    file: chapters/02-iterators-generators.md
+    minutes: 12
+    level: core
+  - id: decorators-context-managers
+    title: Decorators and Context Managers
+    file: chapters/03-decorators-context-managers.md
+    minutes: 11
+    level: core
+  - id: functions-arguments-closures
+    title: Functions, Arguments and Closures
+    file: chapters/04-functions-arguments-closures.md
+    minutes: 11
+    level: core
+  - id: oop-dataclasses-protocols
+    title: OOP, Dataclasses and Protocols
+    file: chapters/05-oop-dataclasses-protocols.md
+    minutes: 12
+    level: core
+  - id: concurrency
+    title: "Concurrency: Threading, Multiprocessing and the GIL"
+    file: chapters/06-concurrency-threading-multiprocessing.md
+    minutes: 13
+    level: advanced
+  - id: asyncio
+    title: asyncio and Async Patterns
+    file: chapters/07-asyncio-async-patterns.md
+    minutes: 13
+    level: advanced
+  - id: memory-gc-profiling
+    title: Memory Management, GC and Profiling
+    file: chapters/08-memory-gc-profiling.md
+    minutes: 13
+    level: advanced
+  - id: exceptions-logging-testing
+    title: Exceptions, Logging and Testing
+    file: chapters/09-exceptions-logging-testing.md
+    minutes: 12
+    level: core
+  - id: packaging-performance
+    title: Packaging, Environments and Performance Tuning
+    file: chapters/10-packaging-performance.md
+    minutes: 12
+    level: core
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

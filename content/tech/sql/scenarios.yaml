@@ -1,0 +1,258 @@
+- id: sql-scn-001
+  title: A dashboard query went from 2 s to 40 s overnight
+  technologies: [sql, postgresql]
+  difficulty: intermediate
+  prompt: |
+    The orders dashboard is a single aggregate query joining `orders` to `customers` and
+    grouping by country. It ran in about two seconds for a year. This morning it takes forty,
+    and nothing was deployed. The table has grown steadily but not dramatically. The on-call
+    engineer's first instinct is to add an index.
+
+    You have `pg_stat_activity`, `EXPLAIN (ANALYZE, BUFFERS)`, and a read replica you can
+    experiment on.
+  approach: |
+    Start by proving where the time goes, twice: once for a normal execution and once with the
+    literal parameters the dashboard actually sends.
+
+    1. **Reproduce with the real parameters and `EXPLAIN (ANALYZE, BUFFERS)`.** Compare estimated
+       `rows` to actual `rows` at each node, remembering to multiply by `loops`. A nested loop
+       whose inner side reports 1,200 loops is usually the finding.
+    2. **Check whether the plan changed or the data did.** `pg_stat_statements` gives mean time
+       and calls per normalised query; a plan change shows as the same query with a new mean.
+       Compare the plan against a saved one if available.
+    3. **Look for statistics drift.** A jump in plan cost with an unchanged query is often stale
+       or insufficient statistics — for example a new large tenant that the histogram does not
+       represent, causing an estimate of 10 rows where 400,000 exist. `ANALYZE` and a raised
+       statistics target, or `CREATE STATISTICS` on correlated columns, may fix it.
+    4. **Check for bloat and vacuum debt.** Dead tuples from a bulk delete, or a long-running
+       transaction holding back the xmin horizon, inflate every scan.
+    5. **Only then consider an index** — and name the access path it enables. A covering index on
+       `(order_ts) INCLUDE (customer_id, total_amount, status)` is a reasonable candidate if the
+       query is a range scan plus an aggregate.
+    6. **State the guardrail**: a query timeout, an alert on `mean_exec_time`, and a plan
+       regression check in CI.
+
+    The strong answer distinguishes "the plan is bad" from "the data changed" before proposing a
+    fix, and checks whether the dashboard needs row-level detail at all or could read a daily
+    aggregate.
+  red_flags:
+    - Adding an index before reading the plan.
+    - Restarting the database or bumping `work_mem` as the first move.
+    - Not asking what changed upstream — a nightly load that doubled a table is a common cause.
+    - Reading only the top node of the plan and ignoring loops and buffers.
+
+- id: sql-scn-002
+  title: Backfill 500 GB of history into a partitioned warehouse table
+  technologies: [sql, snowflake, dbt]
+  difficulty: advanced
+  prompt: |
+    A new `fct_orders` model needs eighteen months of history — roughly 500 GB after
+    compression — loaded into a table that currently holds one month. The source is a
+    production Postgres replica. The warehouse is shared with the live dashboard, and the team
+    has a four-hour window before the morning reports run. A previous attempt timed out at
+    ninety minutes and left the table half-loaded with no record of where it stopped.
+
+    Design the backfill.
+  approach: |
+    Structure first, speed second.
+
+    1. **Make the unit of work a partition.** Generate a month (or week) spine and process one
+       unit per statement. Each unit is independently retryable, bounded in bytes scanned, and
+       can be parallelised to a controlled degree.
+    2. **Write to a shadow table, not the target.** `CREATE TABLE fct_orders_backfill CLONE
+       fct_orders` (or `CREATE TABLE AS` with an explicit schema), load the range, then swap or
+       insert. Validate before swapping: row counts per partition, uniqueness of the order key,
+       and a checksum against the source for a sample.
+    3. **Make each unit idempotent.** `MERGE` on the natural key, or delete-and-insert the exact
+       month. Re-running a unit must not duplicate rows.
+    4. **Record progress.** A control table with `(partition_start, status, rows_loaded,
+       started_at, finished_at, error)`. The previous attempt failed because this did not exist.
+    5. **Manage the shared resource.** Run on a separate warehouse sized for throughput, or cap
+       concurrency if that is not possible. Measure per-unit duration after the first three
+       units and extrapolate honestly — 500 GB in four hours is a claim that needs arithmetic,
+       not optimism.
+    6. **Handle late-arriving data.** Leave a lookback window on the final partition, or plan a
+       second pass for records inserted after the replica snapshot.
+    7. **Verify and document.** Post-load reconciliation query, a `loaded_at` column, and a note
+       in the runbook on how to resume.
+
+    The answer should show awareness that the failure mode is operational (restartability,
+    observability, contention), not just "write a faster INSERT".
+  red_flags:
+    - One giant `INSERT INTO … SELECT` with no batching.
+    - Loading directly into the production table with no rollback.
+    - Claiming a completion time without stating the per-unit measurement it is based on.
+    - Ignoring the shared warehouse and degrading live dashboards.
+
+- id: sql-scn-003
+  title: The same order appears three times in the revenue report
+  technologies: [sql, snowflake, dbt]
+  difficulty: intermediate
+  prompt: |
+    Finance reports that February revenue is inflated by about 8%. The `fct_orders` table is
+    built by a dbt incremental model with `unique_key = 'order_id'` and a three-day lookback.
+    Spot-checking a specific order shows three rows with the same `order_id`, different
+    `updated_at` values and identical amounts. The model's tests are green — there is a
+    `not_null` test on `order_id` but no uniqueness test.
+
+    Find the cause and fix it without losing the historical rows.
+  approach: |
+    1. **Quantify first.** `SELECT order_id, COUNT(*) FROM fct_orders GROUP BY 1 HAVING COUNT(*)
+       > 1` — how many keys, how many duplicates, which load dates. That tells you whether it is
+       a one-off or ongoing.
+    2. **Inspect the duplicates.** Same amount with different `updated_at` means the source emits
+       multiple versions, not that the join fanned out. If the amounts differed, suspect a join
+       to a changing dimension instead.
+    3. **Check the incremental strategy.** With `unique_key` set and `incremental_strategy =
+       merge`, duplicates should not survive — unless the key is null, the strategy is
+       actually `append`, or the model was run with `--full-refresh` into a table that already
+       held data. Snowflake does not enforce the key, so a merge against a source with duplicate
+       keys can produce duplicate target rows.
+    4. **Deduplicate the source inside the model**, before the merge:
+       `QUALIFY ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC) = 1`.
+    5. **Repair the target.** Build a corrected table with the same dedupe applied to existing
+       rows, validate counts, then swap. Do not delete blindly — capture the removed rows in an
+       audit table first.
+    6. **Add the missing tests**: `unique` + `not_null` on `order_id`, a `relationships` test to
+       `dim_customer`, and a row-count-per-day assertion against the source. Run them in CI and
+       as a post-load check.
+    7. **Explain why tests were green** — a `not_null` test on a key column says nothing about
+       duplication, and in Snowflake nothing else enforces it.
+
+    The best answers connect the data symptom to the absent constraint, and fix the class of bug
+    rather than the instance.
+  red_flags:
+    - Using `SELECT DISTINCT` in the reporting query and calling it fixed.
+    - Deleting duplicates without an audit trail.
+    - Adding a test only after the fact without explaining why the existing tests could not catch it.
+    - Assuming the join fanned out without checking whether amounts match.
+
+- id: sql-scn-004
+  title: Writes time out every night at 02:00
+  technologies: [sql, postgresql]
+  difficulty: advanced
+  prompt: |
+    An order-processing service starts failing with lock timeout errors around 02:00 and
+    recovers by 02:30. The nightly ETL job runs in that window. It updates `orders` in batches
+    of 5,000 rows and also refreshes a `customer_stats` table. Application transactions are
+    short — a single insert plus an update — but some of them wait for minutes before failing.
+
+    Diagnose the contention and propose a design that removes it.
+  approach: |
+    1. **Identify the blocker, not the victim.** `pg_stat_activity` joined to `pg_locks` on
+       `pid`/`locktype`, filtered to `wait_event_type = 'Lock'`, shows who is waiting and who
+       holds. `pg_blocking_pids(pid)` is the shortcut. The application is the victim; the ETL is
+       almost certainly the blocker.
+    2. **Establish the lock mode and granularity.** A batch `UPDATE` takes row locks for the
+       whole transaction; if the ETL runs one transaction for 5,000 rows, it holds all of them
+       until commit. A `TRUNCATE`/`DELETE` + reload of `customer_stats` takes an `ACCESS
+       EXCLUSIVE` lock and blocks every reader.
+    3. **Shorten the holders.** Commit per batch (500 rather than 5,000), or use `SELECT … FOR
+       UPDATE SKIP LOCKED` to claim work without queueing behind the ETL. For the stats table,
+       build a new table and swap with `ALTER TABLE … RENAME` inside a short transaction, or use
+       a materialised view refreshed concurrently.
+    4. **Align lock order.** If the application updates `orders` then `order_items`, the ETL must
+       do the same. Opposite orders across two sessions is a deadlock generator; consistent
+       ordering removes it.
+    5. **Separate the workloads.** Point the ETL at a replica for reads and keep writes on the
+       primary, or move reporting to a warehouse extract. Nightly batch and OLTP on one primary
+       is a scheduling problem as much as a locking one.
+    6. **Instrument and enforce.** `lock_timeout` on the application so it fails fast and retries,
+       `statement_timeout` on the ETL, and an alert on any transaction older than N minutes.
+
+    The strong answer separates blocking from deadlocking and fixes the transaction length
+    before touching isolation levels.
+  red_flags:
+    - Switching the application to `READ UNCOMMITTED`/`NOLOCK` to stop the waits.
+    - Killing the ETL session as the fix.
+    - Increasing `lock_timeout` so failures happen later.
+    - Not identifying the specific lock holder.
+
+- id: sql-scn-005
+  title: Customer attributes have to be reproducible as of any past date
+  technologies: [sql, dbt, snowflake]
+  difficulty: advanced
+  prompt: |
+    A regulator asks for revenue by customer segment for each quarter of the last two years,
+    where "segment" means the segment the customer was in at the time of the order — not today.
+    The `customers` table only stores the current segment; segment changes are overwritten in
+    place. Historical orders exist, but the segment attached to them in the reporting model is
+    today's value, so last year's numbers change every time a customer is reclassified.
+
+    Design the history and the query.
+  approach: |
+    1. **Model the dimension as type 2.** Add `valid_from`, `valid_to`, `is_current`, and a
+       version surrogate key. Use a half-open interval `[valid_from, valid_to)` and derive
+       `valid_to` as `LEAD(valid_from) - 1 day` rather than maintaining it with updates, so there
+       is never a moment with two current rows.
+    2. **Build the history once, from available evidence.** If only the current value and a
+       change log exist, reconstruct versions from the log; if there is no log, state plainly
+       that history before the first snapshot cannot be recovered, and start tracking from now
+       with a documented effective date. Do not fabricate back-history.
+    3. **Snapshot the source daily** into a staging table (`customer_id, segment, snapshot_date`)
+       so future changes are captured even if the source has no audit trail. dbt snapshots do
+       exactly this with `timestamp` or `check` strategy.
+    4. **Join facts at event time**, not on the current flag:
+
+       ```sql
+       SELECT o.order_id, o.order_ts, c.segment
+       FROM fct_orders o
+       JOIN dim_customer c
+         ON c.customer_id = o.customer_id
+        AND o.order_ts >= c.valid_from
+        AND o.order_ts <  c.valid_to
+       ```
+
+    5. **Test the invariants**: exactly one current row per customer, no overlapping intervals,
+       no gaps, and every fact row matching exactly one dimension version (a
+       `relationships`-style test on the join, not just the key).
+    6. **Rerun the historical report and reconcile** against the previously published number,
+       explaining the difference — that is the point of the exercise.
+
+    The answer must mention non-overlap and the half-open interval; those two details are where
+    most SCD2 implementations produce double-counted revenue.
+  red_flags:
+    - Joining on `is_current = TRUE` and calling it point-in-time.
+    - Overwriting the dimension and losing the old values.
+    - Inventing pre-log history.
+    - Using inclusive `BETWEEN` on validity dates.
+
+- id: sql-scn-006
+  title: Reporting queries are slowing the checkout path
+  technologies: [sql, postgresql, snowflake]
+  difficulty: advanced
+  prompt: |
+    A SaaS product runs checkout on a Postgres primary. Analysts query the same database
+    directly for dashboards — long scans, heavy `GROUP BY`, occasional five-minute queries.
+    Checkout latency p99 has doubled over three months. The analysts refuse to move because
+    the warehouse is a day behind. Adding a read replica was proposed but nobody has measured
+    whether it will help.
+
+    Propose an architecture and a migration path.
+  approach: |
+    1. **Separate read and write paths.** A streaming replica removes the CPU and I/O of
+       analytical scans from the primary, and is the minimum viable fix. Caveat: on PostgreSQL,
+       a long query on the replica can conflict with WAL replay (`max_standby_streaming_delay`),
+       so the replica needs its own delay policy and monitoring.
+    2. **Measure before promising.** Compare primary CPU, I/O wait, and buffer cache hit ratio
+       against replica capacity; a replica sized like the primary will not absorb the same scans
+       at the same latency. State the assumption rather than asserting it will work.
+    3. **Move the analytical workload to a warehouse.** CDC (logical replication or Debezium)
+       into Snowflake gives columnar compression, elastic compute, and no contention with
+       checkout. Freshness becomes a function of CDC lag, which is measured in seconds to
+       minutes — usually enough to answer the "a day behind" objection honestly.
+    4. **Rebuild dashboards on modelled tables**, not raw OLTP schemas: a star schema or
+       pre-aggregated marts, so each tile scans a small object.
+    5. **Protect the primary regardless.** `statement_timeout` for any non-application role,
+       a separate connection pool, and resource limits. No analyst should be able to run an
+       unbounded query against the checkout database.
+    6. **Sequence the migration**: replica first (days), warehouse + CDC second (weeks), then
+       revoke direct analytical access. Measure checkout p99 at each stage.
+
+    The best answers treat this as workload isolation with an explicit freshness contract, not
+    as a query-tuning problem.
+  red_flags:
+    - Tuning individual analyst queries and leaving the architecture unchanged.
+    - Adding a replica without sizing it or handling replication conflicts.
+    - Promising real-time freshness from a batch extract.
+    - Leaving direct database access open "just in case".

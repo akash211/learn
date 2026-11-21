@@ -1,0 +1,188 @@
+- id: py-scn-001
+  title: p99 latency triples after adding an async endpoint
+  technologies: [python, fastapi, asyncio]
+  difficulty: advanced
+  prompt: |
+    A FastAPI service handles 200 requests/second with p99 around 120 ms. A new endpoint is
+    added that calls the vendor's Python SDK, which is synchronous and does a blocking HTTPS
+    request plus a local JSON parse. The endpoint itself is fast in isolation, about 80 ms per
+    call. After deploy, p99 across all endpoints climbs to 400 ms, CPU stays under 30%, and the
+    effect disappears when traffic drops. The team's first guess is a memory leak in the new
+    client.
+  approach: |
+    Recognise that latency rose service-wide, not just on the new route: one coroutine holding
+    the single event-loop thread stalls every concurrent request, so 80 ms of blocking work
+    serialises into hundreds of milliseconds of queueing.
+
+    1. Confirm with loop-lag instrumentation: schedule a short `asyncio.sleep` and log the drift;
+       sustained drift with low CPU is diagnostic.
+    2. Run `py-spy dump` during the spike. Most stacks will sit inside the SDK's socket read or
+       `json.loads` in a coroutine frame.
+    3. Fix by moving the call off the loop: `await asyncio.to_thread(sdk_call, payload)`, or
+       switch to an async HTTP client and keep a large parse in a thread.
+    4. Bound both layers: a `Semaphore` around the vendor call sized to their rate limit, plus
+       client and overall timeouts.
+    5. Add the loop-lag metric and a p99 alert per route so the next blocking call is caught in
+       staging rather than production.
+  red_flags:
+    - Restarting workers or scaling out horizontally as the first response.
+    - Blaming memory because CPU is low, without measuring object counts.
+    - Increasing the thread pool for the sync SDK without bounding downstream concurrency.
+    - Concluding "asyncio is slow" when the framework was never the bottleneck.
+    - Adding `await asyncio.sleep(0)` around the blocking call and calling it fixed.
+
+- id: py-scn-002
+  title: Ingestion worker's memory grows until the OOM killer arrives
+  technologies: [python, airflow]
+  difficulty: advanced
+  prompt: |
+    A Python worker processes batches from a queue, writes rows to Postgres, and runs as a
+    long-lived Kubernetes deployment. Over 48 hours RSS climbs from 400 MB to 3 GB and the pod is
+    OOM-killed. Restarting fixes it for two days. CPU is normal, throughput is unchanged, and
+    batch sizes are stable. `gc.collect()` returns a few hundred objects and frees almost nothing.
+  approach: |
+    Treat it as retained references, not a C-level leak, and separate live memory from allocator
+    fragmentation.
+
+    1. Export `tracemalloc.get_traced_memory()` current and peak as metrics. If only RSS grows,
+       suspect pool fragmentation rather than live objects.
+    2. Take snapshots 12 hours apart with `tracemalloc.start(25)` and diff them with
+       `compare_to(snap, "lineno")`. Read the top ten allocation sites.
+    3. For a surviving object, walk `gc.get_referrers` or `objgraph.show_backrefs` to find the
+       holder. Expect a module-level dict, a callback registry, or a thread-local.
+    4. Inspect the usual suspects in batch code: a dedupe cache keyed by unbounded IDs,
+       exceptions stored for later reporting (each pins a traceback and its frame locals), a
+       `functools.cache` on a method, a session object accumulating adapters.
+    5. Fix with bounded caches (`lru_cache(maxsize=...)`, TTL), `WeakValueDictionary`, and
+       storing `str(exc)` instead of the exception. Add `max_tasks_per_child` as a backstop,
+       not as the fix.
+  red_flags:
+    - Raising the memory limit or adding a cron restart, with no diagnosis.
+    - Calling `gc.collect()` in the request path and declaring victory.
+    - Reading RSS as a measure of live objects.
+    - Blaming a C extension before checking Python-side referrers.
+    - Disabling the GC in a workload that creates reference cycles.
+
+- id: py-scn-003
+  title: CPU-bound transformation does not get faster with more threads
+  technologies: [python]
+  difficulty: intermediate
+  prompt: |
+    A nightly job reads 4 million JSON records, applies regex extraction and business rules, and
+    writes a Parquet file. Single-threaded it takes 40 minutes. The machine has 16 cores. Adding
+    a `ThreadPoolExecutor(max_workers=16)` makes it 44 minutes and pins one core at 100% while
+    the rest idle. A colleague suggests rewriting the job in Go.
+  approach: |
+    Explain the GIL first: pure-Python bytecode cannot run in parallel across threads, so the
+    pool adds contention but no parallelism. Then choose the cheapest fix that addresses the
+    measured bottleneck.
+
+    1. Profile before changing anything: `cProfile -s cumulative` or `py-spy record` to confirm
+       time is in Python-level parsing and rules, not in a C library that releases the GIL.
+    2. Look for algorithmic wins: `re.match` without compiled patterns, list membership tests in
+       loops, per-record `json.loads` where a streaming parse would do.
+    3. Vectorise the extractable parts with pandas or polars, often the single largest win.
+    4. For what remains, use `ProcessPoolExecutor` with module-level functions and chunks of
+       10k to 50k records, so each worker has its own GIL. Budget for pickling and per-worker
+       memory.
+    5. Compare wall time and total CPU time. If CPU rises faster than wall time falls, reduce
+       worker count or increase chunk size.
+    6. Keep the rewrite option open only if profiles show irreducible Python compute.
+  red_flags:
+    - Adding threads and concluding that Python cannot do parallelism.
+    - Jumping to a rewrite before profiling.
+    - Passing lambdas or closures to a process pool and giving up after the pickling error.
+    - Submitting one task per record, so pickling overhead dominates.
+    - Ignoring the algorithm because "we need more cores".
+
+- id: py-scn-004
+  title: Test suite passes locally, fails randomly in CI
+  technologies: [python, pytest]
+  difficulty: intermediate
+  prompt: |
+    A 900-test pytest suite passes locally. In CI, two to five tests fail per run, different ones
+    each time, always in the API layer. Re-running the failed job usually passes. Failures
+    mention stale data, a 401, and occasionally `RuntimeError: Event loop is closed`. The team
+    has started re-running jobs and moving on.
+  approach: |
+    Treat nondeterminism as a bug in the tests, and make it reproducible before fixing anything.
+
+    1. Reproduce with a fixed seed and random order locally (`pytest -p randomly`), and run the
+       suspect tests alone as well as in the full suite to prove order dependence.
+    2. Suspect shared state: module-level caches, a session-scoped fixture that mutates a
+       database, a patched global left in place, an `autouse` fixture with side effects.
+    3. Suspect time and identity: `datetime.now()`, `uuid4`, sleeps used as synchronisation,
+       dict or set ordering assumptions, and `is` comparisons.
+    4. Check async hygiene: a fixture returning an un-awaited coroutine, a task created without
+       being awaited, or a loop closed while background work runs. That produces the
+       `Event loop is closed` message.
+    5. Use `pytest --lf`, `-x` and `--durations=20` to narrow it, then fix the isolation:
+       function-scoped fixtures, `tmp_path`, transactions rolled back, and an injected clock.
+    6. Add `-p no:randomly` only as a diagnostic, never as the permanent fix.
+  red_flags:
+    - Re-running CI until green and calling it flaky infrastructure.
+    - Adding `sleep()` calls to make races less likely.
+    - Marking tests `xfail` with no linked cause.
+    - Blaming pytest plugins before checking fixture scope.
+    - Increasing timeouts instead of removing the shared state.
+
+- id: py-scn-005
+  title: Deploy breaks after the Python version bump
+  technologies: [python]
+  difficulty: intermediate
+  prompt: |
+    A service on Python 3.10 is moved to 3.12 in the Docker base image. The image builds, but at
+    runtime one background job fails with `ModuleNotFoundError: No module named 'distutils'`,
+    one dependency installs from source and takes 20 minutes, and a warning about
+    `datetime.utcnow()` is promoted to an error. The lockfile was reused unchanged.
+  approach: |
+    Separate interpreter, dependency and code issues, and fix them in that order.
+
+    1. Rebuild the lockfile against the new interpreter; never carry wheels built for the old
+       ABI. Verify each C-extension dependency has a cp312 wheel for the target platform with
+       `pip download --only-binary=:all:`.
+    2. Replace `distutils`, removed in 3.12: import `setuptools` in legacy setup scripts, or
+       migrate the build to `pyproject.toml` with a maintained backend.
+    3. The 20-minute source build means a package has no wheel. Upgrade to a version that ships
+       one, or install build tools in a build stage and copy the artefacts into the runtime.
+    4. Replace `datetime.utcnow()` with `datetime.now(timezone.utc)`. Naive-datetime bugs
+       usually surface at the same time.
+    5. Run the suite on both versions during the transition, with
+       `-W error::DeprecationWarning` in a non-blocking CI job to surface the next batch.
+  red_flags:
+    - Pinning an old `setuptools` or vendoring `distutils` to keep the import working.
+    - Copying the old virtualenv into the new image.
+    - Filtering the warning instead of fixing the call.
+    - Upgrading the interpreter and forty dependencies in one commit.
+    - Testing only the web path when the failure was in a background job.
+
+- id: py-scn-006
+  title: Intermittent 500s after switching to threaded workers
+  technologies: [python]
+  difficulty: advanced
+  prompt: |
+    A Flask API moves from `gunicorn --workers 4` (sync) to `--workers 2 --threads 8` to handle
+    more concurrent requests. Throughput improves, but a small percentage of requests now fail
+    with `InterfaceError: connection already closed` and `This session is provisioning a new
+    connection`, and occasionally a response contains another user's data. Errors increase under
+    load.
+  approach: |
+    The pattern, cross-request data and connection errors under concurrency, points at shared
+    mutable state rather than at gunicorn.
+
+    1. Inventory what is shared per process: a module-level SQLAlchemy `Session`, a global HTTP
+       session, a cache dict, a cloud SDK client. Sessions and connections are not thread-safe,
+       and a module-level session is now used by eight threads.
+    2. Check for context leaking between requests: data stored on a global or on the app object
+       instead of in `flask.g` or a request-scoped context.
+    3. Fix the session lifecycle: one session per request or per thread, closed in
+       `teardown_appcontext`; pool size at workers times threads, with `pool_pre_ping=True` so
+       dead connections are detected before use.
+    4. Guard any remaining shared mutable object with a lock, or remove the sharing.
+    5. Load-test above the pool size and confirm exhaustion produces a clean timeout, not a 500.
+  red_flags:
+    - Adding retries around the 500s to hide the race.
+    - Enlarging the connection pool without fixing per-thread session ownership.
+    - Assuming the GIL makes shared objects safe.
+    - Calling it a database problem without checking session scope.
+    - Reverting to sync workers without understanding why the change exposed the bug.

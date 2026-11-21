@@ -1,0 +1,86 @@
+concepts:
+  - title: Logical order of evaluation
+    detail: FROM → WHERE → GROUP BY → HAVING → SELECT → DISTINCT → ORDER BY → LIMIT. Aliases are visible in ORDER BY but not WHERE, and LIMIT never reduces the work of a sort.
+  - title: Three-valued logic
+    detail: NULL means unknown, so comparisons yield UNKNOWN and only IS NULL tests for it. NOT IN with a NULL in the list returns no rows at all.
+  - title: Bag semantics
+    detail: SQL tables allow duplicate rows; DISTINCT converts a bag to a set at the cost of a sort or hash. Assume uniqueness only where a constraint guarantees it.
+  - title: Join fan-out
+    detail: Joining two many-side tables to one parent multiplies both counts. Aggregate each side to the join grain before joining; DISTINCT hides it for COUNT but corrupts SUM.
+  - title: Window frame
+    detail: With ORDER BY, the default frame is RANGE UNBOUNDED PRECEDING TO CURRENT ROW and includes peers. ROWS counts physical rows; RANGE with an interval counts time.
+  - title: Leftmost prefix
+    detail: An index on (a, b) supports predicates on a, and on a plus b, but not on b alone. Equality columns first, then the range or sort column.
+  - title: Sargability
+    detail: The indexed column must appear bare in the predicate. Functions, arithmetic and implicit casts on the column force a scan.
+  - title: Cardinality estimate
+    detail: The optimiser chooses a plan from estimated row counts. A wrong estimate — stale statistics, correlated columns, a rare tenant — is the usual cause of a bad join algorithm.
+  - title: MVCC snapshot
+    detail: Readers see a consistent version of rows without blocking writers. PostgreSQL takes a snapshot per statement at READ COMMITTED and per transaction at REPEATABLE READ.
+  - title: Isolation levels
+    detail: READ COMMITTED allows non-repeatable reads; REPEATABLE READ in PostgreSQL is snapshot isolation and raises serialization failures instead of lost updates; SERIALIZABLE also prevents write skew.
+  - title: Deadlock
+    detail: A cycle in the wait-for graph; the engine kills one victim. Prevent with consistent lock ordering and short transactions, and always retry on 40P01 / error 1205.
+  - title: Constraint enforcement
+    detail: PostgreSQL and SQL Server enforce PK, UNIQUE, FK and CHECK. Snowflake enforces only NOT NULL — the rest is metadata for the optimiser and must be replaced by tests.
+  - title: Partition pruning
+    detail: The planner skips partitions whose key range cannot match. It fails when the predicate is not on the partition key or is wrapped in a function.
+  - title: Micro-partition pruning
+    detail: Snowflake stores min/max metadata per column per micro-partition and skips non-matching ones. Clustering keys keep that metadata useful as data grows.
+  - title: Materialisation boundary
+    detail: A CTE or subquery may or may not be evaluated once. PostgreSQL inlines single-use CTEs since v12; SQL Server may evaluate a CTE per reference.
+  - title: Idempotent load
+    detail: Re-running a batch must produce the same table. MERGE on a deduplicated source, guard with a watermark, and never delete from a partial source.
+traps:
+  - NOT IN against a subquery that can return NULL — the whole predicate becomes UNKNOWN and the result is empty. Use NOT EXISTS.
+  - Assuming LAST_VALUE returns the partition's last row. With the default frame it returns the current row; add ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING.
+  - Believing a foreign key indexes the child column. It does not, in PostgreSQL or SQL Server; add the index explicitly.
+  - Putting a predicate on the nullable side of a LEFT JOIN in WHERE, which silently converts it to an inner join.
+  - Expecting CHECK (amount > 0) to reject NULL. A CHECK passes on UNKNOWN; you need NOT NULL as well.
+  - Assuming Snowflake enforces a declared PRIMARY KEY. It does not, so a MERGE with duplicate source keys can duplicate target rows.
+advanced:
+  - A nested loop's inner node reports per-loop figures. Multiply by loops before comparing estimated to actual rows, or the plan looks far cheaper than it is.
+  - Write skew survives REPEATABLE READ — two transactions can each update a different row and jointly break an invariant. Only SERIALIZABLE (or explicit locking of the invariant) prevents it.
+  - SQL Server caches a plan compiled for the first parameter values it saw; a skewed tenant can make that plan catastrophic. OPTION (RECOMPILE) or OPTIMIZE FOR UNKNOWN are the escape hatches.
+  - In PostgreSQL, a single long-running transaction holds back the xmin horizon and prevents vacuum from reclaiming dead rows across the whole database.
+  - MERGE is only as correct as its source. Deduplicate with ROW_NUMBER or QUALIFY before merging, and guard WHEN MATCHED with updated_at comparisons.
+  - Pruning and clustering are not the same lever. Pruning skips partitions by metadata; clustering changes physical co-location so that metadata stays selective as data grows.
+comparisons:
+  - a: WHERE
+    b: HAVING
+    difference: WHERE filters rows before grouping and cannot use aggregates; HAVING filters groups after GROUP BY.
+  - a: UNION
+    b: UNION ALL
+    difference: UNION deduplicates with a sort or hash; UNION ALL concatenates and is almost always cheaper.
+  - a: ROW_NUMBER
+    b: RANK
+    difference: ROW_NUMBER is unique and arbitrary among ties; RANK shares a value for ties and leaves a gap.
+  - a: CTE
+    b: temp table
+    difference: A CTE lives for one statement and may be inlined or re-evaluated; a temp table is materialised once and can be indexed.
+  - a: Materialised view
+    b: summary table
+    difference: The database owns refresh and dependency tracking; a summary table is portable, auditable and rebuildable in parts.
+  - a: Partitioning
+    b: Clustering
+    difference: Partitioning is explicit physical splitting with pruning and cheap retention; clustering is Snowflake's background co-location of similar values.
+  - a: Normalised OLTP schema
+    b: Star schema
+    difference: Normalisation minimises redundancy for write correctness; a star denormalises dimensions for scan efficiency.
+commands:
+  - label: Read a PostgreSQL plan with real timings
+    code: EXPLAIN (ANALYZE, BUFFERS, VERBOSE) SELECT ...;
+  - label: Find what is blocking a session
+    code: SELECT pid, pg_blocking_pids(pid), wait_event_type, query FROM pg_stat_activity WHERE wait_event_type = 'Lock';
+  - label: Build an index without blocking writes
+    code: CREATE INDEX CONCURRENTLY idx_orders_customer_ts ON orders (customer_id, order_ts DESC);
+  - label: Deduplicate to the latest row per key
+    code: SELECT * FROM (SELECT t.*, ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY updated_at DESC) rn FROM orders_raw t) x WHERE rn = 1;
+  - label: Upsert in PostgreSQL
+    code: INSERT INTO customers (customer_id, email) VALUES (1,'a@b.c') ON CONFLICT (customer_id) DO UPDATE SET email = EXCLUDED.email;
+  - label: Refresh a materialised view without blocking reads
+    code: REFRESH MATERIALIZED VIEW CONCURRENTLY mv_daily_revenue;
+  - label: Walk a hierarchy recursively
+    code: WITH RECURSIVE org AS (SELECT id, manager_id, 1 depth FROM employees WHERE manager_id IS NULL UNION ALL SELECT e.id, e.manager_id, o.depth+1 FROM employees e JOIN org o ON e.manager_id = o.id) SELECT * FROM org;
+  - label: Measure logical reads in SQL Server
+    code: SET STATISTICS IO, TIME ON;

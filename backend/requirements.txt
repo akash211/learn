@@ -1,0 +1,10 @@
+fastapi==0.121.2
+uvicorn[standard]==0.38.0
+sqlalchemy==2.0.44
+pydantic==2.12.4
+pydantic-settings==2.13.0
+pyyaml==6.0.3
+python-frontmatter==1.1.0
+httpx==0.28.1
+duckdb==1.4.2
+pytest==9.0.1

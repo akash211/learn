@@ -1,0 +1,586 @@
+- id: sql-basic-001
+  topic: select and filtering
+  difficulty: beginner
+  question: What is the difference between WHERE and HAVING?
+  answer: |
+    `WHERE` filters individual rows before grouping; `HAVING` filters groups after `GROUP BY`
+    has run. Because of that order, `WHERE` cannot reference an aggregate — the aggregate does
+    not exist yet — while `HAVING` can.
+
+    ```sql
+    SELECT c.country, SUM(o.total_amount) AS revenue
+    FROM orders o
+    JOIN customers c USING (customer_id)
+    WHERE o.status = 'completed'      -- row filter
+    GROUP BY c.country
+    HAVING SUM(o.total_amount) > 10000;  -- group filter
+    ```
+
+    The performance difference is real: filtering in `WHERE` reduces the number of rows that
+    reach the aggregation, so it is almost always better to push a condition there when it does
+    not depend on an aggregate. `HAVING COUNT(*) > 1` is fine; `HAVING status = 'completed'`
+    works in most engines but scans and groups rows that will be discarded, and some planners
+    will not push it down for you.
+  tags: [group-by, having, filter-order]
+
+- id: sql-basic-002
+  topic: joins
+  difficulty: beginner
+  question: Explain the difference between an INNER JOIN and a LEFT JOIN.
+  answer: |
+    An `INNER JOIN` returns only rows that have a match on both sides. A `LEFT JOIN` returns
+    every row from the left table, plus matching right-side columns; where there is no match,
+    the right-side columns are NULL.
+
+    ```sql
+    -- Customers with at least one order
+    SELECT c.customer_id, o.order_id
+    FROM customers c
+    JOIN orders o ON o.customer_id = c.customer_id;
+
+    -- Every customer, with NULLs for those who never ordered
+    SELECT c.customer_id, o.order_id
+    FROM customers c
+    LEFT JOIN orders o ON o.customer_id = c.customer_id;
+    ```
+
+    The second query is how you find customers who never ordered — add `WHERE o.order_id IS
+    NULL`. The critical trap is putting a filter on the right table in `WHERE` instead of `ON`:
+    `WHERE o.status = 'completed'` after a `LEFT JOIN` removes the NULL-extended rows and
+    silently turns the query into an inner join. Keep right-side predicates in the `ON` clause.
+  tags: [joins, outer-join, null]
+
+- id: sql-basic-003
+  topic: null semantics
+  difficulty: beginner
+  question: How does NULL behave in comparisons, aggregates and sorting?
+  answer: |
+    `NULL` means unknown, so any comparison with it yields UNKNOWN rather than true or false.
+    `WHERE country = NULL` returns no rows; you must write `IS NULL`. This propagates: `NOT IN`
+    against a list containing NULL returns no rows at all, because `x <> NULL` is never true.
+
+    Aggregates skip NULLs. `COUNT(*)` counts rows, `COUNT(col)` counts non-NULL values, and
+    `AVG(col)` divides by the non-NULL count — so `AVG(COALESCE(col, 0))` is a different number,
+    not a tidier version of the same one.
+
+    Sorting is engine-specific: PostgreSQL puts NULLs last for `ASC` and first for `DESC` by
+    default, SQL Server puts them first for `ASC`, and Snowflake follows the PostgreSQL
+    convention. Use `ORDER BY col NULLS LAST` where supported (PostgreSQL, Snowflake) to be
+    explicit; SQL Server needs `ORDER BY CASE WHEN col IS NULL THEN 1 ELSE 0 END, col`.
+  tags: [null, three-valued-logic, aggregates]
+
+- id: sql-basic-004
+  topic: set operators
+  difficulty: beginner
+  question: When should you use UNION ALL instead of UNION?
+  answer: |
+    `UNION` removes duplicate rows; `UNION ALL` keeps everything and concatenates. Deduplication
+    requires the engine to sort or hash the entire combined result, so `UNION` is materially
+    more expensive — often the dominant cost in a query that unions large tables.
+
+    Use `UNION ALL` by default and `UNION` only when duplicates are genuinely possible and
+    genuinely unwanted. A common bug is using `UNION` to "fix" duplicate rows caused by a bad
+    join: it hides the duplication for identical rows but cannot merge rows that differ in any
+    column, so the real problem survives.
+
+    ```sql
+    SELECT order_id FROM orders_2025
+    UNION ALL
+    SELECT order_id FROM orders_2026;
+    ```
+
+    If you need deduplication, consider whether the source really overlaps — two disjoint
+    partitions never produce duplicates, and knowing that lets you keep `UNION ALL` and the
+    cheaper plan.
+  tags: [union, deduplication, performance]
+
+- id: sql-basic-005
+  topic: constraints
+  difficulty: beginner
+  question: What is the difference between a primary key and a unique constraint?
+  answer: |
+    Both enforce uniqueness. A primary key additionally implies `NOT NULL`, and a table can have
+    at most one. A table can have many unique constraints, and their columns may be nullable.
+
+    The nullable part is where engines disagree. PostgreSQL treats NULLs as distinct for
+    uniqueness, so a unique column can hold many NULLs. SQL Server treats NULLs as equal in a
+    single-column unique constraint, so it permits only one NULL row — a difference that
+    surfaces only in production. Oracle and Snowflake sit on the PostgreSQL side: Oracle allows
+    multiple NULLs, and Snowflake does not enforce the constraint at all.
+
+    ```sql
+    CREATE TABLE customers (
+      customer_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      email       VARCHAR(320) NOT NULL,
+      CONSTRAINT ux_customers_email UNIQUE (email)
+    );
+    ```
+
+    In practice: primary key for the surrogate identifier that foreign keys point at, unique
+    constraint for the natural/business key. In Snowflake neither is enforced — they are
+    metadata only, so uniqueness needs a test or a `MERGE` that deduplicates its source.
+  tags: [primary-key, unique, null, constraints]
+
+- id: sql-basic-006
+  topic: null semantics
+  difficulty: intermediate
+  question: Why can NOT IN return an empty result set, and what should you use instead?
+  answer: |
+    `x NOT IN (1, 2, NULL)` expands to `x <> 1 AND x <> 2 AND x <> NULL`. The last comparison is
+    UNKNOWN for every value of `x`, and `TRUE AND UNKNOWN` is UNKNOWN, which `WHERE` rejects. So
+    a single NULL anywhere in the list makes the whole predicate never true.
+
+    ```sql
+    -- Returns nothing if any orders.customer_id is NULL
+    SELECT customer_id FROM customers
+    WHERE customer_id NOT IN (SELECT customer_id FROM orders);
+
+    -- Correct: anti-join semantics, NULL-safe
+    SELECT c.customer_id FROM customers c
+    WHERE NOT EXISTS (
+      SELECT 1 FROM orders o WHERE o.customer_id = c.customer_id
+    );
+    ```
+
+    `NOT EXISTS` is the right default: it is null-safe, it stops at the first match, and it
+    expresses "no related row" directly. The other safe form is `LEFT JOIN … WHERE right.key IS
+    NULL`. If you must keep `NOT IN`, add `WHERE col IS NOT NULL` to the subquery — but at that
+    point `NOT EXISTS` is clearer and usually plans better.
+  tags: [null, not-in, anti-join]
+
+- id: sql-basic-007
+  topic: window functions
+  difficulty: intermediate
+  question: What is the difference between ROW_NUMBER, RANK and DENSE_RANK?
+  answer: |
+    All three number rows within a window ordered by some key, and they differ only in how they
+    treat ties.
+
+    | Function | Values for ties | Sequence |
+    |---|---|---|
+    | `ROW_NUMBER()` | Arbitrary, always unique | 1, 2, 3, 4 |
+    | `RANK()` | Equal, then a gap | 1, 1, 3, 4 |
+    | `DENSE_RANK()` | Equal, no gap | 1, 1, 2, 3 |
+
+    ```sql
+    SELECT customer_id, total_amount,
+      ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY total_amount DESC) AS rn,
+      RANK()       OVER (PARTITION BY customer_id ORDER BY total_amount DESC) AS rnk,
+      DENSE_RANK() OVER (PARTITION BY customer_id ORDER BY total_amount DESC) AS drnk
+    FROM orders;
+    ```
+
+    Use `ROW_NUMBER` to pick exactly one row (dedupe), `RANK` for leaderboards where ties share
+    a position and the next position skips, and `DENSE_RANK` when you need "top N distinct
+    values" — `WHERE drnk <= 3` returns three distinct amounts even if many rows tie.
+    `ROW_NUMBER` is non-deterministic among ties, so add a unique tiebreaker when the choice
+    matters.
+  tags: [window-functions, ranking, ties]
+
+- id: sql-basic-008
+  topic: window functions
+  difficulty: intermediate
+  question: Why does LAST_VALUE often return the current row instead of the last row?
+  answer: |
+    Because of the default frame. When you write `OVER (ORDER BY x)`, the frame is `RANGE BETWEEN
+    UNBOUNDED PRECEDING AND CURRENT ROW`, so the "last value" in the window is the current row.
+    `LAST_VALUE` is doing exactly what it was told.
+
+    ```sql
+    -- Wrong: returns total_amount of the current row
+    SELECT order_id, total_amount,
+           LAST_VALUE(total_amount) OVER (PARTITION BY customer_id ORDER BY order_ts) AS last_amt
+    FROM orders;
+
+    -- Right: extend the frame to the end of the partition
+    SELECT order_id, total_amount,
+           LAST_VALUE(total_amount) OVER (
+             PARTITION BY customer_id ORDER BY order_ts
+             ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+           ) AS last_amt
+    FROM orders;
+    ```
+
+    `FIRST_VALUE` is unaffected because the default frame already starts at the partition's
+    first row. For "most recent value" per row, `FIRST_VALUE(... ORDER BY order_ts DESC)` is
+    often simpler than fixing the frame, and it reads more clearly.
+  tags: [window-functions, frame, last-value]
+
+- id: sql-basic-009
+  topic: ctes
+  difficulty: beginner
+  question: What is a CTE, and is it always materialised?
+  answer: |
+    A common table expression is a named subquery scoped to a single statement, written with
+    `WITH name AS (…)`. It exists for readability and reuse within the query, not across
+    queries.
+
+    The "CTEs are always materialised" rule is outdated. PostgreSQL before version 12 always
+    materialised them; from 12 onward it inlines a non-recursive CTE referenced once, and you
+    can force either behaviour with `AS MATERIALIZED` / `AS NOT MATERIALIZED`. SQL Server treats
+    a CTE as an inline view and may evaluate it once per reference. Snowflake often materialises
+    but can push predicates through. So the honest answer is "it depends on the engine and the
+    reference count — check the plan".
+
+    ```sql
+    WITH completed AS (
+      SELECT * FROM orders WHERE status = 'completed'
+    )
+    SELECT customer_id, COUNT(*) FROM completed GROUP BY customer_id;
+    ```
+
+    Use CTEs for clarity. If a CTE is referenced twice on SQL Server, consider a temp table
+    instead — otherwise it may scan twice.
+  tags: [cte, materialisation, planner]
+
+- id: sql-basic-010
+  topic: recursive queries
+  difficulty: intermediate
+  question: Write a recursive CTE that returns each employee with their depth in the org chart.
+  answer: |
+    Recursion needs an anchor (the roots), a recursive term that joins back to the CTE, and a
+    termination condition.
+
+    ```sql
+    WITH RECURSIVE org AS (
+      SELECT employee_id, manager_id, name, 1 AS depth
+      FROM employees
+      WHERE manager_id IS NULL          -- anchor: the root
+
+      UNION ALL
+
+      SELECT e.employee_id, e.manager_id, e.name, o.depth + 1
+      FROM employees e
+      JOIN org o ON e.manager_id = o.employee_id
+      WHERE o.depth < 20                -- defensive bound
+    )
+    SELECT * FROM org ORDER BY depth, name;
+    ```
+
+    Each iteration sees only the rows produced by the previous one, which is why the join
+    condition terminates naturally on a tree. Add a depth bound anyway: a cycle in the data (a
+    manager chain that loops) makes the query run until it hits a resource limit.
+
+    `RECURSIVE` is required in PostgreSQL and Snowflake but is a syntax error in SQL Server,
+    which uses plain `WITH` and `OPTION (MAXRECURSION n)` instead. That keyword is the usual
+    reason a copied recursive query fails to parse.
+  tags: [recursive-cte, hierarchy, dialect]
+
+- id: sql-basic-011
+  topic: indexes
+  difficulty: intermediate
+  question: Why does wrapping a column in a function stop an index from being used?
+  answer: |
+    A B-tree index is sorted by the stored column values. `WHERE YEAR(order_ts) = 2026` asks the
+    engine to compute a value per row, and the index has no entry for that computed value, so it
+    cannot seek — it must scan and evaluate the function on every row. This is the sargability
+    rule: keep the indexed column bare on one side of the comparison.
+
+    ```sql
+    -- Not sargable
+    WHERE DATE_TRUNC('month', order_ts) = DATE '2026-01-01'
+
+    -- Sargable: equivalent, and uses the index on order_ts
+    WHERE order_ts >= DATE '2026-01-01'
+      AND order_ts <  DATE '2026-02-01'
+    ```
+
+    The same applies to implicit casts. On SQL Server, comparing a `VARCHAR` column to an
+    `NVARCHAR` literal (`WHERE code = N'X'`) converts the column, and the plan shows
+    `CONVERT_IMPLICIT` — a seek becomes a scan with no change to the SQL you wrote.
+
+    If you genuinely need the function, index the expression instead: a functional index in
+    PostgreSQL (`CREATE INDEX ON orders (DATE_TRUNC('month', order_ts))`) or a persisted
+    computed column in SQL Server.
+  tags: [sargability, indexes, implicit-conversion]
+
+- id: sql-basic-012
+  topic: indexes
+  difficulty: advanced
+  question: Given an index on (customer_id, order_ts), which queries can use it?
+  answer: |
+    The index is sorted by `customer_id`, then by `order_ts` within each customer. It supports
+    any query whose predicate includes a leading prefix of that key.
+
+    | Query | Uses index? |
+    |---|---|
+    | `WHERE customer_id = 7` | Yes — seek |
+    | `WHERE customer_id = 7 AND order_ts > '2026-01-01'` | Yes — seek + range |
+    | `WHERE customer_id IN (7, 9)` | Yes — multiple seeks |
+    | `WHERE order_ts > '2026-01-01'` | No — leading column missing |
+    | `WHERE order_ts > '2026-01-01' AND customer_id = 7` | Yes — order in the predicate is irrelevant |
+    | `ORDER BY customer_id, order_ts LIMIT 20` | Yes — index provides the order |
+
+    The predicate order in the SQL does not matter; the *key* order does. The last row is the
+    underrated case: an index can satisfy an `ORDER BY` without a sort, which is why
+    `ORDER BY … LIMIT` on an indexed column is fast.
+
+    A range on the second column only becomes an index range scan when the first is an
+    equality; `customer_id > 7 AND order_ts > '2026-01-01'` seeks on the first and filters the
+    second within each customer.
+  tags: [composite-index, leftmost-prefix, ordering]
+
+- id: sql-basic-013
+  topic: select and filtering
+  difficulty: beginner
+  question: In what order does the database evaluate the clauses of a SELECT statement?
+  answer: |
+    Logically: `FROM`/`JOIN` → `WHERE` → `GROUP BY` → `HAVING` → `SELECT` → `DISTINCT` →
+    `ORDER BY` → `LIMIT`. This is the order that explains the rules, even though the optimiser
+    is free to execute in a different physical order as long as the result is the same.
+
+    Three consequences follow directly. `WHERE` runs before `SELECT`, so a column alias defined
+    in `SELECT` cannot be used in `WHERE` — `SELECT total_amount * 1.2 AS gross … WHERE gross >
+    100` fails, while the same alias works in `ORDER BY` because that runs afterwards. `WHERE`
+    runs before `GROUP BY`, so aggregates are unavailable there; use `HAVING`. And `LIMIT` runs
+    last, so it does not reduce the work done by `ORDER BY` or `DISTINCT` — a top-10 query with
+    a sort over a million rows still sorts a million rows.
+
+    `GROUP BY 1` and `ORDER BY 2` refer to output column positions; they are supported almost
+    everywhere but are fragile under edits, so prefer explicit names.
+  tags: [evaluation-order, aliases, logical-order]
+
+- id: sql-basic-014
+  topic: indexes
+  difficulty: advanced
+  question: What is a covering index, and what is an index-only scan?
+  answer: |
+    A covering index contains every column a query needs, so the engine can answer from the
+    index without visiting the table. An index-only scan is the plan that results.
+
+    ```sql
+    CREATE INDEX idx_orders_customer_cover
+      ON orders (customer_id, order_ts)
+      INCLUDE (total_amount, status);
+    ```
+
+    `INCLUDE` columns are stored only in the leaf level — they do not affect the sort order, so
+    they cannot be used for seeking, but they avoid the heap fetch. SQL Server has the same
+    syntax; Snowflake has no secondary indexes at all, so the equivalent is a narrower table or
+    a materialised aggregate.
+
+    Two caveats. In PostgreSQL, an index-only scan also needs the visibility map to show pages
+    as all-visible, so `EXPLAIN (ANALYZE)` can report `Heap Fetches` even with a perfect index —
+    autovacuum is part of the story. And covering indexes are wide: every included column is
+    copied on every insert and update, which costs write throughput and cache space. Cover the
+    two or three hottest queries, not every query.
+  tags: [covering-index, index-only-scan, include]
+
+- id: sql-basic-015
+  topic: transactions
+  difficulty: advanced
+  question: What is the difference between READ COMMITTED and REPEATABLE READ in PostgreSQL?
+  answer: |
+    Both are MVCC isolation levels, but they take their snapshot at different moments.
+
+    `READ COMMITTED` (the default) takes a new snapshot per *statement*. Two identical `SELECT`s
+    in one transaction can see different data if another transaction committed in between. It
+    prevents dirty reads but allows non-repeatable reads and phantoms. If an `UPDATE` targets a
+    row changed by a concurrent committed transaction, PostgreSQL re-evaluates the `WHERE`
+    clause against the new version — an "EvalPlanQual" recheck, which is why an
+    `UPDATE … WHERE balance >= 100` can affect zero rows even though the row existed when the
+    statement started.
+
+    `REPEATABLE READ` takes one snapshot at the first statement and uses it for the whole
+    transaction. Reads are stable. If you try to update a row that someone else changed after
+    your snapshot, you get a serialization failure (`SQLSTATE 40001`) rather than a lost
+    update — the application must retry.
+
+    `SERIALIZABLE` adds predicate-level conflict detection on top and can abort transactions
+    that never touched the same row (write skew). `READ UNCOMMITTED` is accepted but behaves as
+    `READ COMMITTED`.
+  tags: [isolation, mvcc, snapshot, serialization-failure]
+
+- id: sql-basic-016
+  topic: transactions
+  difficulty: advanced
+  question: What causes a deadlock, and how do you prevent one?
+  answer: |
+    A deadlock is a cycle in the wait-for graph: transaction A holds a lock B needs, and B holds
+    a lock A needs. The engine detects the cycle and rolls back one victim.
+
+    ```sql
+    -- T1                                  -- T2
+    BEGIN;                                  BEGIN;
+    UPDATE orders SET ... WHERE order_id=1; -- locks 1
+                                            UPDATE orders SET ... WHERE order_id=2; -- locks 2
+    UPDATE orders SET ... WHERE order_id=2; -- waits for T2
+                                            UPDATE orders SET ... WHERE order_id=1; -- waits → cycle
+    ```
+
+    Prevention, in order of effectiveness: enforce a consistent lock order (always update rows
+    by ascending primary key); keep transactions short and never hold one open across a network
+    call or user input; use a single statement where possible (`UPDATE … FROM`, `MERGE`) so the
+    engine can acquire locks in one pass; and always implement retry with jitter for SQLSTATE
+    `40P01` (PostgreSQL) or error 1205 (SQL Server), because some deadlocks are unavoidable
+    under concurrency.
+
+    Reducing isolation or adding `NOLOCK` does not fix deadlocks on writes — it just moves the
+    problem to correctness.
+  tags: [deadlock, locking, retry]
+
+- id: sql-basic-017
+  topic: analytics patterns
+  difficulty: intermediate
+  question: How do you deduplicate a table to the latest row per key?
+  answer: |
+    Rank the rows within each key and keep rank 1.
+
+    ```sql
+    SELECT *
+    FROM (
+      SELECT t.*,
+             ROW_NUMBER() OVER (
+               PARTITION BY order_id
+               ORDER BY updated_at DESC, ingested_at DESC
+             ) AS rn
+      FROM orders_raw t
+    ) x
+    WHERE rn = 1;
+    ```
+
+    The tiebreakers matter. `ORDER BY updated_at DESC` alone is non-deterministic when two rows
+    share a timestamp, so the same query can return different rows on different runs. Add a
+    monotonically increasing column (`ingested_at`, a load id) as the final tiebreaker.
+
+    PostgreSQL has `SELECT DISTINCT ON (order_id) * … ORDER BY order_id, updated_at DESC`, which
+    is shorter and often faster, but it is not portable. An anti-join (`NOT EXISTS` a newer row)
+    preserves ties instead of picking one — useful when duplicates at the maximum timestamp are
+    themselves the bug you want to see.
+
+    Deduplicating on read is a symptom, not a cure: fix the load so the target has one row per
+    key, enforced by a unique index or a `MERGE` with a deduplicated source.
+  tags: [deduplication, row-number, idempotency]
+
+- id: sql-basic-018
+  topic: constraints
+  difficulty: intermediate
+  question: Does a foreign key create an index on the child column?
+  answer: |
+    No — not in PostgreSQL and not in SQL Server. The foreign key creates the referential check,
+    but the child column is not indexed automatically. Only the parent side needs an index
+    (a unique or primary key), and that is the only one the constraint requires.
+
+    The consequences are easy to miss:
+
+    - Deleting or updating a parent row must scan the entire child table to check for
+      references, taking a lock on it as it goes. On a large table that is a write outage.
+    - Joins from child to parent on that column cannot use an index seek.
+    - `ON DELETE CASCADE` becomes dramatically more expensive.
+
+    ```sql
+    CREATE INDEX idx_orders_customer_id ON orders (customer_id);
+    ```
+
+    Add the index for every foreign key you create, as a rule. PostgreSQL's `pg_stat_user_indexes`
+    and SQL Server's missing-index DMV will eventually tell you, but by then the incident has
+    happened. Snowflake does not enforce foreign keys at all, so there is nothing to index —
+    but `CLUSTER BY` on the join column may still be worth it.
+  tags: [foreign-key, indexes, cascade]
+
+- id: sql-basic-019
+  topic: constraints
+  difficulty: advanced
+  question: Why can't Snowflake enforce unique and foreign key constraints, and what replaces them?
+  answer: |
+    Snowflake stores data in immutable micro-partitions spread across shared storage, with no
+    single node owning a key range. Enforcing uniqueness on every insert would require global
+    coordination across partitions — exactly the bottleneck the architecture exists to avoid.
+    So `PRIMARY KEY`, `UNIQUE` and `FOREIGN KEY` are accepted, stored as metadata, and exposed
+    to the optimiser (which can use them to eliminate joins), but never checked. Only `NOT NULL`
+    is enforced, and `CHECK` is not supported at all.
+
+    The replacements are process-level:
+
+    - Deduplicate the source before writing: `QUALIFY ROW_NUMBER() OVER (PARTITION BY key ORDER
+      BY updated_at DESC) = 1` inside the `MERGE` source.
+    - Use `MERGE` for upserts, and make it idempotent so a re-run is harmless.
+    - Test the output: dbt `unique` and `not_null` tests on every key, `relationships` tests on
+      every foreign key, run in CI and after each load.
+
+    Treat the declared constraints as documentation for humans and hints for the planner. The
+    guarantee comes from the test suite, and if the test suite is optional, there is no
+    guarantee.
+  tags: [snowflake, constraints, data-quality, merge]
+
+- id: sql-basic-020
+  topic: partitioning
+  difficulty: advanced
+  question: What is partition pruning, and when does it fail to help?
+  answer: |
+    Pruning is the planner's elimination of partitions that cannot contain matching rows, based
+    on the partition key's range metadata. A range-partitioned `orders` table queried with
+    `WHERE order_ts >= '2026-02-01'` reads only the partitions overlapping February onward.
+
+    It fails in four common ways:
+
+    1. **The predicate is not on the partition key.** `WHERE customer_id = 7` on a table
+       partitioned by `order_ts` must read every partition.
+    2. **The predicate is not sargable.** `WHERE YEAR(order_ts) = 2026` hides the column from the
+       pruning logic; write a range instead.
+    3. **The value is not a constant at plan time.** A correlated parameter or a join column can
+       prevent static pruning; PostgreSQL can still prune at execution time for nested loops,
+       SQL Server often cannot.
+    4. **Too many partitions.** Thousands of tiny partitions add planning and catalog overhead
+       that can exceed the I/O saved.
+
+    Verify rather than assume: PostgreSQL shows `Partitions removed` under `EXPLAIN (ANALYZE)`,
+    SQL Server shows actual partition access in the execution plan, and Snowflake's Query
+    Profile reports `partitions scanned` versus `partitions total`.
+  tags: [partitioning, pruning, explain]
+
+- id: sql-basic-021
+  topic: materialisation
+  difficulty: advanced
+  question: When would you use a materialised view rather than a summary table built by a job?
+  answer: |
+    A materialised view is a stored query result the database refreshes; a summary table is a
+    plain table that a job rebuilds. The difference is who owns freshness and how debuggable the
+    artifact is.
+
+    Choose the materialised view when the database should own the dependency and the refresh is
+    simple — PostgreSQL `REFRESH MATERIALIZED VIEW CONCURRENTLY` (needs a unique index, allows
+    reads during refresh) or a SQL Server indexed view, which is maintained synchronously on
+    every base-table write and therefore never stale.
+
+    Choose a summary table when you need control: backfills, partial refresh, auditing, a
+    `loaded_at` column, or a rebuild that must be idempotent and restartable. It is also the only
+    portable option — Snowflake's materialised views are limited to single-table queries with
+    no joins, so a fact-to-dimension aggregate cannot be one.
+
+    The cost model differs too. Indexed views tax every write; scheduled summary tables tax the
+    scheduler and introduce staleness. Pick based on which failure you can tolerate: slow
+    inserts, or an old number.
+  tags: [materialized-view, summary-table, freshness]
+
+- id: sql-basic-022
+  topic: analytics patterns
+  difficulty: advanced
+  question: How do you find consecutive runs (islands) and gaps in a date series?
+  answer: |
+    Subtract a row number from the ordering value. Within a consecutive run both increase by
+    one, so the difference is constant and identifies the island.
+
+    ```sql
+    WITH daily AS (
+      SELECT DISTINCT customer_id, order_ts::date AS d FROM orders
+    ),
+    marked AS (
+      SELECT customer_id, d,
+             d - ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY d)::int AS grp
+      FROM daily
+    )
+    SELECT customer_id, MIN(d) AS island_start, MAX(d) AS island_end, COUNT(*) AS days
+    FROM marked
+    GROUP BY customer_id, grp
+    ORDER BY customer_id, island_start;
+    ```
+
+    The cast is needed because PostgreSQL does not define `date - bigint`; SQL Server and
+    Snowflake use `DATEADD(day, -1 * rn, d)`.
+
+    To find the gaps rather than the islands, generate a complete calendar with a recursive CTE
+    (or `generate_series` in PostgreSQL), left join the actual dates, and keep the NULLs. For a
+    *threshold* gap — "no order for 30 days" — use `LAG` to compare each row with the previous
+    one, flag where the delta exceeds the threshold, and running-sum the flags into groups.
+  tags: [gaps-and-islands, window-functions, date-spine]

@@ -1,0 +1,643 @@
+- id: py-basic-001
+  topic: data structures
+  difficulty: beginner
+  question: When would you use a tuple instead of a list?
+  answer: |
+    Both are ordered sequences, but a `list` is mutable and a `tuple` is not. The practical
+    consequences go beyond style:
+
+    - A tuple is hashable when its contents are, so it can be a dict key or a set member.
+    - A tuple stores exactly its elements, while a list over-allocates to keep `append` O(1)
+      amortised — so tuples are slightly smaller and cheaper to create.
+    - Passing a tuple to a function signals "do not mutate this"; passing a list hands over a
+      mutable object the callee can change.
+
+    Use a tuple for fixed-shape records — coordinates, `(key, value)` pairs, multiple return
+    values — and for anything that must be a dict key. Use a list for homogeneous collections
+    that grow, shrink or get sorted. Immutability is shallow: a tuple containing a list is still
+    unhashable and the list can still change. When the record has named fields, prefer
+    `NamedTuple` or a frozen dataclass over positional indexing.
+  tags: [immutability, hashing, sequence-types]
+
+- id: py-basic-002
+  topic: modules and imports
+  difficulty: beginner
+  question: What does `if __name__ == "__main__":` actually guard, and why does it matter?
+  answer: |
+    When a module is executed directly (`python script.py`), the interpreter sets its `__name__`
+    to `"__main__"`. When the same file is imported, `__name__` is the module's dotted name. The
+    guard therefore separates "run as a program" from "import as a library":
+
+    ```python
+    def main():
+        ...
+
+    if __name__ == "__main__":
+        main()
+    ```
+
+    Without it, every import executes the top-level code — starting servers, reading files,
+    launching jobs. That is not just untidy: `multiprocessing` with the `spawn` start method
+    (default on Windows and macOS) re-imports the main module in each child process, so
+    unguarded code runs once per worker and can recurse into an unbounded process explosion.
+
+    Note that `python -m package.module` also sets `__name__ == "__main__"`, which is why the
+    same guard works for module entry points. Keep `main()` a function so tests can call it
+    without side effects.
+  tags: [imports, entry-points, multiprocessing]
+
+- id: py-basic-003
+  topic: functions and arguments
+  difficulty: beginner
+  question: Why is `def f(items=[])` dangerous, and how do you fix it?
+  answer: |
+    Default values are evaluated once, when the `def` statement runs, and stored on the function
+    object (`f.__defaults__`). A mutable default is therefore shared by every call that omits the
+    argument:
+
+    ```python
+    def add(item, bucket=[]):     # BUG
+        bucket.append(item)
+        return bucket
+
+    add(1)   # [1]
+    add(2)   # [1, 2] — same list
+    ```
+
+    The fix is a `None` sentinel, because `None` cannot be mutated and is not a plausible value
+    for a list argument:
+
+    ```python
+    def add(item, bucket=None):
+        if bucket is None:
+            bucket = []
+        bucket.append(item)
+        return bucket
+    ```
+
+    If `None` is a legitimate value, use a module-level `_MISSING = object()` and test with `is`.
+    The same evaluation rule bites in other disguises: `def f(now=datetime.now())` freezes the
+    import time, and `def f(cache={})` creates a process-wide cache that never expires.
+  tags: [defaults, mutability, pitfalls]
+
+- id: py-basic-004
+  topic: objects and copying
+  difficulty: beginner
+  question: What is the difference between a shallow copy and a deep copy?
+  answer: |
+    A shallow copy creates a new outer container but reuses the objects inside it. A deep copy
+    recursively copies everything reachable.
+
+    ```python
+    import copy
+
+    a = [[1, 2], [3, 4]]
+    b = copy.copy(a)        # or a[:], list(a)
+    b[0].append(99)
+    print(a)                # [[1, 2, 99], [3, 4]] — inner list shared
+
+    c = copy.deepcopy(a)
+    c[0].append(7)
+    print(a)                # unchanged
+    ```
+
+    Shallow copies are cheap and sufficient when the elements are immutable — a list of strings
+    or tuples behaves like an independent copy. Deep copies are needed for nested mutable
+    structures, but they are slower, use more memory, and fail on objects that cannot be copied
+    (locks, sockets, open files, some C extensions).
+
+    `deepcopy` keeps a memo dict so shared references and cycles are preserved rather than
+    duplicated, and it respects `__deepcopy__` / `__copy__` hooks. For large numeric data,
+    prefer immutability or explicit reconstruction over deep-copying.
+  tags: [copy, mutability, aliasing]
+
+- id: py-basic-005
+  topic: data structures
+  difficulty: beginner
+  question: What makes an object usable as a dictionary key, and what can go wrong?
+  answer: |
+    A key must be hashable: it needs `__hash__` and `__eq__`, and its hash must not change while
+    it is in the dict. Immutable built-ins — `int`, `str`, `bytes`, `tuple` of hashables,
+    `frozenset` — qualify. Lists, dicts and sets do not.
+
+    Two rules must hold together: if `a == b` then `hash(a) == hash(b)`, and equal keys map to
+    the same slot. Violating the first produces duplicate-looking keys that never compare equal
+    on lookup, which is worse than an exception because it fails silently.
+
+    The classic trap is a custom class:
+
+    ```python
+    class User:
+        def __init__(self, uid): self.uid = uid
+        def __eq__(self, other): return self.uid == other.uid
+        # __hash__ is now None → TypeError: unhashable type
+    ```
+
+    Defining `__eq__` sets `__hash__ = None` unless you define it. Hash on the immutable fields
+    that define identity (`self.uid`). Never hash on a mutable attribute: mutating it after
+    insertion makes the entry unreachable. `@dataclass(frozen=True)` generates a correct pair.
+  tags: [hashing, dict, equality]
+
+- id: py-basic-006
+  topic: language semantics
+  difficulty: beginner
+  question: When should you use `is` rather than `==`?
+  answer: |
+    `==` calls `__eq__` and compares values. `is` compares identity — whether two names point at
+    the same object — and cannot be overridden.
+
+    Use `is` for singletons: `None`, `True`, `False`, `...`, and your own sentinels. `x is None`
+    is correct and faster than `==`, and it cannot be fooled by a class whose `__eq__` returns
+    `True` for everything.
+
+    Do not use `is` for numbers or strings. CPython caches small integers (-5 to 256) and some
+    string literals, so `a is b` can be `True` for `256` and `False` for `257`, and identical
+    strings built at runtime are usually distinct objects. The behaviour depends on the
+    compiler, the version and the code path, which makes it a bug that appears only in
+    production.
+
+    ```python
+    a = 1000
+    b = 1000
+    a is b        # False (usually)
+    a == b        # True
+    ```
+
+    The other legitimate uses are identity checks in caches and collections. For everything
+    else, compare values.
+  tags: [identity, equality, interning]
+
+- id: py-basic-007
+  topic: iterators and generators
+  difficulty: intermediate
+  question: When should you use a generator expression instead of a list comprehension?
+  answer: |
+    A generator expression produces values lazily and holds one element at a time; a list
+    comprehension builds the whole list up front.
+
+    ```python
+    total = sum(len(line) for line in fh)      # constant memory
+    lines = [line.strip() for line in fh]      # whole file in memory
+    ```
+
+    Choose the generator when the consumer can work incrementally — `sum`, `any`, `all`,
+    `max`, `next`, a `for` loop, `itertools` stages — and when the input is large, unbounded or
+    arrives over a network. Choose the list when you need `len`, indexing, slicing, multiple
+    passes, or `sorted`/`reversed`, because a generator is single-use: after it is exhausted,
+    iterating again yields nothing, silently.
+
+    Generators are also slightly slower per item and give worse tracebacks, so there is no
+    reason to prefer them for a hundred small records. A useful rule: if the expression is
+    passed straight into a consuming function, make it lazy; if it is stored and used more than
+    once, materialise it.
+  tags: [generators, comprehensions, laziness]
+
+- id: py-basic-008
+  topic: decorators
+  difficulty: intermediate
+  question: How do you write a decorator that takes its own arguments, and why does it need an extra layer?
+  answer: |
+    Because `@decorator(arg)` means "call `decorator(arg)` and use the result to decorate the
+    function". That requires three levels: the argument layer, the decorator, and the wrapper.
+
+    ```python
+    from functools import wraps
+
+    def retry(times=3, delay=0.5):
+        def decorator(fn):
+            @wraps(fn)
+            def wrapper(*args, **kwargs):
+                for attempt in range(1, times + 1):
+                    try:
+                        return fn(*args, **kwargs)
+                    except Exception:
+                        if attempt == times:
+                            raise
+                        time.sleep(delay * attempt)
+            return wrapper
+        return decorator
+
+    @retry(times=5)
+    def fetch(url): ...
+    ```
+
+    The outer function runs once, at import time, and its arguments are baked into the closure —
+    which is why mutable state created there is shared across every call. `functools.wraps`
+    copies `__name__`, `__doc__` and `__wrapped__`, so introspection, docs and frameworks that
+    route by function name still work.
+
+    Without arguments the two-level form (`def deco(fn)`) is simpler and clearer. Use it unless
+    callers actually need to configure the behaviour.
+  tags: [decorators, closures, functools]
+
+- id: py-basic-009
+  topic: context managers
+  difficulty: intermediate
+  question: How does `with` guarantee cleanup, and what does `__exit__`'s return value do?
+  answer: |
+    `with` calls `__enter__` on entry and `__exit__` on every exit path — normal completion,
+    `return`, `break`, or an exception. That is the guarantee, and it is why files, locks and
+    transactions use it.
+
+    ```python
+    with open(path) as fh:
+        data = fh.read()
+    # fh.close() ran even if read() raised
+    ```
+
+    `__exit__(exc_type, exc, tb)` receives `(None, None, None)` on success and the exception
+    triple on failure. Its return value controls suppression: truthy means "handled, do not
+    propagate", falsy (including `None`) means "let it raise". Returning `True` is rarely
+    correct — the caller then believes the block succeeded.
+
+    The generator form is shorter for simple cases:
+
+    ```python
+    @contextmanager
+    def tx(conn):
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    ```
+
+    The exception is thrown at the `yield`, so cleanup must be in `try/finally` or it will be
+    skipped on failure. `ExitStack` handles a dynamic number of resources.
+  tags: [context-managers, exceptions, resources]
+
+- id: py-basic-010
+  topic: functions and arguments
+  difficulty: beginner
+  question: Explain `*args`, `**kwargs`, `/` and `*` in a function signature.
+  answer: |
+    `*args` collects extra positional arguments into a tuple; `**kwargs` collects extra keyword
+    arguments into a dict. They let a function forward arguments it does not know about — the
+    basis of decorators and wrappers.
+
+    The bare markers are different: `/` makes everything before it positional-only, `*` makes
+    everything after it keyword-only.
+
+    ```python
+    def f(a, b, /, c, *, d, **kw):
+        ...
+
+    f(1, 2, 3, d=4)        # ok
+    f(1, 2, 3, 4)          # TypeError: takes 3 positional arguments
+    f(a=1, b=2, c=3, d=4)  # TypeError: a and b are positional-only
+    ```
+
+    Positional-only protects parameter names as implementation details, letting you rename them
+    later. Keyword-only makes call sites readable and prevents argument-order bugs — use it for
+    booleans (`save(data, overwrite=True)`, not `save(data, True)`).
+
+    At a call site, `f(*items, **mapping)` unpacks. Avoid `def f(*args, **kwargs)` in public
+    APIs: it swallows typos such as `timeoutt=5` and makes the signature undiscoverable.
+  tags: [arguments, signatures, api-design]
+
+- id: py-basic-011
+  topic: closures
+  difficulty: intermediate
+  question: Why do lambdas created in a loop all use the last value?
+  answer: |
+    Closures capture variables, not values. Every lambda in the loop shares the same cell for
+    the loop variable, and by the time the lambdas run, the loop has finished.
+
+    ```python
+    funcs = [lambda: i for i in range(3)]
+    [f() for f in funcs]        # [2, 2, 2]
+    ```
+
+    Binding the value as a default argument fixes it, because defaults are evaluated when each
+    lambda is created:
+
+    ```python
+    funcs = [lambda i=i: i for i in range(3)]   # [0, 1, 2]
+    ```
+
+    `functools.partial(handler, i)` is the clearer alternative when you are not writing a
+    one-liner, and it keeps the wrapped function's name visible in tracebacks.
+
+    The same bug appears outside comprehensions: `Thread(target=lambda: work(item))` inside a
+    `for` gives every thread the last item, and callbacks registered in a loop all fire with the
+    final state. Type checkers do not catch it, and the symptom — every task processing the same
+    record — looks like a data problem rather than a scoping one.
+  tags: [closures, late-binding, loops]
+
+- id: py-basic-012
+  topic: concurrency
+  difficulty: intermediate
+  question: What is the GIL, and what does it actually prevent?
+  answer: |
+    The Global Interpreter Lock is a mutex in CPython that allows only one thread to execute
+    Python bytecode at a time. It exists because reference counting is not thread-safe; making
+    every increment atomic would slow single-threaded code and break C extensions.
+
+    It prevents parallel execution of pure-Python CPU work across threads. Summing a large list
+    in a `for` loop in four threads takes about as long as in one, sometimes longer because of
+    switching overhead.
+
+    It does not prevent concurrency. The GIL is released whenever a thread blocks on I/O
+    (`read`, `recv`, `sleep`) and inside C extensions that opt in — NumPy arithmetic, `hashlib`,
+    `zlib`, database drivers. Threads therefore help enormously for network and disk work, which
+    is why thread pools are the standard tool for parallel HTTP calls.
+
+    It also does not make code thread-safe: `counter += 1` is load-add-store and can interleave
+    between threads. Shared mutable state still needs a `Lock`.
+
+    PEP 703 added an experimental free-threaded build in 3.13, officially supported in 3.14.
+  tags: [gil, threading, cpython]
+
+- id: py-basic-013
+  topic: concurrency
+  difficulty: intermediate
+  question: How do you choose between threads and processes?
+  answer: |
+    Choose by bottleneck: threads for waiting, processes for computing.
+
+    Threads share memory and are cheap to start. They help when work is I/O-bound, because the
+    GIL is released while a thread waits on the network or disk. They communicate through shared
+    objects, which means locks and race conditions. Use `ThreadPoolExecutor` for API calls, file
+    reads and database queries.
+
+    Processes have separate interpreters, separate GILs and separate memory. They scale CPU-bound
+    Python across cores, at the cost of pickling every argument and return value, per-process
+    memory, and slower startup — tens to hundreds of milliseconds each with the `spawn` method.
+    Lambdas, closures, open sockets and DB connections cannot cross the boundary.
+
+    ```python
+    with ProcessPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(score_chunk, chunks))
+    ```
+
+    `score_chunk` must be a module-level function, and the entry point must be guarded by
+    `if __name__ == "__main__"` under spawn. For numeric work, vectorising with NumPy often
+    beats both.
+  tags: [threading, multiprocessing, parallelism]
+
+- id: py-basic-014
+  topic: oop and dataclasses
+  difficulty: intermediate
+  question: Dataclass, NamedTuple or plain dict — how do you choose?
+  answer: |
+    A `dict` is right at the boundary: parsed JSON, config, a row that has not been validated.
+    It has no schema, typos fail silently, and the shape lives in documentation. Convert to a
+    typed object once you start passing it around.
+
+    A `NamedTuple` is an immutable tuple with attribute access. It unpacks like a tuple, is
+    hashable and compact, and is ideal for small value objects you also want to destructure —
+    `lat, lon = point`. It cannot validate or compute derived fields without overriding
+    `__new__`.
+
+    A `@dataclass` is the general-purpose record: generated `__init__`, `__repr__`, `__eq__`,
+    default factories, `frozen=True` for immutability and hashing, `slots=True` for memory, and
+    `__post_init__` for validation.
+
+    ```python
+    @dataclass(frozen=True, slots=True)
+    class Event:
+        id: str
+        kind: str
+        payload: dict = field(default_factory=dict)
+    ```
+
+    Rule of thumb: dict at the edge, dataclass in the domain, NamedTuple for tiny immutable
+    tuples you destructure, Pydantic when you need to parse and validate untrusted input.
+  tags: [dataclasses, namedtuple, records]
+
+- id: py-basic-015
+  topic: oop and dataclasses
+  difficulty: advanced
+  question: What does `__slots__` do, and when is it worth using?
+  answer: |
+    By default every instance carries a `__dict__` — a hash table mapping attribute names to
+    values. `__slots__` declares a fixed set of attributes stored directly in the object's
+    memory instead:
+
+    ```python
+    class Point:
+        __slots__ = ("x", "y")
+        def __init__(self, x, y):
+            self.x, self.y = x, y
+    ```
+
+    Benefits: no per-instance dict, so lower memory per object (often around half for small
+    objects, depending on field count) and slightly faster attribute access. That matters at
+    millions of instances — parsed events, graph nodes, rows in a batch — and is negligible at
+    hundreds.
+
+    Costs: you cannot add attributes not in `__slots__`, `functools.cached_property` and other
+    `__dict__`-dependent features stop working, and multiple inheritance from slotted and
+    non-slotted bases can produce a layout conflict. Instances are not automatically picklable
+    unless the class defines `__getstate__`/`__setstate__`.
+
+    `@dataclass(slots=True)` (3.10+) generates them for you, but note that it returns a new
+    class, which breaks code holding references to the original.
+  tags: [slots, memory, oop]
+
+- id: py-basic-016
+  topic: exceptions
+  difficulty: intermediate
+  question: What is the difference between `raise X from Y` and `raise X` inside an `except` block?
+  answer: |
+    Inside an `except` block, a bare `raise X` still records the active exception as
+    `__context__`, and Python prints "During handling of the above exception, another exception
+    occurred". That wording means the two errors are unrelated — one happened while the other
+    was being handled.
+
+    `raise X from Y` sets `__cause__` explicitly and prints "The above exception was the direct
+    cause of the following exception". Use it when you are translating between layers:
+
+    ```python
+    try:
+        row = parse(raw)
+    except json.JSONDecodeError as exc:
+        raise BadRequest("invalid JSON body") from exc
+    ```
+
+    The traceback now shows both, in the right relationship, and `exc.__cause__` is available
+    programmatically. `raise X from None` suppresses the context entirely, which is appropriate
+    when the original error is an implementation detail the caller should not see.
+
+    Never `raise X` with the original message lost and no chaining — you keep the traceback but
+    lose the reason. And do not catch merely to re-raise the same exception: it adds nothing and
+    resets the traceback.
+  tags: [exceptions, chaining, error-handling]
+
+- id: py-basic-017
+  topic: oop and dataclasses
+  difficulty: intermediate
+  question: How does `@property` work, and when is it the wrong tool?
+  answer: |
+    `property` is a data descriptor on the class. Attribute access finds it before the instance
+    `__dict__`, so `obj.x` calls the getter instead of returning a stored value.
+
+    ```python
+    class Account:
+        def __init__(self, balance=0):
+            self._balance = balance
+
+        @property
+        def balance(self):
+            return self._balance
+
+        @balance.setter
+        def balance(self, value):
+            if value < 0:
+                raise ValueError("balance cannot be negative")
+            self._balance = value
+    ```
+
+    It gives you validation on assignment and computed attributes with plain attribute syntax,
+    so you can start with a public attribute and add behaviour later without breaking callers.
+    `@cached_property` memoises an expensive computation per instance — but requires a
+    `__dict__`, so it does not work with `__slots__`.
+
+    It is the wrong tool when the access is expensive but looks free: a property that queries a
+    database makes `for a in accounts: print(a.total)` an N+1 problem that reads like a loop over
+    attributes. Use a method name (`compute_total()`) when the work is not trivial, and avoid
+    properties with side effects — setters that send emails surprise everyone.
+  tags: [properties, descriptors, oop]
+
+- id: py-basic-018
+  topic: asyncio
+  difficulty: advanced
+  question: What is the difference between `asyncio.gather` and `asyncio.TaskGroup`?
+  answer: |
+    Both run coroutines concurrently and both return their results. The difference is failure
+    semantics.
+
+    `gather` schedules the coroutines and waits for all of them. If one raises, the exception
+    propagates to the caller, but the other tasks keep running in the background — nothing
+    cancels them. That leaks work and can produce side effects after the request has already
+    failed. `return_exceptions=True` turns failures into values in the result list instead.
+
+    `TaskGroup` (3.11+) is structured concurrency: if any child fails, the group cancels the
+    remaining tasks and raises an `ExceptionGroup` once they have all finished. There are no
+    orphans, and the block does not exit until every task is done.
+
+    ```python
+    async with asyncio.TaskGroup() as tg:
+        a = tg.create_task(fetch(u1))
+        b = tg.create_task(fetch(u2))
+    print(a.result(), b.result())
+    ```
+
+    Prefer `TaskGroup` for new code, handle failures with `except*`, and note that both need
+    bounding (a semaphore) when the input list is large, or you open thousands of connections.
+  tags: [asyncio, structured-concurrency, error-handling]
+
+- id: py-basic-019
+  topic: performance
+  difficulty: intermediate
+  question: What are the pitfalls of `functools.lru_cache`?
+  answer: |
+    `lru_cache` memoises on the arguments, which must be hashable, and it is per process.
+
+    Pitfalls:
+
+    - **Unbounded growth.** `@cache` (and `lru_cache(maxsize=None)`) never evicts. Keyed on user
+      IDs, URLs or dates, it is a memory leak with a friendly name. Set `maxsize`.
+    - **Mutations are invisible.** The cache key is the argument's hash; if you pass a mutable
+      object and change it, you get a stale result or an unhashable-argument error.
+    - **Methods pin instances.** `self` is part of the key, so every instance lives as long as
+      the cache does. Cache a module-level function taking the fields, or a per-instance dict.
+    - **Not shared across workers.** Each process has its own cache, so a pool of eight warms
+      eight times and totals differ from a single process.
+    - **Exceptions are not cached**, and concurrent calls to the same key can compute twice.
+
+    `cache_info()` gives hits, misses and maxsize so you can verify the hit rate is worth the
+    memory. `typed=True` separates `1` from `1.0` and `1` from `True`, which matters more often
+    than expected.
+  tags: [caching, functools, memory]
+
+- id: py-basic-020
+  topic: oop and dataclasses
+  difficulty: advanced
+  question: When would you use a Protocol instead of an ABC?
+  answer: |
+    An ABC is nominal: a class must inherit from it (or register) to count. A `Protocol` is
+    structural: any class with matching members satisfies it, with no inheritance and no import
+    from your package.
+
+    ```python
+    from typing import Protocol
+
+    class Sink(Protocol):
+        def write(self, chunk: bytes) -> int: ...
+
+    def drain(sink: Sink, chunks): ...
+    # A file, a socket, a BytesIO and a test double all qualify.
+    ```
+
+    Choose a Protocol when you want to accept "anything file-like" or "anything repository-like"
+    without forcing implementers to depend on your base class — the usual case for dependency
+    injection and for typing third-party objects you do not control. Type checkers verify the
+    shape statically.
+
+    Choose an ABC when you need shared implementation, explicit registration
+    (`ABC.register`), or enforcement at instantiation time — an unimplemented abstract method
+    raises `TypeError` when the subclass is created.
+
+    Caveats: `@runtime_checkable` only checks method names, not signatures; `isinstance` against
+    a Protocol with data members raises `TypeError`; and adding a method to a published Protocol
+    silently breaks every implementer.
+  tags: [protocols, abc, typing]
+
+- id: py-basic-021
+  topic: performance
+  difficulty: beginner
+  question: Why is building a string with `+=` in a loop slow, and what should you do instead?
+  answer: |
+    Strings are immutable. `s += chunk` creates a new string and copies both the old and the new
+    content, so a loop over n chunks copies O(n²) bytes in total.
+
+    ```python
+    # O(n^2) in the worst case
+    out = ""
+    for chunk in chunks:
+        out += chunk
+
+    # O(n): one allocation for the join
+    out = "".join(chunks)
+    ```
+
+    `join` is also clearer about intent and works with any iterable, including a generator.
+
+    CPython has an in-place optimisation for `s += x` when the string's refcount is exactly 1,
+    which makes many such loops appear linear. Do not rely on it: it does not apply when another
+    reference exists (a stored intermediate, a closure, a debugger), and the moment it stops
+    applying the loop becomes quadratic. The optimisation is an implementation detail, not a
+    language guarantee.
+
+    The same reasoning applies to repeated list concatenation (`a = a + [x]`); use `append` or a
+    comprehension. For formatting, f-strings are the fast path, but they build one string —
+    they do not solve accumulation.
+  tags: [strings, performance, complexity]
+
+- id: py-basic-022
+  topic: language semantics
+  difficulty: beginner
+  question: Why does `list.sort()` return `None`?
+  answer: |
+    Because it sorts in place, and the API is designed to make that impossible to miss.
+    `list.sort()` returns `None` deliberately: if it returned the list, callers could write
+    `sorted_list = my_list.sort()` and believe they had a sorted copy while `my_list` was
+    mutated and `sorted_list` was `None`.
+
+    ```python
+    nums = [3, 1, 2]
+    result = nums.sort()       # result is None, nums is [1, 2, 3]
+    result = sorted(nums)      # returns a new list, nums unchanged
+    ```
+
+    Use `sorted(iterable)` when you want a new list — it accepts any iterable, including
+    generators, tuples and dict keys. Use `.sort()` when you own the list and want to avoid the
+    copy.
+
+    Both are stable: equal elements keep their original relative order, which is what makes
+    multi-pass sorting work (sort by secondary key, then by primary). Both take `key=`, called
+    once per element, and `reverse=True`, which preserves stability. Timsort is O(n log n) worst
+    case and close to O(n) on already-sorted data.
+  tags: [sorting, lists, api-design]

@@ -1,0 +1,200 @@
+- id: fab-scn-001
+  title: The 09:00 throttle
+  technologies: [microsoft-fabric, power-bi]
+  difficulty: advanced
+  prompt: |
+    A shared F64 capacity hosts finance reporting, a data engineering workspace and a data
+    science sandbox. Every weekday at 09:00, report refreshes fail with
+    `CapacityLimitExceeded`, and users see "capacity exceeded" for 20-40 minutes. The capacity
+    graph shows utilisation that looks moderate for most of the night, with a spike around
+    08:45. The finance director wants the SKU doubled by Friday.
+  approach: |
+    Start by refusing to size on the visible spike, and establish what the metrics app actually
+    says: current throttle stage, carryforward CU, and the split between interactive and
+    background consumption per item.
+
+    Then explain the mechanism. Interactive operations are smoothed over five to 64 minutes, so
+    the 08:45 herd of refreshes and dashboard opens can exhaust the interactive band even when
+    the 24-hour view looks fine. Background jobs smoothed over 24 hours may also have pre-loaded
+    the day's budget. Carryforward explains why it does not recover the moment the spike ends.
+
+    Then attribute. Two or three items usually dominate: a Direct Lake model triggering framing
+    storms, a notebook doing a full rebuild instead of a merge, or 40 scheduled refreshes firing
+    on the same minute.
+
+    Remedies in order: stagger and tier refresh schedules, cut per-query cost (narrower tables,
+    compaction, fewer visuals per page), move the sandbox to its own capacity or pause it
+    overnight, and only then resize. If you resize, do it with a measured target and re-check
+    after a week, because CU consumption often scales with available compute.
+  red_flags:
+    - Doubling the SKU before attributing consumption to items.
+    - Quoting 60% average utilisation as proof the capacity is fine, ignoring smoothing and carryforward.
+    - Blaming Power BI without looking at the Spark jobs on the same capacity.
+    - Proposing to schedule everything at midnight as if that were a fix.
+
+- id: fab-scn-002
+  title: Warehouse or lakehouse for the gold layer
+  technologies: [microsoft-fabric, sql]
+  difficulty: intermediate
+  prompt: |
+    A retail company is consolidating three departmental marts into Fabric. Two source systems
+    deliver CSV drops, one is an Azure SQL database with change tracking. The analytics team
+    writes T-SQL and uses SSMS; the data engineering team writes PySpark. The CEO dashboard needs
+    sub-second visuals over roughly two years of sales, and the finance team needs MERGE-based
+    upserts across five related tables in one transaction. Leadership wants one gold layer.
+  approach: |
+    Separate the layers rather than forcing one item to do everything. Bronze and silver belong
+    in a lakehouse: heterogeneous files, CDC ingestion, Spark cleansing and conforming, Delta
+    tables compacted and partitioned by date.
+
+    Gold is the decision. The finance requirement - multi-table ACID transactions, procedures,
+    heavy MERGE - is a warehouse requirement; a lakehouse SQL endpoint cannot do DML at all. The
+    sub-second visual requirement points at a semantic model over that gold layer, with Direct
+    Lake if the tables are well-formed Delta, or Import if volume is modest.
+
+    So the defensible design is lakehouse bronze/silver, warehouse gold star schema (T-SQL,
+    COPY INTO from silver, MERGE for dimensions), and one semantic model per subject area. CSV
+    sources land via pipelines or Copy jobs; the Azure SQL source can use mirroring or CDC into
+    bronze.
+
+    Name the trade-off explicitly: two engines means two skill sets, so document who writes which
+    layer and forbid dual ownership of a gold table. Cross-database three-part names let the
+    warehouse query lakehouse silver without copying if needed.
+  red_flags:
+    - Putting everything in a lakehouse because SQL can read it, ignoring that the endpoint is read-only.
+    - Building the gold layer twice, once per team, for flexibility.
+    - Choosing a warehouse for bronze CSV landing.
+    - Designing Direct Lake without checking file sizes and table width first.
+
+- id: fab-scn-003
+  title: Medallion layering that survives auditors
+  technologies: [microsoft-fabric, pyspark, delta]
+  difficulty: intermediate
+  prompt: |
+    A team has built a single lakehouse with 300 tables, no naming convention, and notebooks
+    that read and write wherever they like. Some silver tables are raw JSON. Re-running a
+    pipeline duplicates rows. Auditors cannot tell which table is authoritative, and Direct Lake
+    models are slow because of file counts. They want a medallion architecture, without a
+    six-month rewrite.
+  approach: |
+    Start with contracts, not folders. Define bronze as append-only raw with ingestion metadata
+    (source, file, timestamp, load id); silver as deduplicated, typed, conformed Delta keyed by
+    business keys; gold as consumer-facing star schemas with named owners. Every table gets one
+    writer and one layer prefix.
+
+    Then fix correctness before beauty: add idempotent writes (merge on business key or
+    partition overwrite), a control table with watermarks, and a run log. Re-running must be
+    safe, or nothing else matters.
+
+    Then physical hygiene: OPTIMIZE the worst tables, VACUUM with a retention that matches audit
+    requirements, partition by date only where queries filter by date, and eliminate wide tables
+    that Direct Lake must transcode.
+
+    Migrate incrementally: pick one domain, rebuild its three layers, point one report at the new
+    gold table, and decommission the old path. Publish a table catalogue with owner, layer,
+    freshness and sensitivity label so auditors have a single answer.
+  red_flags:
+    - Rebuilding all 300 tables before fixing idempotency.
+    - Treating medallion as folder names with no data contracts.
+    - Deleting history to fix file counts, breaking audit retention.
+    - Optimising Direct Lake before fixing duplicate rows.
+
+- id: fab-scn-004
+  title: CI/CD across three workspaces
+  technologies: [microsoft-fabric, git, devops]
+  difficulty: advanced
+  prompt: |
+    A consultancy hands over a Fabric solution with dev, test and prod workspaces, 14 notebooks,
+    6 pipelines, 2 warehouses and 4 semantic models. Releases currently happen by manually
+    editing production. Connection strings and lakehouse names differ per environment, and one
+    notebook hard-codes a storage path. They want pull-request review, repeatable releases and
+    rollback.
+  approach: |
+    Separate the two concerns. Git integration gives version control: connect each workspace to a
+    repository, work in feature branches, require pull requests, and treat item definitions as
+    code. Deployment pipelines give promotion: one workspace per stage, deployment rules for
+    connection and parameter overrides, selective deployment, and a compare view for drift.
+
+    Remove environment knowledge from code. Parameterise notebook and pipeline arguments, drive
+    paths from parameters or notebook context rather than literals, and put per-stage values in
+    deployment rules. The hard-coded path is the first thing to fix - it is the reason manual
+    edits crept in.
+
+    Be explicit about limits: not every item type is fully supported by Git or deployment
+    pipelines, stage count is fixed at creation, and some changes are not source-controllable.
+    For those, either document a manual gate or automate through the REST APIs. Rollback is
+    redeploying the previous commit through the pipeline, not restoring a copy from someone's
+    laptop.
+
+    Validate by promoting an empty change end to end before the handover, and record the runbook.
+  red_flags:
+    - Proposing Git alone as the deployment mechanism.
+    - Keeping production credentials in pipeline parameters rather than Key Vault-backed connections.
+    - Assuming every item type deploys cleanly without checking the supported list.
+    - No rollback plan beyond fixing forward.
+
+- id: fab-scn-005
+  title: Real-time factory telemetry
+  technologies: [microsoft-fabric, eventstream, kql]
+  difficulty: advanced
+  prompt: |
+    A manufacturer streams 40,000 events per second from 3,000 machines through Kafka. They want
+    a live operations dashboard with five-second freshness, 90-day retention for investigation,
+    alerts when a machine's vibration stays above threshold for 10 minutes, and the ability to
+    join telemetry to a machine dimension maintained in the warehouse.
+  approach: |
+    Ingest with Eventstream from Kafka, keeping operators minimal: filter malformed events,
+    flatten the JSON, route to an Eventhouse and a derived stream for archival. Size throughput
+    deliberately - 40,000 events per second is a capacity and throughput decision, not a default.
+
+    Store in a KQL database with explicit policies: hot cache sized for the investigation window
+    people actually use, retention set to 90 days, and ingestion batching tuned for the
+    five-second dashboard requirement. Pre-aggregate with materialized views or update policies so
+    dashboard tiles never scan raw events.
+
+    For the machine dimension, use a shortcut or a scheduled refresh into a small dimension
+    table; do not duplicate a slowly changing dimension into KQL and then maintain it twice. If
+    the dashboard is Power BI rather than Real-Time Dashboards, enable OneLake availability and
+    point a Direct Lake model at the mirrored Delta tables - and state the added latency.
+
+    Alerts belong in Activator: per machine, sustained 10 minutes, "becomes true" semantics, with
+    cooling-off and an owned Teams channel. Add an "is empty" rule for machines that stop sending.
+  red_flags:
+    - Building all transformation inside Eventstream operators.
+    - Leaving retention at default and discovering the storage bill.
+    - Alerting on individual events rather than a sustained window.
+    - Promising five-second freshness for a Power BI path without measuring mirror lag.
+
+- id: fab-scn-006
+  title: Cut the bill without breaking month-end
+  technologies: [microsoft-fabric, capacity]
+  difficulty: advanced
+  prompt: |
+    Finance asks for a 40% reduction in Fabric spend. The estate is one F128 capacity running
+    24/7, a dev workspace used sporadically, hourly refreshes of 30 semantic models, nightly
+    Spark jobs that rebuild entire tables, and 12 TB of raw event data with no retention policy.
+    Month-end reporting must not degrade.
+  approach: |
+    Establish where the CUs actually go before cutting anything: metrics app by item and
+    operation, plus storage growth by workspace. Then attack waste in descending order of saving
+    per unit of risk.
+
+    Quick wins: pause the dev capacity outside working hours, move sporadic experimentation off
+    production, and tier refresh schedules - hourly for the three models that need it, daily for
+    the rest. These are reversible and do not touch correctness.
+
+    Structural wins: convert full rebuilds to incremental merges, compact small files so every
+    downstream query reads less, enable retention on raw event tables (hot cache short, archive
+    longer), and replace duplicated copies with shortcuts. For Spark spikes, compare provisioned
+    capacity against on-demand Spark billing, remembering that on-demand disables smoothing for
+    that usage.
+
+    Then reassess the SKU with two weeks of measured data, keeping headroom for month-end, and
+    protect the month-end path explicitly - a load test during close is worth more than a
+    spreadsheet. Target the 40% through waste removal first, resize second, and set budget and
+    capacity-threshold alerts so it does not drift back.
+  red_flags:
+    - Resizing the SKU first and calling the difference savings.
+    - Cutting retention without checking audit or regulatory requirements.
+    - Turning off refreshes that reports depend on without agreeing freshness targets.
+    - Ignoring storage and egress because capacity is the bill.

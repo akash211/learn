@@ -1,0 +1,223 @@
+- id: fab-recent-001
+  topic: semantic-models
+  difficulty: advanced
+  question: In a new Fabric project, when do you put a Direct Lake model in front of gold tables, and when do you still choose Import?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Direct Lake has become the default answer for large gold tables, but the interesting part of
+    the answer is the exceptions. Choose Direct Lake when the gold layer is already well-formed
+    Delta — reasonable file sizes, sensible row groups, narrow tables — the volume makes a full
+    in-memory replica impractical, and freshness matters. Framing is metadata-only, so you can
+    refresh often without a load window.
+
+    Stay with Import when the model needs features that assume model-resident data, when the
+    licensing is Pro/PPU rather than a Fabric capacity, when the source is not Delta, or when the
+    analyst must do their own Power Query shaping because they do not own the lake.
+
+    Mention the operational detail that separates candidates: Direct Lake on OneLake has no
+    DirectQuery fallback, while Direct Lake on SQL falls back when a view or SQL security is
+    involved — and fallback is where the performance surprises live.
+  tags: [direct-lake, import, gold-layer]
+
+- id: fab-recent-002
+  topic: shortcuts
+  difficulty: advanced
+  question: A team wants to shortcut an S3 bucket in another region instead of copying it nightly. How do you evaluate that?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Evaluate it on three axes, and be explicit that it is a trade, not a free win. **Cost:** the
+    shortcut removes duplicate storage and a nightly job, but every query still pays cross-region
+    and cross-cloud egress, which can exceed the storage you saved. **Performance:** metadata
+    operations are cheap, byte reads are not; Spark scans and Direct Lake framing both suffer,
+    and shortcut caching only helps repeated reads.
+
+    **Security:** an external shortcut reads with the stored connection's rights, so a workspace
+    Viewer may gain access to S3 objects they cannot read directly, and source ACLs and labels do
+    not travel with the pointer.
+
+    The defensible design is usually hybrid: shortcut for exploration and small dimensions, copy
+    and compact the large facts into managed Delta, and put OneLake security or a mediated gold
+    layer in front of anything sensitive.
+  tags: [shortcuts, s3, egress, governance]
+
+- id: fab-recent-003
+  topic: capacity
+  difficulty: advanced
+  question: Reports are failing at 09:00 with CapacityLimitExceeded, but the capacity graph showed only 60% last night. How do you diagnose it?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Start from the fact that Fabric throttles on *smoothed future consumption*, not on the
+    instantaneous graph. Check the Capacity Metrics app for carryforward and the current throttle
+    stage: if interactive rejection is active, the capacity has consumed 60 minutes to 24 hours of
+    future CU, which can happen without any single dramatic spike.
+
+    Then attribute consumption. Interactive operations are smoothed over five to 64 minutes, so
+    a burst of dashboard refreshes and ad-hoc queries at 08:45 is enough to push the interactive
+    band over. Background operations are smoothed over 24 hours, so a night of large Spark jobs
+    may have loaded the day's budget while the graph looked calm.
+
+    Fixes in order: stagger the 09:00 refresh herd, reduce per-query cost (fewer columns, better
+    Delta layout), move batch work to a separate capacity, and only then resize. Resizing without
+    attribution just buys a bigger version of the same problem.
+  tags: [throttling, capacity-metrics, diagnosis]
+
+- id: fab-recent-004
+  topic: cicd
+  difficulty: advanced
+  question: How do you promote Fabric items from dev to prod when half the estate is notebooks and the other half is T-SQL?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Separate version control from promotion. Put each workspace in Git (Azure DevOps or GitHub)
+    so notebooks, pipelines and supported item definitions live as files with review and history.
+    Then use deployment pipelines with one workspace per stage to promote, because that is what
+    carries item metadata and applies environment-specific rules.
+
+    Deployment rules are the part interviewers probe: they swap data source connections and
+    parameter values per stage so the same notebook points at `lh_gold_dev` in dev and
+    `lh_gold_prod` in prod. Selective deployment lets you promote a subset, and the compare view
+    shows drift.
+
+    Be honest about gaps: support varies by item type, stage count is fixed at creation, and some
+    items are not fully source-controllable. For those, either document a manual step or
+    automate through the REST APIs — and never "deploy" by editing production directly.
+  tags: [cicd, deployment-pipelines, git, promotion]
+
+- id: fab-recent-005
+  topic: certification
+  difficulty: intermediate
+  question: What does DP-700 cover, and how does it differ from DP-600?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    DP-700 is *Implementing Data Engineering Solutions Using Microsoft Fabric*, the data engineer
+    associate certification, and it effectively succeeds the older DP-203 Azure data engineer
+    path. The skills outline is three domains at roughly 30–35% each: implement and manage an
+    analytics solution (workspace settings, lifecycle management, security, orchestration);
+    ingest and transform data (batch and streaming, shortcuts, mirroring, PySpark, SQL, KQL);
+    and monitor and optimise an analytics solution (monitoring, error resolution, performance).
+
+    DP-600 is the analytics engineer exam: semantic models, DAX, report design, and the
+    analytics-side lifecycle. The overlap is workspace and deployment fundamentals; the split is
+    engineering pipelines and Spark versus modelling and BI.
+
+    Preparation advice that holds up: build one end-to-end medallion solution with a pipeline,
+    a notebook, a warehouse and a real-time path, then read the current study guide — the outline
+    has been revised more than once, so older courseware is a trap.
+  tags: [dp-700, certification, dp-600]
+
+- id: fab-recent-006
+  topic: migration
+  difficulty: advanced
+  question: You are migrating Synapse dedicated SQL pools to Fabric. What actually changes?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    The compute model changes first: no DWUs, no pause-per-database, no dedicated pool to size —
+    you move to a shared Fabric capacity in CUs, and the warehouse scales compute automatically
+    within it. That shifts the tuning conversation from "how many DWUs" to "which workload is
+    consuming the capacity".
+
+    T-SQL surface differs. Much of the warehouse works, but expect gaps: some `ALTER TABLE`
+    operations, constraints (`NOT ENFORCED` primary/foreign keys), `CREATE USER` and bulk-load
+    paths behave differently, and `MERGE` and `COPY INTO` become the idiomatic load patterns.
+    PolyBase gives way to `COPY INTO` or pipelines.
+
+    Storage lands as Delta in OneLake, which is the upside: Spark, Direct Lake and shortcuts can
+    read the same tables with no copy. Plan the cutover around distribution/partitioning
+    removal — those physical hints do not exist — and re-tune with statistics and file layout
+    rather than hash distributions.
+  tags: [synapse, migration, warehouse]
+
+- id: fab-recent-007
+  topic: lakehouse
+  difficulty: intermediate
+  question: Why did reports break after lakehouse default semantic models changed, and what is the correct pattern now?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Fabric used to create a default semantic model automatically with every lakehouse, and
+    reports silently attached to it. Microsoft stopped creating them for new lakehouses in
+    September 2025 and decoupled the existing ones by the end of November 2025, so those models
+    became independent items with their own lifecycle.
+
+    The practical consequences: a new lakehouse gives you a SQL analytics endpoint but no model,
+    so you must create one explicitly before building a report; and a decoupled model no longer
+    follows its parent lakehouse automatically, so ownership, permissions and deployment need to
+    be handled deliberately.
+
+    The correct pattern is one explicit semantic model per subject area, in Git, promoted through
+    deployment pipelines alongside the lakehouse — not a per-lakehouse auto-model that nobody
+    owns. If a report suddenly cannot find its model, check whether it is pointing at a decoupled
+    item that was renamed or moved.
+  tags: [default-semantic-model, lakehouse, breaking-change]
+
+- id: fab-recent-008
+  topic: spark
+  difficulty: advanced
+  question: A Spark pipeline got slower after the workspace was rebuilt. Nothing in the code changed. What do you check first?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Check the write defaults before you check the cluster. Fabric changed the defaults for
+    V-Order and Optimize Write: workspaces created before April 2025 had them enabled, newer
+    workspaces have them disabled in the 1.3 runtime (and Optimize Write is unset in 2.0). A
+    rebuilt workspace therefore writes differently with identical code — more small files, no
+    V-Order, slower downstream reads and slower Direct Lake framing.
+
+    Next, check the runtime version and libraries: a new workspace may pick a newer runtime with
+    different Spark and Delta versions, which changes join behaviour and file layout. Then look
+    at the data: a backfill may have multiplied file counts even if the code is unchanged.
+
+    The fix is to stop relying on inherited defaults — set `spark.sql.parquet.vorder.default` and
+    Optimize Write explicitly in the environment or notebook, pin the runtime, and compact the
+    affected tables with `OPTIMIZE`.
+  tags: [v-order, optimize-write, runtime, defaults]
+
+- id: fab-recent-009
+  topic: ingestion
+  difficulty: advanced
+  question: Mirroring, shortcuts or pipelines for an operational Azure SQL database — how do you choose?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    They answer different questions. **Mirroring** continuously replicates an operational
+    database into OneLake as Delta with low latency and near-zero engineering: choose it when you
+    want a queryable replica of the source, including deletes, without building CDC yourself. It
+    is the shortest path from OLTP to analytics, and it is the option interviewers expect you to
+    name first for Azure SQL, Cosmos DB, Snowflake and similar sources.
+
+    **Shortcuts** are for reading data where it already lives, without replication — good for
+    files and curated zones, not for applying change tracking to a relational table.
+
+    **Pipelines** are for transformation and orchestration: when you need history, conforming,
+    late-arriving handling, or the source is not supported by mirroring. Most real designs
+    combine them — mirror the source, transform in a notebook, publish gold through a warehouse
+    or Direct Lake.
+  tags: [mirroring, cdc, ingestion]
+
+- id: fab-recent-010
+  topic: real-time
+  difficulty: advanced
+  question: Design the path from an event stream to a Power BI report with sub-minute freshness. Where does each Fabric item fit?
+  period: "2024–2026"
+  type: representative
+  answer: |
+    Eventstream ingests (Event Hubs, Kafka, IoT Hub, CDC) and routes; keep its operators to
+    filtering, field management and simple windowed aggregation. Land into an Eventhouse KQL
+    database for storage and low-latency query, with an update policy or materialized view doing
+    the rollups so dashboards never scan raw events.
+
+    For BI, enable **OneLake availability** on the KQL database or the specific tables, which
+    mirrors them into Delta in OneLake. Then either point a Direct Lake semantic model at those
+    Delta tables, or query through the SQL analytics endpoint. Freshness becomes the mirror lag
+    plus framing, typically seconds to a minute — not the Eventhouse query speed, which is
+    misleadingly fast in isolation.
+
+    Mention the trade-offs: duplication (KQL extents plus Delta files), retention on both sides,
+    and the fact that Real-Time Dashboards are better than Power BI when true seconds-level
+    refresh matters. Activator handles the "tell someone" branch.
+  tags: [real-time, onelake-availability, direct-lake]

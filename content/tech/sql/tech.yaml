@@ -1,0 +1,117 @@
+slug: sql
+title: SQL
+category: programming
+summary: The declarative language for asking questions of relational data — and the execution model behind the answers.
+level: core
+relations:
+  - to: postgresql
+    type: uses
+    note: The open-source OLTP engine most SQL is learned and tested on; its planner and MVCC are the reference implementation for this module.
+  - to: snowflake
+    type: uses
+    note: A columnar warehouse where the same SELECT means something different underneath — micro-partition pruning instead of indexes.
+  - to: dbt
+    type: foundation
+    note: dbt models are SQL SELECT statements with dependency management; every modelling pattern here shows up as a dbt model.
+  - to: python
+    type: complements
+    note: Python orchestrates and tests SQL, and pandas/pyarrow results are shaped by the same relational semantics.
+intro:
+  what: |
+    SQL is a declarative language: you describe the result you want, and a query planner
+    decides how to compute it. That split — declarative surface, procedural engine — is the
+    source of both its portability and most of its surprises.
+
+    This module teaches a dialect-neutral core (the relational model, SELECT semantics,
+    aggregation, transactions) and marks, at each point, where SQL Server, PostgreSQL and
+    Snowflake genuinely differ. Examples use one small schema throughout:
+    `customers(customer_id, name, email, country, created_at)`,
+    `orders(order_id, customer_id, order_ts, status, total_amount)` and
+    `order_items(order_id, product_id, quantity, unit_price)`.
+  why: |
+    Relational databases remain the system of record for most business data, and the
+    warehouse is where that data is modelled for analysis. Almost every data tool — dbt,
+    Spark SQL, pandas' SQL interface, BI semantic layers, text-to-SQL agents — either speaks
+    SQL or generates it. Understanding what the engine does with a query is the difference
+    between SQL that is correct on a demo and SQL that is correct and affordable in
+    production.
+  problems:
+    - Answering business questions from data without writing imperative loops over it.
+    - Keeping data consistent under concurrent writers through constraints and transactions.
+    - Expressing set-based transformations that the engine can reorder and parallelise.
+    - Providing a stable interface that survives storage and hardware changes.
+  where_used:
+    - Application backends (PostgreSQL, SQL Server, MySQL) as the transactional system of record.
+    - Analytical warehouses (Snowflake, BigQuery, Redshift) for reporting and modelling.
+    - Transformation layers (dbt, Spark SQL, Databricks) that build curated tables.
+    - Operational tooling — migrations, data quality checks, ad-hoc incident investigation.
+  ecosystem: |
+    SQL is the substrate beneath the modern data stack. PostgreSQL and SQL Server hold
+    transactional state; Snowflake holds analytical state; dbt turns SELECT statements into
+    versioned, tested models; Python drives orchestration and testing. The dialects diverge
+    mostly at the edges — functions, syntax sugar, and enforcement of constraints — while the
+    semantics of joins, NULLs and aggregation stay remarkably stable.
+  alternatives:
+    - name: DataFrame APIs (pandas, Polars, PySpark)
+      note: Better for procedural, in-memory work; worse for large joins the optimiser can plan.
+    - name: NoSQL document/key-value stores
+      note: Better for flexible schemas and horizontal key access; weaker for ad-hoc joins and integrity.
+    - name: Graph query languages (Cypher, Gremlin)
+      note: Better for variable-depth traversal; SQL catches up with recursive CTEs to a point.
+  related: [postgresql, snowflake, dbt, python]
+chapters:
+  - id: relational-model
+    title: The Relational Model and Normalisation
+    file: chapters/01-relational-model.md
+    minutes: 14
+    level: core
+  - id: select-joins-set-operators
+    title: SELECT, Joins and Set Operators
+    file: chapters/02-select-joins-set-operators.md
+    minutes: 15
+    level: core
+  - id: aggregation-window-functions
+    title: Aggregation and Window Functions
+    file: chapters/03-aggregation-window-functions.md
+    minutes: 15
+    level: core
+  - id: ctes-recursive-queries
+    title: CTEs and Recursive Queries
+    file: chapters/04-ctes-recursive-queries.md
+    minutes: 13
+    level: core
+  - id: indexes-storage-layout
+    title: Indexes and Storage Layout
+    file: chapters/05-indexes-storage-layout.md
+    minutes: 15
+    level: advanced
+  - id: query-planning-optimisation
+    title: Query Planning and Optimisation
+    file: chapters/06-query-planning-optimisation.md
+    minutes: 16
+    level: advanced
+  - id: transactions-isolation-locking
+    title: Transactions, Isolation and Locking
+    file: chapters/07-transactions-isolation-locking.md
+    minutes: 15
+    level: advanced
+  - id: constraints-keys-integrity
+    title: Constraints, Keys and Data Integrity
+    file: chapters/08-constraints-keys-integrity.md
+    minutes: 12
+    level: core
+  - id: partitioning-materialised-views
+    title: Partitioning, Materialised Views and Access Patterns
+    file: chapters/09-partitioning-materialised-views.md
+    minutes: 14
+    level: advanced
+  - id: analytics-patterns
+    title: Analytics Patterns
+    file: chapters/10-analytics-patterns.md
+    minutes: 16
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

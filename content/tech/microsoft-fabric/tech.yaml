@@ -1,0 +1,115 @@
+slug: microsoft-fabric
+title: Microsoft Fabric
+category: data-engineering
+summary: Microsoft's SaaS analytics platform where OneLake, Spark, T-SQL, KQL and Power BI share one capacity and one copy of data.
+level: core
+relations:
+  - to: snowflake
+    type: alternative
+    note: Both are turnkey analytics platforms; Fabric bundles BI and Spark, Snowflake leans on separated compute warehouses and a marketplace.
+  - to: databricks
+    type: alternative
+    note: Databricks is lakehouse-first with a stronger notebook/ML story; Fabric is lakehouse-first with Power BI and Microsoft 365 governance built in.
+  - to: pyarrow
+    type: uses
+    note: Delta and Parquet files in OneLake are ordinary Parquet; PyArrow and pandas read them without Fabric-specific libraries.
+  - to: parquet
+    type: uses
+    note: Every Fabric table is Parquet files plus a Delta log, so file-level tuning means Parquet tuning.
+  - to: sql
+    type: uses
+    note: The Warehouse and every SQL analytics endpoint speak T-SQL, including cross-database three-part names.
+intro:
+  what: |
+    Microsoft Fabric is a software-as-a-service analytics platform that runs in a
+    Microsoft Entra tenant. Instead of separate products for ingestion, storage, warehousing,
+    streaming and BI, it exposes one storage layer (OneLake), one compute pool (a capacity
+    measured in Capacity Units) and a family of workloads that all read the same Delta tables.
+
+    You work with **items** — lakehouse, warehouse, notebook, pipeline, eventstream, semantic
+    model, report — grouped into **workspaces**. A workspace is the unit of permission, Git
+    integration and deployment, and it is assigned to exactly one capacity.
+  why: |
+    The problem Fabric attacks is the copy. Classic Azure architectures moved the same bytes
+    from ADLS to Synapse to a Power BI extract, with three security models and three bills.
+    Fabric keeps one physical copy in OneLake and lets Spark, T-SQL, KQL and VertiPaq read it,
+    then bills the compute those engines consume against a single capacity.
+  problems:
+    - Too many copies of the same data between lake, warehouse and BI extract.
+    - Separate security, lineage and cost models per analytics service.
+    - Provisioning clusters and tuning infrastructure for routine reporting work.
+    - Slow hand-off between data engineers, analysts and BI developers.
+  where_used:
+    - Enterprise and departmental lakehouses with medallion layering.
+    - Microsoft-centric estates already using Power BI, Entra ID and Purview.
+    - Streaming telemetry and log analytics with near-real-time dashboards.
+    - Migrations away from Synapse dedicated SQL pools and legacy on-prem warehouses.
+  ecosystem: |
+    Fabric sits beside Azure data services rather than replacing all of them: ADLS Gen2,
+    Event Hubs, Azure SQL and Cosmos DB feed it, often through shortcuts or mirroring.
+    Databricks and Snowflake remain credible alternatives for Spark- or SQL-centric shops,
+    and both can be reached from Fabric through shortcuts or Direct Lake where supported.
+  alternatives:
+    - name: Databricks
+      note: Deeper Spark and ML tooling, weaker native BI and Microsoft governance integration.
+    - name: Snowflake
+      note: Excellent SQL warehouse and data sharing, but BI and lakehouse come from separate products.
+    - name: Azure Synapse Analytics
+      note: The predecessor pattern; still relevant for existing dedicated SQL pools.
+  related: [snowflake, databricks, pyarrow, parquet, sql]
+chapters:
+  - id: overview-and-capacity
+    title: Fabric Overview and the Capacity Model
+    file: chapters/01-overview-and-capacity.md
+    minutes: 12
+    level: core
+  - id: onelake-and-shortcuts
+    title: OneLake and Shortcuts
+    file: chapters/02-onelake-and-shortcuts.md
+    minutes: 11
+    level: core
+  - id: lakehouse-vs-warehouse
+    title: Lakehouse vs Warehouse
+    file: chapters/03-lakehouse-vs-warehouse.md
+    minutes: 9
+    level: core
+  - id: pipelines-and-dataflows
+    title: Data Factory Pipelines and Dataflows Gen2
+    file: chapters/04-pipelines-and-dataflows.md
+    minutes: 11
+    level: core
+  - id: spark-and-notebooks
+    title: Spark Notebooks and Notebook Orchestration
+    file: chapters/05-spark-and-notebooks.md
+    minutes: 10
+    level: core
+  - id: real-time-intelligence
+    title: Real-Time Intelligence
+    file: chapters/06-real-time-intelligence.md
+    minutes: 11
+    level: advanced
+  - id: data-activator
+    title: Data Activator
+    file: chapters/07-data-activator.md
+    minutes: 11
+    level: advanced
+  - id: semantic-models-direct-lake
+    title: Power BI Semantic Models and Direct Lake
+    file: chapters/08-semantic-models-direct-lake.md
+    minutes: 12
+    level: advanced
+  - id: governance
+    title: Governance, Domains and Deployment
+    file: chapters/09-governance.md
+    minutes: 11
+    level: advanced
+  - id: cost-and-performance
+    title: Cost, Capacity Sizing and Performance Tuning
+    file: chapters/10-cost-and-performance.md
+    minutes: 12
+    level: advanced
+questions:
+  basic: questions/basic.yaml
+  recent: questions/recent.yaml
+scenarios: scenarios.yaml
+quickrev: quickrev.yaml

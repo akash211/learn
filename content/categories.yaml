@@ -1,0 +1,21 @@
+# Category taxonomy for the Learn app. `key` is referenced from tech.yaml.
+- key: programming
+  title: Programming Languages & Fundamentals
+- key: python-ecosystem
+  title: Python Ecosystem & Development
+- key: databases
+  title: Databases & Warehousing
+- key: data-engineering
+  title: Data Engineering & Big Data
+- key: cloud-infrastructure
+  title: Cloud & Infrastructure
+- key: version-control-apis
+  title: Version Control & APIs
+- key: ai-llm
+  title: AI, LLMs & Agentic Systems
+- key: web-automation
+  title: Web Automation & Extraction
+- key: analytics
+  title: Analytics & Business Intelligence
+- key: architecture
+  title: Architecture & System Design
