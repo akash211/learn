@@ -150,6 +150,10 @@ function Session({ slug }: { slug: string }) {
 
       {step === 0 && (
         <div className="space-y-2">
+          <p className="text-[12.5px] text-muted">
+            Mark each concept as you read it — <span className="text-emerald-400">know it</span> pushes the next review
+            further out, <span className="text-red-400">new</span> brings it back tomorrow.
+          </p>
           {concepts.map((c, i) => {
             const key = `${c.tech}-${c.title}`;
             const state = grades[key];
@@ -163,24 +167,22 @@ function Session({ slug }: { slug: string }) {
                     <p className="mt-1 text-[11px] uppercase tracking-wide text-muted">{c.tech}</p>
                   </div>
                   <div className="flex shrink-0 gap-1">
-                    <button
-                      onClick={() => grade(key, c.tech, c.title, "correct")}
-                      className={clsx("rounded px-2 py-1 text-[11px]", state === "correct" ? "bg-emerald-500/15 text-emerald-500" : "text-muted hover:text-ink")}
-                    >
-                      know it
-                    </button>
-                    <button
-                      onClick={() => grade(key, c.tech, c.title, "partial")}
-                      className={clsx("rounded px-2 py-1 text-[11px]", state === "partial" ? "bg-amber-500/15 text-amber-500" : "text-muted hover:text-ink")}
-                    >
-                      shaky
-                    </button>
-                    <button
-                      onClick={() => grade(key, c.tech, c.title, "wrong")}
-                      className={clsx("rounded px-2 py-1 text-[11px]", state === "wrong" ? "bg-red-500/15 text-red-500" : "text-muted hover:text-ink")}
-                    >
-                      new
-                    </button>
+                    {([
+                      ["correct", "know it", "border-emerald-500/50 bg-emerald-500/15 text-emerald-400"],
+                      ["partial", "shaky", "border-amber-500/50 bg-amber-500/15 text-amber-400"],
+                      ["wrong", "new", "border-red-500/50 bg-red-500/15 text-red-400"],
+                    ] as const).map(([value, label, active]) => (
+                      <button
+                        key={value}
+                        onClick={() => grade(key, c.tech, c.title, value)}
+                        className={clsx(
+                          "rounded-md border px-2 py-1 text-[11px] font-medium transition",
+                          state === value ? active : "border-line text-muted hover:border-accent/40 hover:text-ink",
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
                 </div>
               </Card>
