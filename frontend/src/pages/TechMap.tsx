@@ -14,6 +14,7 @@ export default function TechMap() {
   const [filter, setFilter] = useState<string>("all");
   const [size, setSize] = useState({ width: 900, height: 560 });
   const wrap = useRef<HTMLDivElement>(null);
+  const fg = useRef<any>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -39,6 +40,15 @@ export default function TechMap() {
     const idx = categories.findIndex(([key]) => key === category);
     return PALETTE[(idx + PALETTE.length) % PALETTE.length];
   };
+
+  // spread the layout out so labels stay readable
+  useEffect(() => {
+    const g = fg.current;
+    if (!g) return;
+    g.d3Force("charge")?.strength(-340);
+    g.d3Force("link")?.distance(140);
+    g.d3ReheatSimulation?.();
+  }, [graph, filter]);
 
   if (!graph) return <Spinner />;
 
@@ -70,6 +80,7 @@ export default function TechMap() {
       <Card className="overflow-hidden" >
         <div ref={wrap} className="w-full">
           <ForceGraph2D
+            ref={fg}
             graphData={{ nodes: nodes.map((n) => ({ ...n })), links: links.map((l) => ({ ...l })) }}
             width={size.width}
             height={size.height}
@@ -90,10 +101,15 @@ export default function TechMap() {
               ctx.fillStyle = colorFor(n.category);
               ctx.fill();
               const label = n.label;
-              ctx.font = `${Math.max(10, 12 / scale)}px Inter, sans-serif`;
-              ctx.fillStyle = "rgba(200,210,225,0.92)";
+              const fontSize = Math.max(11, 13 / scale);
+              ctx.font = `600 ${fontSize}px Inter, sans-serif`;
               ctx.textAlign = "center";
-              ctx.fillText(label, n.x, n.y + r + 10 / scale);
+              const y = n.y + r + 12 / scale;
+              const w = ctx.measureText(label).width;
+              ctx.fillStyle = "rgba(12,16,22,0.72)";
+              ctx.fillRect(n.x - w / 2 - 3, y - fontSize, w + 6, fontSize + 3);
+              ctx.fillStyle = "rgba(226,232,242,0.95)";
+              ctx.fillText(label, n.x, y);
             }}
           />
         </div>
